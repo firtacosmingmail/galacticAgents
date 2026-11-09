@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-02 · **Task status:** P14-01 done (2026-11-09)
-**Phase status:** in progress (1/6) — branch `agent-allow-similar-reasons`
+**Current task:** P14-03 · **Task status:** P14-02 done (2026-11-09)
+**Phase status:** in progress (2/6) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -40,7 +40,7 @@ P14-01…06 run in order.
 - **Acceptance:** the protocol schema tests pass (site and folder rules parse, empty `digests` fails, `ruleIds` and old `ruleId` parse); build and typecheck are green.
 
 ### P14-02 — Structured findings in the permission engine
-- **Status:** todo · **Depends on:** P14-01 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P14-01 · **Parallel with:** —
 - Plan Task 2.
 - **Acceptance:** the plan's Task 2 tests pass: the engine reports one finding per reason, with the shown part of the call.
 

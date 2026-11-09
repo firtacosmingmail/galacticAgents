@@ -8,6 +8,7 @@ import {
   type RequestOrigin,
   type ToolCall,
 } from '@galactic/protocol';
+import { hostOfUrl, hostsOfCommand } from './hosts.js';
 
 /**
  * The permission policy engine (SPEC §3.6, decision 7; P1-10).
@@ -46,10 +47,34 @@ export interface PolicyContext {
   userFolders?: readonly string[];
 }
 
+/**
+ * One reason the engine found, with the structure "Allow similar" needs (P14-02). Engine-internal:
+ * not a wire type. Every action in `Classification.actions` has at least one finding; a finding
+ * for a plain run or workspace read/edit has an empty `reason`/`part` (nothing to show).
+ */
+export interface Finding {
+  action: PermissionAction;
+  /** The shown part (the simple command's text, or `<tool> <path>`), as in today's reason lines. */
+  part: string;
+  /** The reason line, exactly as pushed to `reasons`. */
+  reason: string;
+  /** Index of the simple command in the line (commands only). */
+  segment?: number;
+  /** outside_workspace: the resolved path it reaches (absent when it cannot be told). */
+  path?: string;
+  /** network: the hosts visible in this part; absent or [] = not host-coverable. */
+  hosts?: string[];
+  /** The simple command's words and whether it redirects to a file (commands only). */
+  words?: string[];
+  redirects?: boolean;
+}
+
 export interface Classification {
   actions: PermissionAction[];
   /** One human-readable line per finding, for the permission card. */
   reasons: string[];
+  /** The structured form of `reasons` (and of actions without a reason line). */
+  findings: Finding[];
   /** Set for tools that only touch the agent's own bookkeeping: allowed whatever the policy. */
   alwaysAllow?: true;
   /**
@@ -292,9 +317,19 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
   const input = isRecord(call.input) ? call.input : {};
   const name = call.toolName;
 
-  if (HARMLESS_TOOLS.has(name)) return { actions: [], reasons: [], alwaysAllow: true };
+  if (HARMLESS_TOOLS.has(name))
+    return { actions: [], reasons: [], findings: [], alwaysAllow: true };
   if (NETWORK_TOOLS.has(name)) {
-    return { actions: ['network'], reasons: [`${name} reaches the network`] };
+    const reason = `${name} reaches the network`;
+    const host =
+      name === 'WebFetch' && typeof input['url'] === 'string' ? hostOfUrl(input['url']) : undefined;
+    return {
+      actions: ['network'],
+      reasons: [reason],
+      findings: [
+        { action: 'network', part: name, reason, ...(host !== undefined ? { hosts: [host] } : {}) },
+      ],
+    };
   }
   if (READ_TOOLS.has(name)) return classifyPaths(name, input, 'read_workspace', ctx);
   if (EDIT_TOOLS.has(name)) return classifyPaths(name, input, 'edit_workspace', ctx);
@@ -308,7 +343,12 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
   const reasons = [`unknown tool ${name}`];
   const pushes = mentionsPush(inputText(input));
   reasons.push(...pushes);
-  return { actions: pushes.length ? ['push'] : [], reasons, unclassified: true };
+  const findings: Finding[] = pushes.map((reason) => ({
+    action: 'push' as const,
+    part: name,
+    reason,
+  }));
+  return { actions: pushes.length ? ['push'] : [], reasons, findings, unclassified: true };
 }
 
 /** An unknown tool's input as text for `mentionsPush` (never throws). */
@@ -334,18 +374,39 @@ function classifyPaths(
   const edit = inside === 'edit_workspace';
   // An edit tool that names no file cannot be placed: ask.
   if (edit && paths.length === 0) {
-    return { actions: [], reasons: [`${tool} names no file path`], unclassified: true };
+    return {
+      actions: [],
+      reasons: [`${tool} names no file path`],
+      findings: [],
+      unclassified: true,
+    };
   }
 
   const reasons: string[] = [];
+  const findings: Finding[] = [];
+  const note = (part: string, reason: string, path?: string) => {
+    reasons.push(reason);
+    findings.push({
+      action: 'outside_workspace',
+      part,
+      reason,
+      ...(path !== undefined ? { path } : {}),
+    });
+  };
   let guarded = false;
   for (const p of paths) {
     // Guarded wherever the path is — inside the workspace or not (P9-17 review B1).
     const guard = edit ? guardedWriteReason(p, ctx) : undefined;
     if (guard) {
-      reasons.push(`${tool} on ${p}: ${guard}`);
+      note(`${tool} ${p}`, `${tool} on ${p}: ${guard}`, resolvePath(p, ctx, cwdOf(ctx)));
       guarded = true;
-    } else if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
+    } else if (!isInsideWorkspace(p, ctx)) {
+      note(
+        `${tool} ${p}`,
+        `${tool} on ${p}: outside the workspace`,
+        resolvePath(p, ctx, cwdOf(ctx)),
+      );
+    }
   }
   const base = typeof input['path'] === 'string' ? input['path'] : undefined;
   const from = base !== undefined ? resolvePath(base, ctx, cwdOf(ctx)) : cwdOf(ctx);
@@ -354,15 +415,22 @@ function classifyPaths(
     if (typeof g !== 'string') continue;
     const locations = globLocations(g);
     if (locations === null) {
-      reasons.push(`${tool} on ${g}: cannot tell where the pattern points`);
+      note(`${tool} ${g}`, `${tool} on ${g}: cannot tell where the pattern points`);
       continue;
     }
     if (locations.some((l) => !isInsideWorkspace(l, { ...ctx, cwd: from }))) {
-      reasons.push(`${tool} on ${g}: outside the workspace`);
+      note(`${tool} ${g}`, `${tool} on ${g}: outside the workspace`);
     }
   }
-  if (reasons.length === 0) return { actions: [inside], reasons: [] };
-  return { actions: ['outside_workspace'], reasons, ...(guarded ? { guarded: true } : {}) };
+  if (reasons.length === 0) {
+    return { actions: [inside], reasons: [], findings: [{ action: inside, part: '', reason: '' }] };
+  }
+  return {
+    actions: ['outside_workspace'],
+    reasons,
+    findings,
+    ...(guarded ? { guarded: true } : {}),
+  };
 }
 
 function looksLikeLocation(p: string): boolean {
@@ -1237,9 +1305,18 @@ export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
+  const findings: Finding[] = [];
+  const note = (action: PermissionAction | undefined, reason: string, extra: Partial<Finding>) => {
+    reasons.push(reason);
+    if (action === undefined) return;
+    actions.add(action);
+    findings.push({ action, part: '', reason, ...extra });
+  };
   let guarded = false;
   const trimmed = command.trim();
-  if (trimmed === '') return { actions: [], reasons: ['empty command'], unclassified: true };
+  if (trimmed === '') {
+    return { actions: [], reasons: ['empty command'], findings: [], unclassified: true };
+  }
 
   const lexed = lexCommand(trimmed);
   let opaque = lexed.opaque.length > 0;
@@ -1248,10 +1325,18 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   // `cd` changes where the later segments resolve relative paths from.
   let cwd = cwdOf(ctx);
 
-  for (const simple of lexed.commands) {
+  for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
     const text = simple.words.join(' ');
     const shown = text || simple.redirects.map((r) => `${r.op}${r.target}`).join(' ');
+    const redirectsToFile = simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op));
+    const seg = (extra: Partial<Finding> = {}): Partial<Finding> => ({
+      part: shown,
+      segment,
+      words: simple.words,
+      redirects: redirectsToFile,
+      ...extra,
+    });
     for (const rule of OPAQUE_RULES) {
       if (rule.pattern.test(text)) {
         opaque = true;
@@ -1266,44 +1351,45 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     const scanned = [text, ...simple.redirects.map((r) => r.target)].join(' ');
     for (const rule of ALL_RULES) {
       if (rule.pattern.test(scanned)) {
-        actions.add(rule.action);
-        reasons.push(`${rule.reason}: ${shown}`);
+        const hosts = rule.action === 'network' ? hostsOfCommand(simple.words) : undefined;
+        note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
     const { paths, unresolvable } = pathsOf(simple);
     for (const p of paths) {
       if (!isInsideWorkspace(p, here)) {
-        actions.add('outside_workspace');
-        reasons.push(`${p}: outside the workspace`);
+        note('outside_workspace', `${p}: outside the workspace`, seg({ path: p }));
       }
     }
     for (const p of unresolvable) {
-      actions.add('outside_workspace');
-      reasons.push(`${p}: cannot tell where it points`);
+      note('outside_workspace', `${p}: cannot tell where it points`, seg());
     }
     // The card names every file curl sends, inside the workspace too (`.env`): P9-17 review S2.
     for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
     for (const g of guardedTargets(simple, here)) {
       guarded = true;
-      actions.add('outside_workspace');
-      reasons.push(`${g.path}: ${g.reason}`);
+      note('outside_workspace', `${g.path}: ${g.reason}`, seg({ path: g.path }));
     }
 
     const h = commandHead(simple.words);
     const name = simple.words[h]?.toLowerCase();
     if (name === 'cd' || name === 'pushd') {
       const target = simple.words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
+      let cdResolved = true;
       if (target === undefined || target === '' || target === '~') {
         cwd = ctx.home ?? homedir();
       } else if (target === '-' || unresolvable.length > 0 || /[$`]/.test(target)) {
-        actions.add('outside_workspace');
-        reasons.push(`cd ${target}: cannot tell where it leads`);
+        cdResolved = false;
+        note('outside_workspace', `cd ${target}: cannot tell where it leads`, seg());
       } else {
         cwd = resolvePath(target, ctx, cwd);
       }
       if (!isInsideWorkspace(cwd, ctx)) {
-        actions.add('outside_workspace');
-        reasons.push(`${shown}: leaves the workspace`);
+        note(
+          'outside_workspace',
+          `${shown}: leaves the workspace`,
+          seg(cdResolved ? { path: cwd } : {}),
+        );
       }
     }
   }
@@ -1311,18 +1397,26 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     // What the engine saw still counts; a push hidden in the unreadable part is looked for in
     // the raw text (decision 49), so a trusted project still asks before anything leaves.
     for (const why of mentionsPush(trimmed)) {
-      actions.add('push');
-      reasons.push(why);
+      note('push', why, { part: why });
     }
     return {
       actions: [...actions],
       reasons,
+      findings,
       unclassified: true,
       ...(guarded ? { guarded: true as const } : {}),
     };
   }
-  if (actions.size === 0) actions.add('run_workspace');
-  return { actions: [...actions], reasons, ...(guarded ? { guarded: true as const } : {}) };
+  if (actions.size === 0) {
+    actions.add('run_workspace');
+    findings.push({ action: 'run_workspace', part: '', reason: '' });
+  }
+  return {
+    actions: [...actions],
+    reasons,
+    findings,
+    ...(guarded ? { guarded: true as const } : {}),
+  };
 }
 
 /** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
