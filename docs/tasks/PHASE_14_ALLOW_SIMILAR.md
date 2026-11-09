@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** — · **Task status:** P14-07 done (2026-11-09)
-**Phase status:** done (2026-11-09) (7/7) — branch `agent-allow-similar-reasons`
+**Current task:** P14-08 · **Task status:** P14-08 in progress
+**Phase status:** in progress (7/8) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -30,8 +30,9 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 5 | P14-05 | The chooser on the card, the rule list. |
 | 6 | P14-06 | Docs, board, gates. |
 | 7 | P14-07 | Final review fixes. |
+| 8 | P14-08 | Residual permission holes. |
 
-P14-01…07 run in order.
+P14-01…08 run in order.
 
 ## Tasks
 
@@ -69,6 +70,11 @@ P14-01…07 run in order.
 - **Status:** done (2026-11-09) · **Depends on:** P14-06 · **Parallel with:** —
 - The whole-branch review's findings with the controller's rulings F-1, F-2 and M1–M5: a prefix or category rule covers nothing in a command that runs outside the workspace (a later segment after an outside `cd` included); a prefix assignment no longer makes a line folder-unsafe (except on `cd` and for the directory variables), `GH_TOKEN`/`GITHUB_TOKEN` on `gh` keeps its site, a line folder rules never cover gets no folder row; widen never offers system folders; the card offers the chooser for a push call's other reasons; drafting ignores reasons existing rules already cover; an attached short option's path (`-o/etc/x`) is a path.
 - **Acceptance:** the rulings' tests pass; SPEC 138 and TECHNOLOGY updated; the full gates are green.
+
+### P14-08 — Close the residual permission holes (added 2026-11-09)
+- **Status:** in progress · **Depends on:** P14-07 · **Parallel with:** —
+- Four holes left after P14-07: a prefix assignment keeps folder coverage only on an allow-list of inert variables (`GH_TOKEN`, `GITHUB_TOKEN`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `CI`, `FORCE_COLOR`), so `GIT_EXTERNAL_DIFF=… git diff` in a folder asks; a leading assignment's value is a guarded-write candidate (`GIT_DIR=.git/hooks git status`); a short option with a value glued after clustered letters (`-ro/etc/x`, `-o$HOME/.zshrc`) yields a path; the precommand modifiers `noglob`, `nocorrect` and `-` are skipped to find a command's name (`noglob cd /tmp/x && rm -rf *` runs outside).
+- **Acceptance:** the brief's tests pass (every listed prefix assignment asks under a folder rule, `LANG=C` and `GH_TOKEN=` stay covered; the four `GIT_*` paths are guarded; the four glued options are not allowed; `noglob cd` taints the later segments); SPEC 138 and TECHNOLOGY updated; the full gates are green.
 
 ## Exit criteria (verified 2026-11-09)
 
