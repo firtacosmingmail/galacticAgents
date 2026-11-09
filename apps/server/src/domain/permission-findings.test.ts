@@ -976,9 +976,6 @@ describe('residual holes, review round 3 (P14-08)', () => {
       'env -iv -- git status',
       'env --ignore-environment git status',
       'nice env -i git status',
-      // env as an argument is not env's options.
-      'rg env -S src',
-      'echo env -S foo',
     ]) {
       expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
     }
@@ -1087,5 +1084,146 @@ describe('residual holes, review round 3 (P14-08)', () => {
     expect(
       findings('rustc -C opt-level=3 a.rs').some((f) => f.action === 'outside_workspace'),
     ).toBe(false);
+  });
+});
+
+describe('residual holes, review round 5 (P14-08): coarse fail-closed rules', () => {
+  const ALL_ALLOWED: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      destructive: 'allow',
+      push: 'allow',
+    },
+  };
+  const WORKSPACE_ALLOWED: PermissionPolicy = {
+    rules: { read_workspace: 'allow', edit_workspace: 'allow', run_workspace: 'allow' },
+  };
+  const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
+  const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
+    evaluate(policy, call(cmd), ctx).decision;
+  const unreadable = (cmd: string) => {
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBe(true);
+    expect(decision(cmd), cmd).toBe('ask');
+    expect(decision(cmd, ALL_ALLOWED), cmd).toBe('ask');
+  };
+  const readable = (cmd: string) =>
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
+
+  it('N4-1: a stray bracket or a broken [: class after the well-formed ones matches anything', () => {
+    for (const cmd of [
+      // Quoting is gone after lexing: each of these is `.gi[t]]`, which zsh reads as `.git`.
+      'cp e .gi[t\\]]/hooks/pre-commit',
+      'cp e .gi[t"]"]/hooks/pre-commit',
+      "cp e .gi[t']']/hooks/pre-commit",
+      "cp e '.gi[t]]'/hooks/pre-commit",
+      'cp e .g[[:x:i:][t]/hooks/pre-commit',
+      'cp e .gi[[:alpha:]\\]]/hooks/pre-commit',
+      'cp e .g[i\\]][t]/hooks/pre-commit',
+      'cp e .g[[:alpha:]\\]][t]/hooks/pre-commit',
+      'cd .gi[t\\]]/hooks && cp ../../e pre-commit',
+      'env -C .gi[t\\]]/hooks touch pre-commit',
+      'echo x > .gi[t\\]]/hooks/pre-commit',
+      'cp e ~/.ss[h\\]]/authorized_keys',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    for (const [cmd, expected] of [
+      ["sed -i '' 's/[a-z]/x/' f.txt", 'allow'],
+      ['python3 -c "print([1,2])"', 'ask'],
+      ["cp x 'app/[id]/page.tsx'", 'allow'],
+    ] as const) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBeUndefined();
+      expect(decision(cmd, WORKSPACE_ALLOWED), cmd).toBe(expected);
+    }
+  });
+
+  it('N4-2: an env word anywhere, followed by -S, a lone - or an unknown option, is unreadable', () => {
+    for (const cmd of [
+      "find . -exec nice env -S'touch /etc/x' {} ;",
+      "find . -exec nice env -S'cp e .git/hooks/pre-commit' {} ;",
+      "find . -exec timeout 5 env -S'touch /etc/x' {} ;",
+      "find . -exec nohup env -S'touch /etc/x' {} ;",
+      "find . -exec command env -S'touch /etc/x' {} ;",
+      "find . -execdir xargs env -S'touch /etc/x' {} +",
+      "exec -a foo env -S'touch /etc/x'",
+      "exec -a foo env -S'cp e .git/hooks/pre-commit'",
+      "arch -arm64 env -S'touch /etc/x'",
+      "fd -x env -S'touch /etc/x'",
+      "fd --exec env -S'touch /etc/x'",
+      "fd -X env -S'touch /etc/x'",
+      "fd -x nice env -S'touch /etc/x'",
+      "watch env -S'touch /etc/x'",
+      "parallel env -S'touch /etc/x' ::: a",
+      "fd -x env -iS'touch /etc/x'",
+      "fd -x env --split='touch /etc/x'",
+      'fd -x env - touch /etc/x',
+      'fd -x /usr/bin/env --bogus touch /etc/x',
+      // Deliberate: env as an argument is read the same way.
+      'rg env -S src',
+      'echo env -S foo',
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of [
+      'env LANG=C git log -S foo',
+      'fd -x env LANG=C wc -l',
+      'grep -r env src',
+      'git log -S env',
+    ]) {
+      readable(cmd);
+    }
+  });
+
+  it('N4-3: a builtin given `options` as a word is unreadable', () => {
+    for (const cmd of [
+      "read -A options <<< 'globdots on'; cp e ?git/hooks/pre-commit",
+      "read -rA options <<< 'globdots on'; cp e ?git/hooks/pre-commit",
+      'read -A options; cp e ?git/hooks/pre-commit',
+      "read -A options <<< 'globdots on'\ncp e ?git/hooks/pre-commit",
+      "echo 'globdots on' | read -A options; cp e ?git/hooks/pre-commit",
+      'vared options; ls',
+      'typeset -A options; ls',
+      'set -A options globdots on; ls',
+      'print -v options x; ls',
+      'printf -v options x; ls',
+      'getopts x options; ls',
+      'zparseopts -D -A options x; ls',
+      'builtin read -A options; ls',
+      "read 'options[globdots]'; ls",
+      ': ${(AA)options::=globdots on}; cp e ?git/hooks/pre-commit',
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of ['grep -r options src', 'rg options', 'cat options.json']) {
+      readable(cmd);
+    }
+  });
+
+  it('a shell with -c anywhere among its options, and trap with code, are unreadable', () => {
+    for (const cmd of [
+      "zsh -o globdots -c 'cp e .git/hooks/pre-commit'",
+      "zsh -o extendedglob -c 'cp e .gi^x/hooks/pre-commit'",
+      "bash -O dotglob -c 'cp e ?git/hooks/pre-commit'",
+      "bash -O extglob -c 'touch /etc/x'",
+      "zsh -fc 'touch /etc/x'",
+      "/bin/zsh -f -o globdots -c 'echo ?git/hooks'",
+      "bash --rcfile x -c 'touch /etc/x'",
+      "nice sh +o noglob -c 'touch /etc/x'",
+      "trap 'cp e .git/hooks/pre-commit' EXIT",
+      "trap 'touch /etc/x' EXIT",
+      "trap 'setopt globdots' DEBUG; cp e ?git/hooks/pre-commit",
+      "trap -- 'touch /etc/x' EXIT",
+      "builtin trap 'touch /etc/x' EXIT",
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of ['bash scripts/build.sh -c x', 'trap', 'trap - EXIT', "trap '' INT"]) {
+      readable(cmd);
+    }
   });
 });

@@ -526,9 +526,9 @@ export function globLocations(pattern: string): string[] | null {
 }
 
 /**
- * Where the bracket expression opening at `seg[open]` ends (the index of its closing `]`), read
- * the way zsh reads one: an optional `!` or `^`, a `]` taken as a member when it comes first, and
- * `[:class:]` units. `-1` when it never closes.
+ * Where the well-formed bracket expression opening at `seg[open]` ends (the index of its closing
+ * `]`): an optional `!` or `^`, a `]` taken as a member when it comes first, `[:name:]` units.
+ * `-1` when it never closes or holds a `[:` that is not a complete `[:name:]` class.
  */
 function bracketEnd(seg: string, open: number): number {
   let k = open + 1;
@@ -537,18 +537,20 @@ function bracketEnd(seg: string, open: number): number {
   while (k < seg.length) {
     if (seg[k] === ']') return k;
     if (seg[k] === '[' && seg[k + 1] === ':') {
-      const end = seg.indexOf(':]', k + 2);
-      if (end < 0) return -1;
-      k = end + 2;
+      const cls = /^\[:[A-Za-z]+:\]/.exec(seg.slice(k));
+      if (!cls) return -1;
+      k += cls[0].length;
     } else k++;
   }
   return -1;
 }
 
 /**
- * Whether a glob segment can match `name`. A bracket expression matches exactly one character,
- * whatever its members (conservative); one that never closes makes the segment match anything
- * (fail closed: P14-08 review round 4).
+ * Whether a glob segment can match `name`. Each well-formed bracket expression matches exactly
+ * one character, whatever its members. Quoting is gone once the words are lexed (`.gi[t\]]` and
+ * `.gi[t"]"]` both arrive as `.gi[t]]`, which zsh reads as `.git`), so the segment matches
+ * anything — fail closed — when a bracket never closes, holds a broken `[:` class, or a `[` or
+ * `]` is left over (P14-08 review round 5).
  */
 function globSegmentMatches(seg: string, name: string): boolean {
   let rx = '';
@@ -556,6 +558,7 @@ function globSegmentMatches(seg: string, name: string): boolean {
     const c = seg[k]!;
     if (c === '*') rx += '.*';
     else if (c === '?') rx += '.';
+    else if (c === ']') return true;
     else if (c === '[') {
       const close = bracketEnd(seg, k);
       if (close < 0) return true;
@@ -988,6 +991,7 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
   nice: /^-n$/,
   ionice: /^-[cnp]$/,
   timeout: /^-[sk]$/,
+  exec: /^-a$/,
   xargs: /^-[IdEsLnPa]$/,
   // `-iC dir` (a cluster ending in a value option) and the long forms take the next word too.
   env: /^(?:-[A-Za-z]*[uCS]|--chdir|--unset|--split-string)$/,
@@ -1027,25 +1031,18 @@ function envChdirs(words: readonly string[]): string[] {
 }
 
 /**
- * Whether the command's own `env` (an `env` word in its wrapper chain, never an argument: `rg env
- * -S` is ripgrep's) has anything the engine does not read (P14-08 review round 3): only `-i`,
- * `-v`, `-u NAME`, `-C DIR` (clustered, the value glued or next), `--ignore-environment`,
- * `--unset[=]NAME`, `--chdir[=]DIR`, `--` and `x=y` words may come before its program. Anything
- * else — a lone `-`, `-S`/`--split-string` in any form, `-0`, `-a`, `-P`, an unknown option, a
- * missing value — makes the line unreadable (fail closed).
+ * Whether any `env` word of the simple command — wherever it is, since many programs run their
+ * arguments (`find -exec`, `fd -x`, `exec -a NAME`, `arch`, `watch`, `parallel`) — has anything the
+ * engine does not read after it (P14-08 review rounds 3 and 5): only `-i`, `-v`, `-u NAME`,
+ * `-C DIR` (clustered, the value glued or next), `--ignore-environment`, `--unset[=]NAME`,
+ * `--chdir[=]DIR`, `--` and `x=y` words may come before its program. Anything else — a lone `-`,
+ * `-S`/`--split-string` in any form, `-0`, `-a`, `-P`, an unknown option, a missing value — makes
+ * the line unreadable (fail closed). An `env` that is only an argument is read the same way, so
+ * `rg env -S src` asks: the cost of not knowing which programs run their arguments.
  */
 export function envUnreadable(words: readonly string[]): boolean {
-  const h = commandHead([...words]);
-  for (const [i, w] of words.entries()) {
-    // In the wrapper chain, or the command `find` runs (`find . -exec env … {} ;`).
-    const runs = i < h || FIND_RUNS.has(words[i - 1] ?? '');
-    if (runs && baseName(w) === 'env' && !envArgumentsReadable(words, i + 1)) return true;
-  }
-  return false;
+  return words.some((w, i) => baseName(w) === 'env' && !envArgumentsReadable(words, i + 1));
 }
-
-/** `find` actions whose next word is a command it runs. */
-const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 
 function envArgumentsReadable(words: readonly string[], from: number): boolean {
   for (let k = from; k < words.length; k++) {
@@ -1083,10 +1080,29 @@ const OPTION_COMMANDS = new Set(['setopt', 'unsetopt', 'emulate', 'shopt']);
 const SET_SAFE_OPTIONS = new Set(['pipefail', 'errexit', 'nounset', 'xtrace']);
 
 /**
- * Whether a simple command may change how the shell globs (P14-08 review round 3): `setopt`,
- * `unsetopt`, `emulate`, `shopt`, an `options[…]`/`options=` assignment, or `set` with anything but
- * `-e`/`-u`/`-x` (clustered, `+` too) and `-o`/`+o` `pipefail|errexit|nounset|xtrace`. The engine
- * assumes zsh's default glob options, so such a line is unreadable (fail closed).
+ * zsh's builtins (and its modules'), any of which may be handed a parameter name to set
+ * (`read -A options`, `vared`, `typeset`, `print -v`, `getopts`, `zparseopts -A`, …).
+ */
+const ZSH_BUILTINS = new Set(
+  (
+    '. : [ alias autoload bg bindkey break builtin bye cd chdir command compadd compctl ' +
+    'compset continue declare dirs disable disown echo emulate enable eval exec exit export ' +
+    'false fc fg float functions getln getopts hash history integer jobs kill let limit ' +
+    'local logout popd print printf private pushd pushln pwd r read readonly rehash return ' +
+    'sched set setopt shift source strftime suspend sysopen sysread sysseek syswrite test ' +
+    'times trap true ttyctl type typeset ulimit umask unalias unfunction unhash unlimit ' +
+    'unset unsetopt vared wait whence where which zcompile zformat zle zmodload zparseopts ' +
+    'zregexparse zstat zstyle'
+  ).split(' '),
+);
+
+/**
+ * Whether a simple command may change how the shell globs (P14-08 review rounds 3 and 5):
+ * `setopt`, `unsetopt`, `emulate`, `shopt`, an `options[…]`/`options=` assignment, a builtin given
+ * `options` or `options[…]` as a word (`read -A options`, `vared options`, `typeset -A options`),
+ * or `set` with anything but `-e`/`-u`/`-x` (clustered, `+` too) and `-o`/`+o`
+ * `pipefail|errexit|nounset|xtrace`. The engine assumes zsh's default glob options, so such a line
+ * is unreadable (fail closed). `options` given to a program (`grep -r options src`) is data.
  */
 export function setsGlobOptions(words: readonly string[]): boolean {
   if (words.some((w) => /^options(?:\[|\+?=)/.test(w))) return true;
@@ -1094,6 +1110,9 @@ export function setsGlobOptions(words: readonly string[]): boolean {
   const name = words[h];
   if (name === undefined) return false;
   if (OPTION_COMMANDS.has(baseName(name))) return true;
+  if (ZSH_BUILTINS.has(name) && words.slice(h + 1).some((w) => /^options(?:\[|$)/.test(w))) {
+    return true;
+  }
   if (name !== 'set') return false;
   const args = words.slice(h + 1);
   for (let k = 0; k < args.length; k++) {
@@ -1102,6 +1121,44 @@ export function setsGlobOptions(words: readonly string[]): boolean {
     if (letters.endsWith('o') && !SET_SAFE_OPTIONS.has(args[++k] ?? '')) return true;
   }
   return false;
+}
+
+/**
+ * Whether a shell word (any path, any position) has `-c` among its options (P14-08 review round
+ * 5): `zsh -o globdots -c '…'`, `bash -O extglob -c '…'`, `zsh -fc '…'`. The options are read up
+ * to the first operand; a cluster holding `o`/`O` and a `--long` option are taken to consume the
+ * next word (fail closed: the scan goes on).
+ */
+export function shellRunsString(words: readonly string[]): boolean {
+  for (const [i, w] of words.entries()) {
+    if (!SHELLS.test(baseName(w))) continue;
+    for (let k = i + 1; k < words.length; k++) {
+      const opt = words[k]!;
+      if (opt === '--' || opt === '-' || !/^[-+]/.test(opt)) break;
+      if (opt.startsWith('--')) {
+        if (!opt.includes('=')) k++;
+        continue;
+      }
+      const letters = opt.slice(1);
+      if (letters.includes('c')) return true;
+      if (/[oO]/.test(letters)) k++;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the command is `trap` with code to run (P14-08 review round 5): the engine never reads
+ * it (`trap 'setopt globdots' DEBUG`). `trap`, `trap - SIG`, `trap '' SIG` and `trap -l`/`-p`
+ * set no code.
+ */
+export function trapRunsCode(words: readonly string[]): boolean {
+  const h = commandHead([...words]);
+  if (words[h] === undefined || baseName(words[h]) !== 'trap') return false;
+  const args = words.slice(h + 1);
+  if (args[0] === '--') args.shift();
+  const code = args[0];
+  return code !== undefined && code !== '' && code !== '-' && !/^-[lp]+$/.test(code);
 }
 
 /** Index of the command's real name in `words`, past assignments and wrappers. */
@@ -1835,6 +1892,14 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         opaque = true;
         reasons.push(`${rule.reason}: ${shown}`);
       }
+    }
+    if (!OPAQUE_RULES[0]!.pattern.test(text) && shellRunsString(simple.words)) {
+      opaque = true;
+      reasons.push(`${OPAQUE_RULES[0]!.reason}: ${shown}`);
+    }
+    if (trapRunsCode(simple.words)) {
+      opaque = true;
+      reasons.push(`trap hides the command it runs: ${shown}`);
     }
     if (setsGlobOptions(simple.words)) {
       opaque = true;

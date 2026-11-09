@@ -1727,6 +1727,39 @@ describe('final review fixes (P14-07)', () => {
       }
     });
 
+    it('round 5: stray brackets, env anywhere, options, shell -c and trap never pass a folder rule', () => {
+      for (const command of [
+        'cd /tmp/pr83 && cp e .gi[t\\]]/hooks/pre-commit',
+        'cd /tmp/pr83 && cd .gi[t\\]]/hooks && touch pre-commit',
+        'cd /tmp/pr83 && cp e .g[[:x:i:][t]/hooks/pre-commit',
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+        expect(
+          options(bash(command)).notRememberable.map((n) => n.reason),
+          command,
+        ).toContainEqual(expect.stringMatching(/guarded ground/));
+      }
+      for (const command of [
+        "cd /tmp/pr83 && find . -exec nice env -S'GIT_PAGER=x git diff' {} ;",
+        "cd /tmp/pr83 && exec -a foo env -S'GIT_PAGER=x git diff'",
+        "cd /tmp/pr83 && read -A options <<< 'globdots on'; cp e ?git/hooks/pre-commit",
+        "cd /tmp/pr83 && trap 'cp e .git/hooks/pre-commit' EXIT",
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+        expect(
+          keys(options(bash(command))).some((k) => k.startsWith('folder:')),
+          command,
+        ).toBe(false);
+      }
+      // A shell -c is opaque like a plain `zsh -c` there: never covered.
+      for (const command of [
+        "cd /tmp/pr83 && zsh -o globdots -c 'cp e ?git/hooks/pre-commit'",
+        "cd /tmp/pr83 && bash -O dotglob -c 'cp e ?git/hooks/pre-commit'",
+      ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+      }
+    });
+
     it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
       for (const command of [
         'noglob cd /tmp/pr83 && rm -rf *',
