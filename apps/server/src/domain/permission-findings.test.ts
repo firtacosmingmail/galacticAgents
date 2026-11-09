@@ -184,6 +184,9 @@ describe('fix round 4: bash lexing and shell-state allowlist (rulings R-f, R-g)'
     expect(nets.length, cmd).toBeGreaterThan(0);
     for (const h of nets) expect(h, cmd).toBeUndefined();
   };
+  // Stricter than hidden: since R-n the `=` after `[`/`{`/`$` makes the whole line unreadable.
+  const opaqueLine = (cmd: string) =>
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBe(true);
   it('a { or } inside a command is an argument, not a group delimiter (R-f)', () => {
     for (const cmd of [
       'curl https://ok.com } evil.com',
@@ -232,20 +235,20 @@ describe('fix round 4: bash lexing and shell-state allowlist (rulings R-f, R-g)'
   it('any assignment form before a program hides every host (R-g)', () => {
     for (const cmd of [
       'https_proxy+=http://evil.com:9; curl https://ok.com',
-      'a[0]=x; curl https://ok.com',
       'X=1 Y+=2 ls; curl https://ok.com',
     ]) {
       hidden(cmd);
     }
+    opaqueLine('a[0]=x; curl https://ok.com');
   });
   it('a program word the shell could expand into a builtin hides every host', () => {
     for (const cmd of [
       '${a:-export} https_proxy=http://evil.com:9; curl https://ok.com',
       'expor? https_proxy=http://evil.com:9; curl https://ok.com',
-      '{export,https_proxy=http://evil.com:9}; curl https://ok.com',
     ]) {
       hidden(cmd);
     }
+    opaqueLine('{export,https_proxy=http://evil.com:9}; curl https://ok.com');
   });
   it('a default-assigning expansion anywhere hides every host', () => {
     for (const cmd of [
@@ -288,25 +291,30 @@ describe('fix round 5: arithmetic assignments, groups after reserved words (R-g,
       '(( CURL_HOME = 1 )); curl https://ok.com',
       '((CURL_HOME=1)); curl https://ok.com',
       'echo $(( CURL_HOME = 1 )); curl https://ok.com',
-      'echo $[CURL_HOME=1]; curl https://ok.com',
       'echo $(( https_proxy = 3232235777 )); curl https://ok.com',
     ]) {
       const n = nets(cmd);
       expect(n.length, cmd).toBeGreaterThan(0);
       for (const h of n) expect(h, cmd).toBeUndefined();
     }
+    // Since R-n the `=` after `$[` makes the whole line unreadable, which hides every host too.
+    expect(classifyCommand('echo $[CURL_HOME=1]; curl https://ok.com', ctx).unclassified).toBe(
+      true,
+    );
   });
   it('a backslash-newline does not hide an arithmetic assignment or a function definition', () => {
     // bash removes backslash-newline before it splits words (P14-03, carried from round 5).
     for (const cmd of [
       '(\\\n( CURL_HOME = 1 )); curl https://ok.com',
-      'echo $\\\n[CURL_HOME=1]; curl https://ok.com',
       'curl\\\n() { :; }; curl https://ok.com',
     ]) {
       const n = nets(cmd);
       expect(n.length, cmd).toBeGreaterThan(0);
       for (const h of n) expect(h, cmd).toBeUndefined();
     }
+    expect(classifyCommand('echo $\\\n[CURL_HOME=1]; curl https://ok.com', ctx).unclassified).toBe(
+      true,
+    );
   });
   it('a group after a reserved word still opens a group, so its cd is seen', () => {
     expect(outside('time { cd; } && cat notes.txt')).toContainEqual([1, '/home/u']);
@@ -400,7 +408,8 @@ describe('zsh escapes (P14-03 review, ruling R-l)', () => {
       expect(v.decision, cmd).not.toBe('allow');
       expect(v.reasons.join('\n'), cmd).toMatch(/zsh =command expansion/);
     }
-    for (const cmd of ["echo '=x'", 'ls --color=auto', 'test a==b', 'echo "=x"', 'echo \\=x']) {
+    // (`test a==b` is opaque since R-n: a second `=` follows a non-literal `=`.)
+    for (const cmd of ["echo '=x'", 'ls --color=auto', 'echo "=x"', 'echo \\=x']) {
       expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
     }
   });
@@ -505,7 +514,6 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
       'echo \\=x',
       'echo "=x"',
       'ls --color=auto',
-      'test a==b',
       // A lone `=` names no command: zsh leaves it as it is.
       'test a = b',
       '[ "$x" = y ]',
@@ -513,6 +521,43 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
     ]) {
       expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
     }
+  });
+
+  it('an = after anything but plain literal characters is unreadable (R-n)', () => {
+    for (const cmd of [
+      "env {''=sh,-c,'echo PWN'}",
+      "echo {x,''=ls}",
+      "echo {''=ls,}",
+      "echo ''{''=ls,}",
+      'echo {${x}=ls,}',
+      'cp evil $(true)=git',
+      'cp evil $x=git',
+      'cp evil "$x"=git',
+      'cp evil `true`=git',
+      'x==ls',
+      'test a==b',
+    ]) {
+      opaque(cmd, /zsh =command expansion/);
+    }
+    for (const cmd of [
+      'ls --color=auto',
+      'a=b ls',
+      'export PATH=/x',
+      'test a = b',
+      '[ "$x" = y ]',
+      'git log --format=%h',
+      'KEY=value',
+      'npm config set @scope:registry=https://r.io/',
+    ]) {
+      expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
+    }
+  });
+
+  it('a zsh numeric glob is unreadable (R-n)', () => {
+    for (const cmd of ['ls <->', 'cat <1-10>x', 'cat <-5>', 'cat <3->']) {
+      opaque(cmd, /zsh numeric glob/);
+    }
+    expect(verdictOf('sort < in.txt').unclassified).toBeUndefined();
   });
 
   it('print -S changes the history like print -s', () => {

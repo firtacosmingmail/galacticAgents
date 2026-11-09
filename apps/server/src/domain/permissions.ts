@@ -612,12 +612,14 @@ class ShellLexer {
     let pendingOp: string | null = null;
     let depth = 0;
     let i = start;
-    // Where an unquoted `)` operator ended, and where an unquoted `{` or `,` was last appended as
-    // a plain word character: zsh reads a `(` or an `=` right after them as glob syntax (R-m).
+    // Where an unquoted `)` operator ended: zsh reads a `(` right after it as glob qualifiers (R-m).
     let closedAt = -1;
-    let braceOrCommaAt = -1;
+    // Where the current word starts in the raw text, and where this loop step started.
+    let wordStart = -1;
+    let stepStart = start;
 
     const append = (text: string) => {
+      if (word === null) wordStart = stepStart;
       word = (word ?? '') + text;
     };
     const flushWord = () => {
@@ -659,6 +661,7 @@ class ShellLexer {
     while (i < src.length) {
       const c = src[i]!;
       const next = src[i + 1];
+      stepStart = i;
       // Only space and tab separate words: bash reads a carriage return as a word character.
       if (c === ' ' || c === '\t') {
         flushWord();
@@ -714,6 +717,9 @@ class ShellLexer {
       } else if ((c === '<' || c === '>') && next === '(') {
         i = substitute(i + 2); // process substitution
         append(SUBSTITUTION);
+      } else if (c === '<' && /^<\d*-\d*>/.test(src.slice(i))) {
+        // zsh reads `<->`, `<1-10>` as numeric globs, not redirections: never readable (R-n).
+        return this.fail(`zsh numeric glob: ${/^<\d*-\d*>/.exec(src.slice(i))![0]}`);
       } else if (c === '<' || c === '>') {
         if (word !== null && !quoted && /^\d+$/.test(word))
           word = null; // the fd: `2>`
@@ -789,19 +795,19 @@ class ShellLexer {
         i++;
       } else if (
         c === '=' &&
-        (((word === null || word === '') && !(word === null && isWordEnd(next))) ||
-          i === braceOrCommaAt)
+        !(word === null && isWordEnd(next)) &&
+        (word === null || !/^[A-Za-z0-9_./:@%+-]+$/.test(src.slice(wordStart, i)))
       ) {
-        // zsh expands an unquoted `=cmd` to the command's path (`=node`, `=\ls`, `''=ls`, and
-        // in brace alternatives `{=ls,x}`): never readable (R-l, R-m). A lone `=` names no
-        // command and stays as it is (`test a = b`).
+        // zsh expands an unquoted `=cmd` to the command's path (`=node`), also after quotes,
+        // expansions and brace alternatives (`''=ls`, `$x=git`, `{x,''=ls}`): an `=` is readable
+        // only after plain literal characters (`--color=auto`, R-l, R-m, R-n). A lone `=` names
+        // no command and stays as it is (`test a = b`).
         let end = i + 1;
         while (end < src.length && !/[\s;&|<>()]/.test(src[end]!)) end++;
         return this.fail(`zsh =command expansion: ${src.slice(i, end)}`);
       } else {
         append(c);
         i++;
-        if (c === '{' || c === ',') braceOrCommaAt = i;
       }
     }
     flushCommand(false);

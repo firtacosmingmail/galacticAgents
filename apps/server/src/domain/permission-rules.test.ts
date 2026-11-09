@@ -845,6 +845,14 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
       'cp /tmp/pr83/evil {=ls,x}',
       'cp /tmp/pr83/evil {=ls,}',
       'cat /tmp/pr83/a | tee {=git,}',
+      // R-n: `=` after expansions, numeric globs.
+      'cp /tmp/pr83/evil $(true)=git',
+      'cp /tmp/pr83/evil $x=git',
+      'cp /tmp/pr83/evil "$x"=git',
+      'cp /tmp/pr83/evil `true`=git',
+      "cp /tmp/pr83/evil {x,''=ls}",
+      'cd /tmp/pr83; cat <->x/passwd',
+      'cat /tmp/pr83/<1-10>x',
     ]) {
       expect(allowed([folder], bash(command)), command).toBe(false);
     }
