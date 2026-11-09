@@ -129,6 +129,29 @@ describe('a card the Waykeeper forwarded (P13-06)', () => {
     expect(api.answer).not.toHaveBeenCalled();
   });
 
+  it('shows what the standing approval covers — the kind and the similar requests — above the button (final review I4)', async () => {
+    const similar = [recorded(1), { ...recorded(2), summary: 'pnpm test --run' }, recorded(3)];
+    show(card({ ...forward, similar }));
+    const article = screen.getByRole('article');
+    const covers = within(article).getByText('Covers: delete files');
+    const list = within(article).getByRole('list', { name: 'the similar approved requests' });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['pnpm test', 'pnpm test --run', 'pnpm test']);
+    const button = within(article).getByRole('button', { name: BUTTON });
+    // Both come before the button in the card.
+    expect(covers.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(list.compareDocumentPosition(button) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(blocking(await axeFindings(article))).toEqual([]);
+  });
+
+  it('shows no kind or similar list without the button', () => {
+    show(card(forward));
+    expect(screen.queryByText(/^Covers: /)).toBeNull();
+  });
+
   it('says so when the answer went through but no standing approval was stored', async () => {
     api.standingApproval.mockResolvedValueOnce({
       ok: true,

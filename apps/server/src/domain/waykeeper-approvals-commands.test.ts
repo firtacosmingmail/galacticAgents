@@ -147,6 +147,15 @@ describe('answering a forwarded request', () => {
     expect(s.ofType('approval.recorded')).toEqual([]);
     expect(s.proj().recordedApprovals).toBeUndefined();
   });
+  it('records nothing for a forward whose kind is a placeholder (final review I4)', async () => {
+    const s = setup();
+    for (const kind of ['not judged: Bash', 'unknown', ' Unknown ']) {
+      const q = await s.forwarded({ kind });
+      await s.commands.answerQuestion({ questionId: q.id, answer: 'allow', by: USER });
+    }
+    expect(s.ofType('approval.recorded')).toEqual([]);
+    expect(s.proj().recordedApprovals).toBeUndefined();
+  });
 });
 
 describe('standingApproval', () => {

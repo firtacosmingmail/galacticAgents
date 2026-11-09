@@ -438,6 +438,33 @@ describe('ApprovalWatch', () => {
     });
   });
 
+  describe('placeholder kinds never make a standing approval (final review I4)', () => {
+    it('records of a placeholder kind are left out of similar', async () => {
+      const mixed: RecordedApproval[] = [
+        ...recorded(3),
+        { ...recorded(1)[0]!, kind: 'not judged: Bash', questionId: 'q-p1' },
+        { ...recorded(1)[0]!, kind: 'unknown', questionId: 'q-p2' },
+      ];
+      const { judge } = scripted(
+        forwardVerdict({ kind: 'read-only gh query', similarTo: [2, 3, 4] }),
+      );
+      const { c, forward } = call('gh pr view 12', {
+        facts: () => ({ ...FACTS, recordedApprovals: mixed }),
+      });
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(forward.mock.calls[0]![0].similar).toBeUndefined();
+    });
+
+    it('a forward the judge gave no kind carries no similar', async () => {
+      const { judge } = scripted(forwardVerdict({ kind: '', similarTo: [0, 1, 2] }));
+      const { c, forward } = call('gh pr view 12');
+      await new ApprovalWatch({ judge }).handle(c);
+      const sent = forward.mock.calls[0]![0];
+      expect(sent.kind).toBe('not judged: Bash');
+      expect(sent.similar).toBeUndefined();
+    });
+  });
+
   describe('races (Review Focus 4)', () => {
     it('the switch turned off while judging: an approve is forwarded', async () => {
       let on = true;

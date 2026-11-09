@@ -3,6 +3,7 @@ import { Project } from './domain.js';
 import { project } from './fixtures/domain.js';
 import {
   CommandPart,
+  isJudgedKind,
   MAX_RECORDED_APPROVALS,
   needsUserQuote,
   quoteFound,
@@ -99,5 +100,17 @@ describe('needsUserQuote', () => {
   });
   it('does not for a plain read', () => {
     expect(needsUserQuote({ text: 'gh pr view 1', categories: ['network'] })).toBe(false);
+  });
+});
+
+describe('isJudgedKind (final review I4)', () => {
+  it('a kind the judge named is judged; a placeholder is not', () => {
+    expect(isJudgedKind('run the test suite')).toBe(true);
+    expect(isJudgedKind('not judged: Bash')).toBe(false);
+    expect(isJudgedKind('Not judged: Write')).toBe(false);
+    expect(isJudgedKind('unknown')).toBe(false);
+    expect(isJudgedKind(' Unknown ')).toBe(false);
+    expect(isJudgedKind('  ')).toBe(false);
+    expect(isJudgedKind('unknown host lookup')).toBe(true);
   });
 });

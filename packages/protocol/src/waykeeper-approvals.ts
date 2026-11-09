@@ -75,6 +75,19 @@ export const WaykeeperForward = z.object({
 });
 export type WaykeeperForward = z.infer<typeof WaykeeperForward>;
 
+/** The kind the approval watch gives a request it forwarded without the judge naming one. */
+export const UNJUDGED_KIND_PREFIX = 'not judged:';
+
+/**
+ * Whether `kind` names a kind of request the judge judged, not a placeholder (`not judged: <tool>`
+ * or `unknown`): only such a kind is recorded as an approval, counts towards `similar`, or can
+ * become a standing approval (final review I4).
+ */
+export function isJudgedKind(kind: string): boolean {
+  const k = kind.trim().toLowerCase();
+  return k !== '' && k !== 'unknown' && !k.startsWith(UNJUDGED_KIND_PREFIX);
+}
+
 /** What the request judge is given (design §5.3). */
 export interface RequestJudgeInput {
   task: { title: string; description: string };

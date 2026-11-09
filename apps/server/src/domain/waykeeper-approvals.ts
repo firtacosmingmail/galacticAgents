@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import {
+  isJudgedKind,
   MAX_RECORDED_APPROVALS,
   type Actor,
   type Id,
@@ -159,7 +160,8 @@ export function projectIdOfAsker(ctx: CommandContext, question: Question): Id | 
  * The user's "allow" of a request the Waykeeper forwarded is an approval to remember: recorded on
  * the asking agent's project in the answer's own transaction, with the kind the judge named and a
  * redacted one-line summary of the call (the precedent line). Anything else records nothing: a deny,
- * a plain permission request, an answer by anyone but the user, a project that ended.
+ * a plain permission request, an answer by anyone but the user, a project that ended, a forward
+ * whose kind is a placeholder (`isJudgedKind`).
  */
 export function recordForwardedAllow(
   ctx: CommandContext,
@@ -171,6 +173,8 @@ export function recordForwardedAllow(
   const call = question.context.toolCall;
   if (question.kind !== 'permission' || !forward || !call) return;
   if (answer !== 'allow' || by.type !== 'user') return;
+  // A placeholder kind (a request the judge never named) is no kind to repeat (final review I4).
+  if (!isJudgedKind(forward.kind)) return;
   const projectId = projectIdOfAsker(ctx, question);
   const project = projectId ? ctx.tables.projects.get(projectId) : undefined;
   if (!project || RULES_END_IN.has(project.state)) return;

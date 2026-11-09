@@ -105,6 +105,15 @@ export function StandingApprovalButton({
   };
   return (
     <>
+      {/* What the button grants, before it is pressed (design §5.5: "with the matched examples"). */}
+      <p className="standing-covers">{`Covers: ${forward.kind}`}</p>
+      <ul className="command-parts" aria-label="the similar approved requests">
+        {forward.similar!.map((r, i) => (
+          <li key={`${r.questionId}-${i}`}>
+            <code>{r.summary}</code>
+          </li>
+        ))}
+      </ul>
       <button
         type="button"
         className="secondary"

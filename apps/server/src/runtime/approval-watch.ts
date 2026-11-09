@@ -1,4 +1,5 @@
 import {
+  isJudgedKind,
   needsUserQuote,
   quoteFound,
   SIMILAR_APPROVALS_THRESHOLD,
@@ -169,12 +170,14 @@ export class ApprovalWatch {
       similar?: RecordedApproval[],
     ) => {
       if (!call.active()) return;
+      const named = redactSecrets(kind).slice(0, MAX_KIND_CHARS) || unjudged;
       call.forward({
         reason: redactSecrets(reason),
-        kind: redactSecrets(kind).slice(0, MAX_KIND_CHARS) || unjudged,
+        kind: named,
         parts: shown,
         ...(failingPart !== undefined ? { failingPart } : {}),
-        ...(similar ? { similar } : {}),
+        // A placeholder kind never offers a standing approval: it would cover nothing nameable.
+        ...(similar && isJudgedKind(named) ? { similar } : {}),
       });
     };
 
@@ -303,14 +306,19 @@ function standingNow(call: ApprovalWatchCall): readonly StandingApproval[] {
 }
 
 /**
- * The records `similarTo` points at — its valid indexes, each once — when there are at least
+ * The records `similarTo` points at — its valid indexes of a judged kind (`isJudgedKind`), each
+ * once — when there are at least
  * `SIMILAR_APPROVALS_THRESHOLD` of them; else `undefined` (no standing-approval button).
  */
 function similarOf(
   similarTo: readonly number[],
   recorded: readonly RecordedApproval[],
 ): RecordedApproval[] | undefined {
-  const valid = [...new Set(similarTo.filter((i) => isIndex(i, recorded.length)))];
+  const valid = [
+    ...new Set(
+      similarTo.filter((i) => isIndex(i, recorded.length) && isJudgedKind(recorded[i]!.kind)),
+    ),
+  ];
   return valid.length >= SIMILAR_APPROVALS_THRESHOLD ? valid.map((i) => recorded[i]!) : undefined;
 }
 
