@@ -1,4 +1,6 @@
+import { sep } from 'node:path';
 import type { Id, Project, Task, WorkState } from '@galactic/protocol';
+import { scratchRoot, WORKTREES_DIR } from '../workspace/workspaces.js';
 
 /**
  * The Steward's prompt template (P2-11; SPEC §2.3, §2.6, §2.7, §3.5, §3.6): the one first prompt
@@ -61,12 +63,13 @@ const DONE_STATES: ReadonlySet<WorkState> = new Set(['completed', 'archived', 'm
 
 /** The etiquette every Steward follows (exported for tests and the docs). */
 export function stewardEtiquette(
-  brief: Pick<StewardBrief, 'supervisor' | 'branch' | 'declares'>,
+  brief: Pick<StewardBrief, 'supervisor' | 'branch' | 'declares'> & { scratch?: string },
 ): string[] {
   const boss = SUPERVISOR_NAME[brief.supervisor];
   return [
     'How you work:',
     '- Work on this task only, inside your working directory. Leave other tasks and unrelated files alone.',
+    ...(brief.scratch ? [scratchEtiquette(brief.scratch)] : []),
     `- Ask when unsure. If the task or the instructions leave a real decision open (a requirement, a choice between approaches, anything you would otherwise guess), ask ONE clear question with your question tool (AskUserQuestion), with options when you can, and wait for the answer. It goes to ${boss}, who answers it or passes it on to the user. Never ask in plain text: nobody reads your messages until your turn ends.`,
     '- Never ask for permission in prose. Make the tool call you need: the project’s permission policy allows it, refuses it with a reason, or asks the user and holds your call until they answer. If a call is refused, do not work around it; say so in your report.',
     '- You run under hard limits (time and tool calls). Work efficiently and do not loop.',
@@ -80,6 +83,24 @@ export function stewardEtiquette(
     ...publishEtiquette(brief.declares ?? true),
     `- Report when you stop. End your turn with a final message that is your report to ${boss}: begin it with "Done:" when the task is complete (what you changed, how you checked it — tests, build — and anything left over or risky), or "Not done:" with what stops you. That last message is delivered as your report; ${boss} decides whether the task is closed or gives you more to do. Every end of your turn counts as a report, so do not stop half-way unless you are blocked.`,
   ];
+}
+
+/**
+ * The line that keeps a Steward's extra checkouts and temporary files inside the workspace (dev
+ * run 2026-11-09: a Steward reviewing a PR made `git worktree add /tmp/pr83`).
+ */
+export function scratchEtiquette(scratch: string): string {
+  return `- Never put files, clones or git worktrees outside the project's workspace (not /tmp, not your home folder). To look at another branch or a PR, read it from your working directory with git log, git diff and git show <ref>:<path>. If you really need a separate checkout or temporary files, put them in ${scratch} (for a checkout: git worktree add --detach ${scratch}/<name> <ref>), remove what you made there before your report, and never commit it; the folder is deleted with your task's worktree.`;
+}
+
+/**
+ * The project workspace a Steward's working directory belongs to: the part before
+ * `.galactic/worktrees/` for a worktree, else the directory itself.
+ */
+export function workspaceOfCwd(cwd: string): string {
+  const marker = `${sep}${WORKTREES_DIR}${sep}`;
+  const at = cwd.indexOf(marker);
+  return at >= 0 ? cwd.slice(0, at) : cwd;
 }
 
 /** The line that asks for deliverables: the tool, or the report's list (decision 120). */
@@ -143,12 +164,15 @@ export function stewardPrompt(brief: StewardBrief): string {
           : 'This folder may be someone’s working copy: do not commit, push or switch branches unless your instructions say so.',
   ];
   const related = relatedLines(task.id, brief.related ?? []);
+  // A project task gets a scratch folder in its workspace; an asteroid's folder may be someone's
+  // working copy, so it gets none (it stays inside its working directory).
+  const scratch = project ? scratchRoot(workspaceOfCwd(cwd), task.id) : undefined;
   return [
     ...(head.length > 0 ? [head.join('\n\n'), '', '---'] : []),
     ...facts,
     ...(related.length > 0 ? ['', 'Other tasks of the project (not yours):', ...related] : []),
     '',
-    ...stewardEtiquette(brief),
+    ...stewardEtiquette({ ...brief, ...(scratch ? { scratch } : {}) }),
   ].join('\n');
 }
 

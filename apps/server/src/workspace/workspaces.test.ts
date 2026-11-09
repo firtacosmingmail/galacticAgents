@@ -17,6 +17,7 @@ import { world } from '../test/world.js';
 import { gitRunner } from './git.js';
 import {
   branchName,
+  scratchRoot,
   slugify,
   stewardsSerialised,
   workspaceMeta,
@@ -443,6 +444,29 @@ describe('worktrees and merges', () => {
     expect(git(dir, 'branch', '--list', wa.branch)).toBe('');
     expect(w.tables.tasks.get(a.id)).not.toHaveProperty('worktreePath');
     expect(w.tables.tasks.get(a.id)).not.toHaveProperty('branch');
+  });
+
+  it('removes the scratch folder and the worktrees a Steward made in it, on merge and on removal', async () => {
+    const dir = join(tmp, 'home', 'scratch');
+    const { project: p } = await project('Scratch', dir);
+    const a = await task(p.id, 'Review a branch');
+    const b = await task(p.id, 'Abandoned review');
+    for (const t of [a, b]) {
+      const wt = await spaces.createWorktree(t.id);
+      const scratch = scratchRoot(dir, t.id);
+      expect(scratch).toBe(join(dir, '.galactic', 'scratch', t.id));
+      mkdirSync(scratch, { recursive: true });
+      git(wt.path, 'worktree', 'add', '-q', '--detach', join(scratch, 'peek'), 'HEAD');
+      writeFileSync(join(scratch, 'notes.txt'), 'x');
+      commitFile(wt.path, `${t.id}.txt`, 'done\n');
+    }
+    // Neither the scratch folder nor its checkout shows up in the workspace's status.
+    expect(git(dir, 'status', '--porcelain')).toBe('');
+    expect(await spaces.mergeTask(a.id)).toMatchObject({ ok: true });
+    expect(existsSync(scratchRoot(dir, a.id))).toBe(false);
+    expect(await spaces.removeWorktree(b.id, { force: true })).toEqual({ removed: true });
+    expect(existsSync(scratchRoot(dir, b.id))).toBe(false);
+    expect(git(dir, 'worktree', 'list')).not.toContain('.galactic/scratch');
   });
 
   it('works in a sub-folder of a repository: the Steward gets the same sub-folder', async () => {

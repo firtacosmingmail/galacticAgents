@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
 **Current task:** P13-07 · **Task status:** P13-07 blocked (waiting for Cosmin's real run); docs and gates done (2026-11-09)
-**Phase status:** in progress (6/7; P13-07 blocked on the real run) — branch `agent-waykeeper-approvals`
+**Phase status:** in progress (7/8; P13-07 blocked on the real run) — branch `agent-waykeeper-approvals`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -30,8 +30,9 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 5 | P13-05 | Answers, standing approvals and routes (Task 5). |
 | 6 | P13-06 | The panel (Mac and phone) and the menu bar (Task 6). |
 | 7 | P13-07 | Docs, task board and the real run (Task 7). |
+| 7 | P13-08 | Steward scratch checkouts stay in the workspace (found in the test run; added 2026-11-09). |
 
-All seven run in order.
+P13-01…07 run in order; P13-08 runs beside P13-07.
 
 ## Tasks
 
@@ -64,3 +65,8 @@ All seven run in order.
 - **Status:** blocked (waiting for Cosmin's real run) · **Depends on:** P13-06 · **Parallel with:** —
 - Plan Task 7.
 - Done: SPEC decision 154, TECHNOLOGY §3.10, IMPLEMENTATION_PLAN Phase 13, the design and plan wording fixes (a stopping Steward drops the held call; `StandingApprovalResult`), the task board, the full gates, and the manual procedure `docs/tasks/notes/P13-07-real-run.md`. Open: Cosmin runs that procedure on a scratch repository and records the result there; only then is the task `done (<date>)` and the phase exit verified.
+
+### P13-08 — Steward scratch checkouts stay in the workspace (added 2026-11-09)
+- **Status:** done (2026-11-09) · **Depends on:** — · **Parallel with:** P13-07
+- Found in Cosmin's test run: a Steward reviewing a PR ran `git worktree add /tmp/pr83 pr-83` (its prompt forbids switching branches and named no place for another checkout).
+- Done: a project Steward's prompt names its scratch folder `<workspace>/.galactic/scratch/<task-id>` and forbids files, clones and worktrees outside the workspace (other refs are read with `git log`/`git diff`/`git show`); `Workspaces.mergeTask` and `removeWorktree` remove that folder and any git worktree registered in it. SPEC decision 27 amended. Asteroid Stewards get no scratch folder (their folder may be someone's working copy). A `git worktree add` there still writes into `.git`, so it still asks.
