@@ -953,6 +953,9 @@ describe('residual holes, review round 3 (P14-08)', () => {
       'env -u',
       'env --chdir',
       'nice env -C',
+      // find runs its -exec command: that env is a command too.
+      "find . -exec env -S'touch /etc/x' {} ;",
+      "find . -execdir env - -S'touch x' {} +",
     ]) {
       unreadable(cmd);
     }

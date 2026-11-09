@@ -1013,11 +1013,16 @@ function envChdirs(words: readonly string[]): string[] {
  */
 export function envUnreadable(words: readonly string[]): boolean {
   const h = commandHead([...words]);
-  for (let i = 0; i < h; i++) {
-    if (baseName(words[i]!) === 'env' && !envArgumentsReadable(words, i + 1)) return true;
+  for (const [i, w] of words.entries()) {
+    // In the wrapper chain, or the command `find` runs (`find . -exec env … {} ;`).
+    const runs = i < h || FIND_RUNS.has(words[i - 1] ?? '');
+    if (runs && baseName(w) === 'env' && !envArgumentsReadable(words, i + 1)) return true;
   }
   return false;
 }
+
+/** `find` actions whose next word is a command it runs. */
+const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
 
 function envArgumentsReadable(words: readonly string[], from: number): boolean {
   for (let k = from; k < words.length; k++) {
