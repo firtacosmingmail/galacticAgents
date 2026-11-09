@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-04 · **Task status:** P13-04 in progress
-**Phase status:** in progress (3/7) — branch `agent-waykeeper-approvals`
+**Current task:** P13-05 · **Task status:** P13-04 done (2026-11-09)
+**Phase status:** in progress (4/7) — branch `agent-waykeeper-approvals`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -49,7 +49,7 @@ All seven run in order.
 - Plan Task 3.
 
 ### P13-04 — Approval watch
-- **Status:** in progress · **Depends on:** P13-03 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P13-03 · **Parallel with:** —
 - Plan Task 4.
 
 ### P13-05 — Answers, standing approvals and routes
