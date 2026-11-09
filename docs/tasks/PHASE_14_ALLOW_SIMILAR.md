@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-07 · **Task status:** P14-07 in progress
-**Phase status:** in progress (6/7) — branch `agent-allow-similar-reasons`
+**Current task:** — · **Task status:** P14-07 done (2026-11-09)
+**Phase status:** done (2026-11-09) (7/7) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -66,12 +66,13 @@ P14-01…07 run in order.
 - **Acceptance:** SPEC decision 138 amended, TECHNOLOGY and the plan consistent, the full gates are green.
 
 ### P14-07 — Final review fixes (added 2026-11-09)
-- **Status:** in progress · **Depends on:** P14-06 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P14-06 · **Parallel with:** —
 - The whole-branch review's findings with the controller's rulings F-1, F-2 and M1–M5: a prefix or category rule covers nothing in a command that runs outside the workspace (a later segment after an outside `cd` included); a prefix assignment no longer makes a line folder-unsafe (except on `cd` and for the directory variables), `GH_TOKEN`/`GITHUB_TOKEN` on `gh` keeps its site, a line folder rules never cover gets no folder row; widen never offers system folders; the card offers the chooser for a push call's other reasons; drafting ignores reasons existing rules already cover; an attached short option's path (`-o/etc/x`) is a path.
 - **Acceptance:** the rulings' tests pass; SPEC 138 and TECHNOLOGY updated; the full gates are green.
 
 ## Exit criteria (verified 2026-11-09)
 
-- Every task done (6/6).
+- Every task done (7/7).
 - Full gates green: `pnpm build`, `typecheck`, `lint`, `format:check`, `test`.
 - The card of a `cd /tmp/x; …` command offers a folder row and a `curl`/`gh` call a site row; a later call to the same folder or site passes without a card (covered by the P14-03/04 server tests and the P14-05 card tests).
+- After the final review (P14-07): Cosmin's line `cd /tmp/pr83; git log …; GH_TOKEN=$(gh auth token) gh pr view 83 --json body` offers a folder row and a site row, and with both stored passes without a card; a folder rule plus a category never allow `rm -rf /tmp/pr83`.
