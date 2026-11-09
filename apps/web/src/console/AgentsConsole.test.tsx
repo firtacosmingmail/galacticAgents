@@ -181,6 +181,114 @@ describe('ops console', () => {
     expect(bodyOf(calls.at(-1)!)).toEqual({ answer: 'allow' });
   });
 
+  const showPending = (q: typeof fx.question) => {
+    useAppStore.setState((st) => ({
+      world: {
+        ...st.world,
+        agents: { [fx.agent.id]: fx.agent },
+        statuses: {
+          [fx.agent.id]: {
+            ...fx.status,
+            state: 'waiting_for_input' as const,
+            pendingQuestionId: q.id,
+          },
+        },
+        questions: { [q.id]: q },
+      },
+    }));
+    render(<AgentsConsole token="tok" />);
+  };
+
+  it('offers only the three fixed answers for a launch question (P12-09)', async () => {
+    showPending({
+      ...fx.question,
+      id: 'q-l',
+      kind: 'launch',
+      context: { text: 'Start a Steward with extra access', options: ['free'] },
+    });
+    const card = screen.getByText('Start a Steward with extra access').closest('.question')!;
+    expect(card.querySelector('input, textarea')).toBeNull();
+    expect(screen.queryByText('free')).toBeNull();
+    expect([...card.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Approve and start',
+      'Start without flags',
+      'Deny',
+    ]);
+    await act(async () => {
+      fireEvent.click(screen.getByText('Deny'));
+    });
+    expect(bodyOf(calls.at(-1)!)).toEqual({ answer: 'Deny' });
+  });
+
+  it('offers no Allow or Refuse for an off-script question (P12-09)', () => {
+    showPending({
+      ...fx.permissionQuestion,
+      status: 'open',
+      context: {
+        ...fx.permissionQuestion.context,
+        offScript: { flag: 'chrome', expectedUse: 'u', precedents: [], judgeReason: 'r' },
+      },
+    });
+    expect(screen.queryByText('Allow')).toBeNull();
+    expect(screen.queryByText('Refuse')).toBeNull();
+    screen.getByText('Approve and continue');
+    screen.getByText('Stop the Steward');
+  });
+
+  it('shows what a launch approves next to its buttons: why, the command, the expected use', () => {
+    showPending({
+      ...fx.question,
+      id: 'q-l2',
+      kind: 'launch',
+      context: {
+        text: 'Start a Steward with extra access',
+        options: ['Approve and start', 'Start without flags', 'Deny'],
+        launch: {
+          flags: ['chrome'],
+          reason: 'Screenshot the settings page',
+          expectedUse: 'Open http://localhost:5173/settings and screenshot it',
+          check: 'the PR has the screenshot',
+          taskId: 't-9',
+          command: 'claude --chrome',
+          cwd: '/w/shop/.galactic/worktrees/t-9',
+          instructions: 'Take the screenshot',
+        },
+      },
+    });
+    const card = screen.getByText('Approve and start').closest('.question')!;
+    expect(card.textContent).toContain('Screenshot the settings page');
+    expect(card.textContent).toContain('Open http://localhost:5173/settings and screenshot it');
+    expect(card.textContent).toContain('the PR has the screenshot');
+    expect(card.querySelector('.launch-command')?.textContent).toBe('claude --chrome');
+    expect(card.textContent).toContain('/w/shop/.galactic/worktrees/t-9');
+  });
+
+  it('shows the stopped call, the approved use and the judge reason on an off-script question', () => {
+    showPending({
+      ...fx.permissionQuestion,
+      status: 'open',
+      context: {
+        ...fx.permissionQuestion.context,
+        toolCall: {
+          toolName: 'mcp__claude-in-chrome__navigate',
+          input: { url: 'https://bank.example' },
+        },
+        offScript: {
+          flag: 'chrome',
+          expectedUse: 'screenshot the settings page',
+          precedents: ['mcp__claude-in-chrome__computer {"action":"scroll"}'],
+          judgeReason: 'a bank is not the settings page',
+        },
+      },
+    });
+    const card = screen.getByText('Stop the Steward').closest('.question')!;
+    expect(card.textContent).toContain('mcp__claude-in-chrome__navigate');
+    expect(card.textContent).toContain('https://bank.example');
+    expect(card.textContent).toContain('screenshot the settings page');
+    expect(card.textContent).toContain('"action":"scroll"');
+    expect(card.textContent).toContain('a bank is not the settings page');
+  });
+
   it('shows a question-set row read-only: it is answered in the inbox (P8-21)', () => {
     const row = {
       ...fx.question,

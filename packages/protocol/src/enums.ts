@@ -74,9 +74,10 @@ export type WorkState = z.infer<typeof WorkState>;
 /**
  * Question kinds (SPEC §2.6, decision 7 and 12). `spend` (P10-01; SPEC decision 145): an approval
  * to spend real money — always held and answered by the user, never by an agent, a supervisor, the
- * project policy or an "Allow similar" rule.
+ * project policy or an "Allow similar" rule. `launch` (P12): an approval to start a Steward with
+ * a launch flag, and the off-script question it raises later — user-only like `spend`.
  */
-export const QuestionKind = z.enum(['clarification', 'permission', 'spend', 'publish']);
+export const QuestionKind = z.enum(['clarification', 'permission', 'spend', 'publish', 'launch']);
 export type QuestionKind = z.infer<typeof QuestionKind>;
 
 export const QuestionStatus = z.enum(['open', 'answered', 'cancelled']);

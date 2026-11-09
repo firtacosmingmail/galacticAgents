@@ -1,4 +1,11 @@
-import { FINDING_ACTIONS, PUBLISH_ACTIONS, SPEND_ACTIONS, isJobOwned } from '@galactic/protocol';
+import {
+  FINDING_ACTIONS,
+  LAUNCH_ACTIONS,
+  OFF_SCRIPT_ACTIONS,
+  PUBLISH_ACTIONS,
+  SPEND_ACTIONS,
+  isJobOwned,
+} from '@galactic/protocol';
 import type {
   Actor,
   Id,
@@ -146,7 +153,7 @@ function checkHolder(ctx: CommandContext, question: Question, holder: Actor): vo
     if (question.kind === 'permission') {
       throw new DomainError('invalid', `permission question ${question.id} is held by the user`);
     }
-    if (question.kind === 'spend' || question.kind === 'publish') {
+    if (question.kind === 'spend' || question.kind === 'publish' || question.kind === 'launch') {
       throw new DomainError(
         'invalid',
         `${question.kind} question ${question.id} is held by the user: the user answers ${question.kind} approvals`,
@@ -360,6 +367,39 @@ function checkFixedAnswer(question: Question, answer: string, by: Actor): void {
     }
     return;
   }
+  if (question.kind === 'launch') {
+    // A launch approval (P12-07): the user's alone, with exactly one of its three actions.
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `launch question ${question.id} is answered by the user only: the user answers launch approvals`,
+      );
+    }
+    if (!(LAUNCH_ACTIONS as readonly string[]).includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `a launch is answered ${LAUNCH_ACTIONS.join(', ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
+  if (question.context.offScript) {
+    // An off-script flag call (P12-06): the user's alone, with one of its two actions — never an
+    // agent's, a supervisor's or the system's, and free text is no approval.
+    if (by.type !== 'user') {
+      throw new DomainError(
+        'invalid',
+        `off-script question ${question.id} is answered by the user only`,
+      );
+    }
+    if (!(OFF_SCRIPT_ACTIONS as readonly string[]).includes(answer)) {
+      throw new DomainError(
+        'invalid',
+        `an off-script call is answered ${OFF_SCRIPT_ACTIONS.join(' or ')}, not "${answer}"`,
+      );
+    }
+    return;
+  }
   checkLimitAnswer(question, answer, by);
   const finding = question.context.finding;
   if (finding && !(FINDING_ACTIONS[finding.kind] as readonly string[]).includes(answer)) {
@@ -401,7 +441,7 @@ export function escalateQuestion(
   isLiving?: (agentId: Id) => boolean,
 ): Question {
   const current = mustOpen(ctx, questionId);
-  if (current.kind === 'spend' || current.kind === 'publish') {
+  if (current.kind === 'spend' || current.kind === 'publish' || current.kind === 'launch') {
     throw new DomainError(
       'invalid',
       `${current.kind} question ${questionId} is held by the user: the user answers ${current.kind} approvals`,

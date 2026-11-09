@@ -16,6 +16,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
   AgentRole,
@@ -102,6 +103,10 @@ export interface SpawnAgentInput {
   bare?: boolean;
   /** The exact model to run (P11-02); absent: the runtime's default. */
   model?: string;
+  /** Approved launch flags (P12): a Steward only. */
+  launchFlags?: LaunchFlag[];
+  /** The approved launch record the server keeps in `meta.launch` (P12). */
+  launch?: AgentLaunch;
   /** Brains: their tools and system prompt (TECHNOLOGY §5.1). */
   tools?: ToolDefinition[];
   systemPrompt?: string;
@@ -525,6 +530,16 @@ export interface RequestPublishInput {
   runId?: Id;
 }
 
+/** A `launch` question (P12-07): a Waykeeper asks to start a Steward with flags. */
+export interface RequestLaunchInput {
+  originAgentId: Id;
+  taskId: Id;
+  request: LaunchRequest;
+  instructions: string;
+  cwd: string;
+  runtime: AgentRuntime;
+}
+
 /** Sets (`null`: clears) a project's default AI provider (P11-02). */
 export interface SetProjectProviderInput {
   projectId: Id;
@@ -703,6 +718,14 @@ export interface DomainCommands {
   reportJobRun(input: ReportJobRunInput): Promise<CommandResult<JobRun>>;
   requestSpend(input: RequestSpendInput): Promise<CommandResult<Question>>;
   requestPublish(input: RequestPublishInput): Promise<CommandResult<{ questionId: Id }>>;
+  /** A `launch` approval held by the user alone (P12-07). */
+  requestLaunch(input: RequestLaunchInput): Promise<CommandResult<{ questionId: Id }>>;
+  /** Takes an approved launch once, for its task, as the Waykeeper that asked (P12-07). */
+  takeLaunchApproval(input: {
+    questionId: Id;
+    taskId: Id;
+    by: Actor;
+  }): Promise<CommandResult<LaunchContext>>;
   setProjectProvider(input: SetProjectProviderInput): Promise<CommandResult<Project>>;
 
   // panel actions (SPEC decision 11b)

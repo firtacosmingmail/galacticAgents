@@ -1,8 +1,10 @@
 import {
+  LAUNCH_FLAGS,
   excerpt,
   formatUsd,
   isJobOwned,
   isJobTask,
+  launchOf,
   proposalJobOf,
   proposalLongTermOf,
   setOf,
@@ -10,6 +12,7 @@ import {
 } from '@galactic/protocol';
 import type {
   Actor,
+  Agent,
   AgentRole,
   BudgetTarget,
   ControlTarget,
@@ -49,6 +52,8 @@ export interface WakeScope {
   supervisedBy?(agentId: Id | undefined): boolean;
   /** `agentId` is anywhere below the brain in the `supervisorId` chain (direct reports too). */
   below?(agentId: Id | undefined): boolean;
+  /** An agent's row, to tell what it was launched with (P12-08). */
+  agent?(agentId: Id): Pick<Agent, 'meta'> | undefined;
   /** The brain runs the task: a task of its project, or the task of an agent it supervises. */
   runsTask(taskId: Id): boolean;
   /** The brain runs the project: its own, or one a supervised Waykeeper runs. */
@@ -108,6 +113,8 @@ function concerns(q: Question | undefined, scope: WakeScope): q is Question {
  * waits for the answer like any holder.
  */
 function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Question | undefined) {
+  // The user's answer to its own launch card (P12-08): the Waykeeper that asked starts the Steward.
+  if (q?.kind === 'launch' && q.originAgentId === scope.brainId) return true;
   // Decisions 7, 145, 147: a permission, spend or publish is never a brain's; nor a job-owned one.
   if (q !== undefined && (q.kind !== 'clarification' || isJobOwned(q))) return false;
   // Its own question only when it asked through a tool: one its session is blocked on is answered
@@ -389,7 +396,17 @@ export const WAKE_RULES: WakeRules = {
       );
     },
   },
-  'agent.finished': ended((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
+  'agent.finished': {
+    ...ended<'agent.finished'>((e) => `finished${e.result ? `: ${quote(e.result)}` : ''}`),
+    describe: (e, s) => {
+      const base = `agent ${e.agentId} finished${e.result ? `: ${quote(e.result)}` : ''}`;
+      const row = s.agent?.(e.agentId);
+      const launch = row ? launchOf(row) : undefined;
+      if (!launch) return base;
+      const flags = launch.flags.map((f) => LAUNCH_FLAGS[f].cli).join(' ');
+      return `${base} (it ran with ${flags}; verify: ${launch.check}, then report the result to the user)`;
+    },
+  },
   'agent.failed': ended((e) =>
     e.reason === 'limit'
       ? `stopped at its usage limit (${quote(e.error)}): its task is paused and the user is asked to switch model or wait; do not spawn another Steward for it`

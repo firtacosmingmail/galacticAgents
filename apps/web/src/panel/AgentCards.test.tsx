@@ -43,6 +43,7 @@ interface World {
   project?: Partial<Project>;
   questions?: Question[];
   extraAgents?: Agent[];
+  steward?: Partial<Agent>;
   extraProjects?: Project[];
   extraTasks?: Task[];
 }
@@ -57,7 +58,7 @@ function load(w: World = {}) {
     type: 'snapshot',
     logId: 'log-a',
     seq: 5,
-    agents: [fx.harmonizer, waykeeper, steward, ...(w.extraAgents ?? [])],
+    agents: [fx.harmonizer, waykeeper, { ...steward, ...w.steward }, ...(w.extraAgents ?? [])],
     bodies: [fx.body, fx.moon, fx.asteroid],
     projects: [{ ...fx.project, ...w.project }, ...(w.extraProjects ?? [])],
     tasks: [
@@ -590,5 +591,28 @@ describe('managed-agents cards: what they show (P25-04)', () => {
         action: { action: 'edit', changes: { priority: 'low' } },
       }),
     );
+  });
+});
+
+describe('the launch-flag badge (P12-09)', () => {
+  const launch = {
+    flags: ['chrome'],
+    expectedUse: 'Capture the local settings page',
+    check: 'two screenshots in the PR',
+    approvalId: 'q-launch',
+    precedents: [],
+  };
+
+  it('a flagged Steward shows a --chrome badge whose title is its approved use', () => {
+    load({ steward: { meta: { launch } } });
+    show();
+    const badge = within(card(STEWARD)).getByText('--chrome');
+    expect(badge.getAttribute('title')).toBe('Capture the local settings page');
+  });
+
+  it('a normal Steward shows none', () => {
+    load();
+    show();
+    expect(within(card(STEWARD)).queryByText('--chrome')).toBeNull();
   });
 });

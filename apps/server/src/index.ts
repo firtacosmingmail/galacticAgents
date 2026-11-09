@@ -26,7 +26,8 @@ import { AcpAdapter, resolveCommand } from './adapters/acp/index.js';
 import { CodexAdapter } from './adapters/codex/index.js';
 import { AgyAdapter, HookBridge } from './adapters/agy/index.js';
 import { PtyAdapter } from './adapters/pty/index.js';
-import { ClaudeSdkAdapter } from './adapters/claude-sdk/index.js';
+import { ClaudeSdkAdapter, createDefaultSdkScopeJudge } from './adapters/claude-sdk/index.js';
+import { failClosedFakeScopeJudge } from './adapters/fake/index.js';
 import { FakeAdapter } from './adapters/fake/fake-adapter.js';
 import { DEV_FAKE_COMMANDS } from './adapters/fake/scenario.js';
 import { BACKUP_CHECK_INTERVAL_MS, BACKUP_DIR, BackupService } from './db/backup.js';
@@ -265,6 +266,11 @@ const catalog = new ProviderCatalog({
 });
 const composed = composeRuntime(db, {
   adapters,
+  // The launch-flag scope judge (P12-05): the fake, failing closed, on the fake harness.
+  scopeJudge:
+    harmonizerRuntime(process.env['GALACTIC_HARMONIZER']) === 'fake'
+      ? failClosedFakeScopeJudge()
+      : createDefaultSdkScopeJudge(),
   // Which provider and model a new Steward runs on (P11-03): one resolver over these Settings.
   catalog,
   // Development only: every new Steward on this runtime (`GALACTIC_STEWARD_RUNTIME`).

@@ -219,6 +219,14 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         }),
       };
     }
+    case 'question.launch_used':
+      // The approval's single use is on the row (P12-07): no version bump.
+      return {
+        ...next,
+        questions: patch(next.questions, event.questionId, {
+          meta: { ...next.questions[event.questionId]?.meta, launchUsed: true },
+        }),
+      };
     case 'question.drafted': {
       // A draft is folded as the server keeps it: `meta.draft`, no version bump (P8-19).
       const prior = next.questions[event.questionId]?.meta;

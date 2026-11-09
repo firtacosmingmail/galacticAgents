@@ -1,8 +1,13 @@
 import {
+  LAUNCH_FLAGS,
+  LaunchRequest,
   isJobTask,
   isLongTerm,
+  launchOf,
   proposalPlan,
+  unsupportedFlags,
   type Agent,
+  type AgentLaunch,
   type Id,
   type PlanTaskInput,
   type Project,
@@ -334,15 +339,60 @@ export const spawnStewardTool: BrainTool = {
       taskId: { type: 'string' },
       instructions: {
         type: 'string',
-        description: 'What the Steward must do and how it knows it is done.',
+        description:
+          'What the Steward must do and how it knows it is done. Required, except with launchApprovalId (the approved instructions are used).',
+      },
+      launchFlags: {
+        type: 'object',
+        description:
+          'Ask the user to start this Steward with CLI flags. Opens a card and returns waiting: end your turn; you are told the answer.',
+        properties: {
+          flags: {
+            type: 'array',
+            items: { type: 'string', enum: Object.keys(LAUNCH_FLAGS) },
+            description: 'Catalogued flag names, e.g. "chrome".',
+          },
+          reason: { type: 'string', description: 'Why the task cannot be done without them.' },
+          expectedUse: {
+            type: 'string',
+            description: 'The concrete targets: the dev server URL, the PR...',
+          },
+          check: { type: 'string', description: 'What you verify when the Steward finishes.' },
+        },
+        required: ['flags', 'reason', 'expectedUse', 'check'],
+        additionalProperties: false,
+      },
+      launchApprovalId: {
+        type: 'string',
+        description: 'The launch question the user approved: starts the Steward with those flags.',
       },
     },
-    ['taskId', 'instructions'],
+    ['taskId'],
   ),
   handler: async (raw, ctx) => {
     const input = asInput(raw);
     const task = taskOf(ctx, str(input, 'taskId'));
-    const instructions = str(input, 'instructions');
+    const approvalId =
+      input['launchApprovalId'] === undefined ? undefined : str(input, 'launchApprovalId');
+    if (approvalId !== undefined && input['launchFlags'] !== undefined) {
+      throw new DomainError(
+        'invalid',
+        'give either launchFlags (to ask) or launchApprovalId (after the approval), not both',
+      );
+    }
+    let launchRequest: LaunchRequest | undefined;
+    if (input['launchFlags'] !== undefined) {
+      const parsed = LaunchRequest.safeParse(input['launchFlags']);
+      if (!parsed.success) {
+        throw new DomainError(
+          'invalid',
+          `launchFlags is invalid (${parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ')}); ` +
+            `allowed flags: ${Object.keys(LAUNCH_FLAGS).join(', ')}`,
+        );
+      }
+      launchRequest = parsed.data;
+    }
+    let instructions = approvalId === undefined ? str(input, 'instructions') : '';
     if (task.state === 'proposed') {
       throw new DomainError('invalid_transition', `task ${task.id} waits for the plan's approval`);
     }
@@ -363,6 +413,38 @@ export const spawnStewardTool: BrainTool = {
         `task ${task.id} already has a running Steward (${running[0]!.agent.id})`,
       );
     }
+    if (approvalId !== undefined) {
+      const wanted = ctx.queries.question(approvalId)?.context.launch?.flags ?? [];
+      // The provider may have changed since the card was approved: a runtime that cannot carry
+      // the flags is refused before the approval is taken, so it is not burned.
+      const runtime = stewardChoiceOf(ctx, task, projectOf(ctx)).runtime;
+      const unsupported = unsupportedFlags(wanted, runtime);
+      if (unsupported.length > 0) {
+        throw new DomainError(
+          'invalid',
+          `the Steward would run on ${runtime}, which cannot carry ${unsupported.join(', ')}; ` +
+            'change the provider back, or ask again without the flag',
+        );
+      }
+      // One Chrome at a time, across every project: there is one browser. Checked before the
+      // approval is taken, so a conflict burns nothing.
+      const using = wanted.includes('chrome')
+        ? ctx.queries
+            .agents()
+            .filter(
+              (a) =>
+                a.role === 'steward' &&
+                (launchOf(a)?.flags.includes('chrome') ?? false) &&
+                isLive(ctx.queries.status(a.id)),
+            )
+        : [];
+      if (using.length > 0) {
+        throw new DomainError(
+          'conflict',
+          `another Steward is using Chrome (${using[0]!.id}); start this one when it finishes`,
+        );
+      }
+    }
     const hadWorktree = task.worktreePath !== undefined;
     const hadBranch = task.branch !== undefined;
     const where = await placeSteward(ctx, task);
@@ -370,12 +452,47 @@ export const spawnStewardTool: BrainTool = {
     const choice = stewardChoiceOf(ctx, task, project);
     let value: Agent;
     try {
+      if (launchRequest) {
+        const { value: asked } = await ctx.commands.requestLaunch({
+          originAgentId: ctx.brainId,
+          taskId: task.id,
+          request: launchRequest,
+          instructions,
+          cwd: where.cwd,
+          runtime: choice.runtime,
+        });
+        return {
+          waiting: true,
+          questionId: asked.questionId,
+          note: 'The user decides on the card; you will be told. End your turn.',
+        };
+      }
+      let launch: { launchFlags: LaunchRequest['flags']; launch: AgentLaunch } | undefined;
+      if (approvalId !== undefined) {
+        const { value: approved } = await ctx.commands.takeLaunchApproval({
+          questionId: approvalId,
+          taskId: task.id,
+          by: ctx.actor,
+        });
+        instructions = approved.instructions;
+        launch = {
+          launchFlags: approved.flags,
+          launch: {
+            flags: approved.flags,
+            expectedUse: approved.expectedUse,
+            check: approved.check,
+            approvalId,
+            precedents: [],
+          },
+        };
+      }
       ({ value } = await ctx.commands.spawnAgent({
         role: 'steward',
         runtime: choice.runtime,
         ...(choice.model ? { model: choice.model } : {}),
         taskId: task.id,
         supervisorId: ctx.brainId,
+        ...(launch ?? {}),
         prompt: stewardPrompt(task, project, where, instructions, {
           related: ctx.queries.projectTasks(project.id),
           declares: stewardDeclares(choice.runtime),
@@ -767,7 +884,12 @@ export const escalateTool: BrainTool = {
     if (questionId) {
       const q = ctx.queries.question(questionId);
       if (q) refuseSetRow(q);
-      if (q?.kind === 'permission' || q?.kind === 'spend' || q?.kind === 'publish') {
+      if (
+        q?.kind === 'permission' ||
+        q?.kind === 'spend' ||
+        q?.kind === 'publish' ||
+        q?.kind === 'launch'
+      ) {
         throw new DomainError('invalid', `${questionId} is a ${q.kind} question; it is not yours`);
       }
       const { value } = await ctx.commands.escalateQuestion(questionId, ctx.actor);

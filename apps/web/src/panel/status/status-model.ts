@@ -128,7 +128,7 @@ export interface QuestionCounts {
 export function questionCounts(questions: Iterable<Question>): QuestionCounts {
   const out: QuestionCounts = {
     open: 0,
-    byKind: { permission: 0, clarification: 0, spend: 0, publish: 0 },
+    byKind: { permission: 0, clarification: 0, spend: 0, publish: 0, launch: 0 },
     forUser: 0,
     bySupervisors: 0,
   };

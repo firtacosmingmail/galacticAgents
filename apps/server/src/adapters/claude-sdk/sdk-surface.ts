@@ -175,6 +175,8 @@ export interface SdkQueryOptions {
   /** Skills listed to the model: `[]` hides every skill (a context filter, not a sandbox). */
   skills?: string[] | 'all';
   allowedTools?: string[];
+  /** The built-in tools available: `[]` removes them all (a one-shot, tool-less query). */
+  tools?: string[];
   extraArgs?: Record<string, string | null>;
   env?: Record<string, string | undefined>;
   stderr?: (data: string) => void;

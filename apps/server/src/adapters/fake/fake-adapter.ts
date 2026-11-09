@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, statSync } from 'node:fs';
 import type {
+  LaunchFlag,
   Cost,
   Actor,
   AgentAdapter,
@@ -141,6 +142,8 @@ class FakeSession {
   cost: Cost | undefined;
   /** What `commands()` reports (P8-13). */
   commands: SlashCommand[] = [];
+  /** The launch flags the session was opened with (P12), for assertions. */
+  launchFlags: LaunchFlag[] | undefined;
 
   constructor(
     readonly agentId: Id,
@@ -236,6 +239,7 @@ export class FakeAdapter implements AgentAdapter {
     if (this.disposed) throw new Error('adapter disposed');
     const tools = new Map((opts.tools ?? []).map((t) => [t.name, t]));
     const session = new FakeSession(opts.agentId, name, scenario, opts.gate, startAt, tools);
+    session.launchFlags = opts.launchFlags;
     this.sessions.set(session.sessionId, session);
     session.ended = fails.ends;
     // Later, as a CLI that exits after it started: the caller holds the handle first.
@@ -271,6 +275,7 @@ export class FakeAdapter implements AgentAdapter {
       scenario.commands ??
       (typeof this.commandsFor === 'function' ? this.commandsFor(opts) : this.commandsFor);
     session.commands = normalizeSlashCommands(given);
+    session.launchFlags = opts.launchFlags;
     this.sessions.set(session.sessionId, session);
     const ref = session.sessionRef;
     this.sessionStore.set(ref, startAt);
@@ -372,6 +377,11 @@ export class FakeAdapter implements AgentAdapter {
       this.emit({ type: 'agent.stopped', agentId: session.agentId, by: SYSTEM });
     });
     return session.stopping;
+  }
+
+  /** The launch flags of the agent's latest session (P12); undefined when it had none. */
+  launchFlagsOf(agentId: Id): LaunchFlag[] | undefined {
+    return [...this.sessions.values()].filter((s) => s.agentId === agentId).at(-1)?.launchFlags;
   }
 
   /**

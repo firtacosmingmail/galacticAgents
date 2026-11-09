@@ -56,6 +56,7 @@ function classify(
     case 'question.escalated':
     case 'question.answered':
     case 'question.drafted':
+    case 'question.launch_used':
     case 'question.reassigned':
     case 'question.cancelled':
       return 'question';

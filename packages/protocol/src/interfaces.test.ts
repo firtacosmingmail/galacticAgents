@@ -99,6 +99,8 @@ const commands: DomainCommands = {
   reportJobRun: notImplemented,
   requestSpend: notImplemented,
   requestPublish: notImplemented,
+  requestLaunch: notImplemented,
+  takeLaunchApproval: notImplemented,
   setProjectProvider: notImplemented,
 };
 

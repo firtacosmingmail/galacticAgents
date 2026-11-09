@@ -137,6 +137,7 @@ export function createWakeScope(
     },
     proposal: (id) => tables.proposals.get(id),
     question: (id) => tables.questions.get(id),
+    agent: (id) => tables.agents.get(id),
     jobRun: (id) => {
       const agent = id !== undefined ? tables.agents.get(id) : undefined;
       const task =

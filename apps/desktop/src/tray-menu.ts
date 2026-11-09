@@ -202,8 +202,10 @@ export function trayMenu(
 ): TrayMenu {
   const max = opts.max ?? MENU_MAX_SHOWN;
   const open = Object.values(world.questions).filter(waitingForUser).sort(oldestFirst);
-  const permissions = open.filter((q) => q.kind === 'permission');
-  const questions = open.filter((q) => q.kind !== 'permission');
+  // An off-script request (P12-09) has fixed answers that are not Allow once: it only opens the app.
+  const quick = (q: Question) => q.kind === 'permission' && q.context.offScript === undefined;
+  const permissions = open.filter(quick);
+  const questions = open.filter((q) => !quick(q));
   return {
     permissions: permissions.slice(0, max).map((q) => ({
       id: q.id,

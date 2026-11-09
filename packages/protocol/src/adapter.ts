@@ -2,6 +2,7 @@ import type { AgentCaps, ToolCall } from './domain.js';
 import type { AgentRole, AgentRuntime, PermissionAction } from './enums.js';
 import type { AgentEvent } from './events.js';
 import type { RuntimePreflight } from './panel.js';
+import type { LaunchFlag } from './launch-flags.js';
 import type { ModelInfo, ProviderUsage } from './providers.js';
 import type { Id } from './primitives.js';
 import type { SlashCommand } from './slash.js';
@@ -74,6 +75,8 @@ export interface SpawnOptions {
   bare?: boolean;
   /** The exact model to run; absent: the runtime's default (P11-02). */
   model?: string;
+  /** Approved launch flags (P12): a Steward only; the adapter maps them to its runtime. */
+  launchFlags?: LaunchFlag[];
 }
 
 export interface SpawnHandle {
