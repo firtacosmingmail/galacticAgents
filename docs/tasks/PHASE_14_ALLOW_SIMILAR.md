@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-08 · **Task status:** P14-08 in progress
-**Phase status:** in progress (7/8) — branch `agent-allow-similar-reasons`
+**Current task:** — · **Task status:** P14-08 done (2026-11-09)
+**Phase status:** done (2026-11-09) (8/8) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -72,13 +72,14 @@ P14-01…08 run in order.
 - **Acceptance:** the rulings' tests pass; SPEC 138 and TECHNOLOGY updated; the full gates are green.
 
 ### P14-08 — Close the residual permission holes (added 2026-11-09)
-- **Status:** in progress · **Depends on:** P14-07 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P14-07 · **Parallel with:** —
 - Four holes left after P14-07: a prefix assignment keeps folder coverage only on an allow-list of inert variables (`GH_TOKEN`, `GITHUB_TOKEN`, `LANG`, `LC_*`, `TZ`, `NO_COLOR`, `CI`, `FORCE_COLOR`), so `GIT_EXTERNAL_DIFF=… git diff` in a folder asks; a leading assignment's value is a guarded-write candidate (`GIT_DIR=.git/hooks git status`); a short option with a value glued after clustered letters (`-ro/etc/x`, `-o$HOME/.zshrc`) yields a path; the precommand modifiers `noglob`, `nocorrect` and `-` are skipped to find a command's name (`noglob cd /tmp/x && rm -rf *` runs outside).
 - **Acceptance:** the brief's tests pass (every listed prefix assignment asks under a folder rule, `LANG=C` and `GH_TOKEN=` stay covered; the four `GIT_*` paths are guarded; the four glued options are not allowed; `noglob cd` taints the later segments); SPEC 138 and TECHNOLOGY updated; the full gates are green.
 
 ## Exit criteria (verified 2026-11-09)
 
-- Every task done (7/7).
+- Every task done (8/8).
 - Full gates green: `pnpm build`, `typecheck`, `lint`, `format:check`, `test`.
 - The card of a `cd /tmp/x; …` command offers a folder row and a `curl`/`gh` call a site row; a later call to the same folder or site passes without a card (covered by the P14-03/04 server tests and the P14-05 card tests).
 - After the final review (P14-07): Cosmin's line `cd /tmp/pr83; git log …; GH_TOKEN=$(gh auth token) gh pr view 83 --json body` offers a folder row and a site row, and with both stored passes without a card; a folder rule plus a category never allow `rm -rf /tmp/pr83`.
+- After P14-08: under a folder rule `cd /tmp/x && GIT_EXTERNAL_DIFF=… git diff` asks while `LANG=C git diff` passes; `GIT_DIR=.git/hooks git status` always asks; `sort -ro/etc/x a` and `sort -o$HOME/.zshrc a` are never allowed; `noglob cd /tmp/x && rm -rf *` is not covered by an `rm` prefix.
