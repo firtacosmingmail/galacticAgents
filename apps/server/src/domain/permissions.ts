@@ -700,6 +700,12 @@ class ShellLexer {
           if (end < 0) return this.fail('unterminated ${');
           const body = src.slice(i, end + 1);
           if (/`|\$\(/.test(body)) return this.fail('command substitution inside ${…}');
+          // A `~` (tilde expansion) or an `=` (zsh's =command) in the word part is unreadable;
+          // only the assigning operator itself (`${x:=…}`, `${x=…}`) may hold an `=`.
+          const inner = body.slice(2, -1);
+          const operator = /^[A-Za-z_][A-Za-z0-9_]*:?=/.exec(inner)?.[0] ?? '';
+          if (inner.includes('~') || inner.slice(operator.length).includes('='))
+            return this.fail(`\${…} holding ~ or =: ${body}`);
           append(body);
           i = end + 1;
         } else {

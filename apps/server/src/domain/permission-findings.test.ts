@@ -560,6 +560,23 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
     expect(verdictOf('sort < in.txt').unclassified).toBeUndefined();
   });
 
+  it('a ${…} holding a ~ or an = beyond its own := / = operator is unreadable', () => {
+    for (const cmd of [
+      'cp evil ${x:-=git}',
+      'cp evil ${x-=git}',
+      'cp evil ${x:+=git}',
+      'cp evil ${x:==git}',
+      'cat ${x:-=ls}',
+      'cp evil ${x:-~}',
+      'cp evil ${x:-~root}',
+    ]) {
+      opaque(cmd, /\$\{…\} holding/);
+    }
+    for (const cmd of ['echo ${x:-default}', 'echo ${HOME}', 'echo ${x:=y}', 'echo ${x=y}']) {
+      expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
+    }
+  });
+
   it('print -S changes the history like print -s', () => {
     const n = classifyCommand('print -S x; curl https://ok.com', ctx).findings.filter(
       (f) => f.action === 'network',
