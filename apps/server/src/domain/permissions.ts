@@ -1874,7 +1874,8 @@ function guardedTargets(
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
-      candidates.push(optionValue(w));
+      const values = w.startsWith('-') ? optionValues(w) : [];
+      candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [w]));
       if (PLAIN_ASSIGNMENT.test(w)) candidates.push(...assignedPaths(w));
     }
   }
@@ -1997,24 +1998,48 @@ function assignedPaths(word: string): string[] {
   return value.split(':').filter((p) => p !== '');
 }
 
+/** A value an option word may carry; `strict` when it starts like an expansion (`$`, `~`). */
+interface OptionValue {
+  value: string;
+  strict: boolean;
+}
+
 /**
- * The value an option word carries, or the word itself: `--opt=<value>` (any `-…=`), and a short
- * option with a path glued to it (`-o/etc/x`, `-t~/x`, `-t../x`: P14-07, M5). A glued value that
- * does not start like a path (`-n5`, `-iabc`) stays an option.
+ * The values an option word may carry (none for a word that carries none): `--opt=<value>` (any
+ * `-…=`), and a value glued to single-dash option letters — after ANY of them, since the letters
+ * may be a cluster (`-ro/etc/x` is `-r -o /etc/x`; `-ox/../x` is `-o x/../x`): every suffix that
+ * contains a `/` (P14-07 M5, P14-08) or starts with `$` or `~` (`-o$HOME/.zshrc`; `strict`: an
+ * expanded path, outside or unknown). A suffix of neither kind stays an option (`-la`, `-n5`).
  */
-function optionValue(word: string): string {
+function optionValues(word: string): OptionValue[] {
+  const out: OptionValue[] = [];
   const eq = word.indexOf('=');
-  if (eq > 0 && word.startsWith('-')) return word.slice(eq + 1);
-  const glued = /^-[A-Za-z](.+)$/.exec(word)?.[1];
-  return glued !== undefined && /^(?:\/|~|\.\.?\/)/.test(glued) ? glued : word;
+  if (eq > 0 && word.startsWith('-')) out.push({ value: word.slice(eq + 1), strict: false });
+  const m = /^-([A-Za-z0-9]+)(.*)$/.exec(word);
+  if (m) {
+    const [, letters = '', rest = ''] = m;
+    for (let i = 1; i <= letters.length; i++) {
+      const value = letters.slice(i) + rest;
+      if (/^[$~]/.test(value)) out.push({ value, strict: true });
+      else if (value.includes('/')) out.push({ value, strict: false });
+    }
+  }
+  return out;
 }
 
 function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
-  let token = raw;
-  if (!isTarget) {
-    token = optionValue(token);
-    if (token.startsWith('-')) return;
+  if (!isTarget && raw.startsWith('-')) {
+    for (const v of optionValues(raw)) {
+      if (v.strict || !v.value.startsWith('-')) wordPath(v.value, v.strict, out, shown);
+    }
+    return;
   }
+  wordPath(raw, isTarget, out, shown);
+}
+
+/** `pathToken` for a word that is not an option. */
+function wordPath(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
+  let token = raw;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return; // URLs are the network rules' business
   token = token.replace(/^\$\{?HOME\}?(?=\/|$)/, '~').replace(/^\$\{?PWD\}?(?=\/|$)/, '.');
   if (HARMLESS_DEVICES.has(token) || /^\/dev\/(?:tcp|udp)\//.test(token)) return;

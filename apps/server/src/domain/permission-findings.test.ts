@@ -668,4 +668,35 @@ describe('residual holes (P14-08)', () => {
     }
     expect(classifyCommand('LANG=C git log', ctx).guarded).toBeUndefined();
   });
+
+  it('a value glued after any short option letters is a path', () => {
+    for (const cmd of [
+      'sort -o$HOME/.zshrc a',
+      'sort -o${HOME}/.zshrc a',
+      'sort -ro/etc/x a',
+      'sort -ox/../../../etc/x a',
+      'sort -o$OUT a',
+      'sort -o~/x a',
+    ]) {
+      expect(
+        findings(cmd).some((f) => f.action === 'outside_workspace'),
+        cmd,
+      ).toBe(true);
+      expect(decision(cmd), cmd).not.toBe('allow');
+    }
+    expect(findings('sort -ro/etc/x a')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/etc/x' }),
+    );
+    expect(findings('sort -o/tmp/x a')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/tmp/x' }),
+    );
+    for (const cmd of ['ls -la', 'head -n5 a', 'sort -n a', 'grep -iabc a']) {
+      expect(
+        findings(cmd).some((f) => f.action === 'outside_workspace'),
+        cmd,
+      ).toBe(false);
+    }
+  });
 });
+
+const findings = (cmd: string) => classifyCommand(cmd, ctx).findings;
