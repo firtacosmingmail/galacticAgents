@@ -9,7 +9,8 @@ import { useAppStore } from '../../state/store.js';
 import { axeFindings, blocking } from '../../a11y/a11y-fixtures.js';
 import { RulesContext } from '../deliverables/use-deliverables.js';
 import type { ClientRules } from '../deliverables/deliverables-model.js';
-import { QuestionCard } from './QuestionCard.js';
+import { QuestionCard, QuestionView } from './QuestionCard.js';
+import { setStandingNote } from './WaykeeperForward.js';
 
 /**
  * P13-06 (design §5.6): a permission card the Waykeeper forwarded shows why, the command's parts
@@ -79,6 +80,7 @@ function show(q: Question, rules: ClientRules = MAC) {
 }
 
 beforeEach(() => {
+  setStandingNote('q-1', undefined);
   useAppStore.getState().reset();
   api = {
     answer: vi.fn(async () => ({ ok: true })),
@@ -136,6 +138,46 @@ describe('a card the Waykeeper forwarded (P13-06)', () => {
     await act(async () => fireEvent.click(screen.getByRole('button', { name: BUTTON })));
     expect(screen.getByRole('status').textContent).toMatch(
       /approved; no standing approval stored: the switch is off/,
+    );
+  });
+
+  it('keeps the not-stored note when the answer turns the card into the answered one', async () => {
+    api.standingApproval.mockResolvedValueOnce({
+      ok: true,
+      notStored: 'approved; no standing approval stored: the project is closing',
+    });
+    const q = card({ ...forward, similar: [recorded(1), recorded(2), recorded(3)] });
+    const view = show(q);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: BUTTON })));
+    // question.answered arrives: the open card is replaced by the answered one.
+    cleanup();
+    const answered: Question = {
+      ...q,
+      status: 'answered',
+      answer: 'allow',
+      answeredBy: { type: 'user' },
+    };
+    useAppStore.getState().apply({
+      type: 'snapshot',
+      logId: 'log-a',
+      seq: 6,
+      agents: [fx.harmonizer, fx.agent],
+      bodies: [fx.body, fx.moon, fx.asteroid],
+      projects: [fx.project],
+      tasks: [fx.task, fx.asteroidTask],
+      questions: [answered],
+      proposals: [],
+      statuses: [],
+    });
+    render(
+      <ApiContext.Provider value={api as unknown as Api}>
+        <QuestionView questionId="q-1" />
+      </ApiContext.Provider>,
+    );
+    expect(view).toBeTruthy();
+    expect(screen.getByRole('article', { name: /answered question/ })).toBeTruthy();
+    expect(screen.getByRole('status').textContent).toMatch(
+      /approved; no standing approval stored: the project is closing/,
     );
   });
 

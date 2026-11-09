@@ -1,4 +1,5 @@
 import {
+  approvalActivity,
   describeTool,
   ENDED_STATES,
   type AgentState,
@@ -6,6 +7,7 @@ import {
   type EventEnvelope,
   type Id,
   type StatusRecord,
+  waykeeperLabel,
 } from '@galactic/protocol';
 import { applyEvent, emptyWorld, type WorldState } from '../state/reduce.js';
 
@@ -43,7 +45,34 @@ export function foldReplayStatus(
   statuses: Record<Id, StatusRecord>,
   { at, event }: EventEnvelope,
   paused: Map<Id, AgentState>,
+  /** The replayed world, to name the approving Waykeeper (P13-06). */
+  names?: Pick<WorldState, 'agents' | 'projects'>,
 ): Record<Id, StatusRecord> {
+  // A Waykeeper approved a Steward's request: its activity says so, as live (`StatusStore`).
+  if (
+    event.type === 'permission.decided' &&
+    event.decision === 'allow' &&
+    event.decidedBy.type === 'agent'
+  ) {
+    const record = statuses[event.agentId];
+    if (!record || ENDED_STATES.has(record.state)) return statuses;
+    const approver = event.decidedBy.id ? names?.agents[event.decidedBy.id] : undefined;
+    const name =
+      approver?.role === 'waykeeper'
+        ? waykeeperLabel(
+            approver,
+            approver.projectId ? names?.projects[approver.projectId]?.name : undefined,
+          )
+        : (event.decidedBy.id ?? 'an agent');
+    return {
+      ...statuses,
+      [event.agentId]: {
+        ...record,
+        currentActivity: approvalActivity(name, event.reason, event.quote),
+        lastEventAt: at,
+      },
+    };
+  }
   if (event.type === 'question.answered' || event.type === 'question.cancelled') {
     let next = statuses;
     for (const record of Object.values(statuses)) {
@@ -177,7 +206,7 @@ interface Folded {
 
 const step = (s: Folded, envelope: EventEnvelope): Folded => {
   const world = applyEvent(s.world, envelope);
-  const statuses = foldReplayStatus(world.statuses, envelope, s.paused);
+  const statuses = foldReplayStatus(world.statuses, envelope, s.paused, world);
   return { world: statuses === world.statuses ? world : { ...world, statuses }, paused: s.paused };
 };
 

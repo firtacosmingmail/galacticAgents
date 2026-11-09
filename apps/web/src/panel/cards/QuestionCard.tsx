@@ -10,7 +10,7 @@ import { submitAnswer } from '../../client/answer-queue.js';
 import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
 import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
 import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
-import { ForwardedBlock, StandingApprovalButton } from './WaykeeperForward.js';
+import { ForwardedBlock, StandingApprovalButton, StandingNote } from './WaykeeperForward.js';
 import { FindingActions, FindingDetails } from './FindingCard.js';
 import { SpendActions, SpendDetails } from './SpendCard.js';
 import { PublishActions, PublishDetails } from './PublishCard.js';
@@ -333,6 +333,7 @@ export function AnsweredQuestionCard({ question: q }: { question: Question }) {
           {sent && <span className="muted">sent to {actorLabel(q.answeredBy, world)}</span>}
         </form>
       )}
+      <StandingNote questionId={q.id} />
       <ErrorLine error={error} />
     </article>
   );

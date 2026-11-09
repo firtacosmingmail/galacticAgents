@@ -1,4 +1,5 @@
 import {
+  approvalActivity,
   describeTool,
   ENDED_STATES,
   type AgentCaps,
@@ -96,11 +97,6 @@ const LIVE: ReadonlySet<AgentState> = new Set([
   'stalled',
   'paused',
 ]);
-
-/** "Approved by <name>: <reason>", plus `— you asked: "<quote>"` when the user's words carried it. */
-export function approvalActivity(name: string, reason?: string, quote?: string): string {
-  return `Approved by ${name}${reason ? `: ${reason}` : ''}${quote ? ` — you asked: "${quote}"` : ''}`;
-}
 
 export class StatusStore {
   private readonly entries = new Map<Id, Entry>();

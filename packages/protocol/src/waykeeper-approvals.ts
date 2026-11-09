@@ -138,3 +138,20 @@ export function needsUserQuote(part: CommandPart): boolean {
     (IMAGE_FILE.test(part.text) || /screenshot/i.test(part.text))
   );
 }
+
+/**
+ * The line a Waykeeper approval leaves in the Steward's activity and transcript (P13-06, design
+ * §5.6): "Approved by <Waykeeper name>: <reason>", plus `— you asked: "<quote>"` when the user's
+ * words carried it.
+ */
+export function approvalActivity(name: string, reason?: string, quote?: string): string {
+  return `Approved by ${name}${reason ? `: ${reason}` : ''}${quote ? ` — you asked: "${quote}"` : ''}`;
+}
+
+/** "Waykeeper · <project name>" (the panel's label for a project's Waykeeper). */
+export function waykeeperLabel(
+  agent: { id: Id; projectId?: Id | undefined },
+  projectName?: string,
+): string {
+  return `Waykeeper · ${projectName ?? agent.projectId ?? agent.id}`;
+}

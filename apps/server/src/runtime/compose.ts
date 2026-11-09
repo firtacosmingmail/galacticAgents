@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  waykeeperLabel,
   isHarnessMeta,
   wallClockCapApplies,
   type Agent,
@@ -339,7 +340,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       const agent = log.tables.agents.get(id);
       if (agent?.role !== 'waykeeper') return undefined;
       const project = agent.projectId ? log.tables.projects.get(agent.projectId) : undefined;
-      return `Waykeeper · ${project?.name ?? agent.projectId ?? agent.id}`;
+      return waykeeperLabel(agent, project?.name);
     },
     // A stall the ticker saw is logged (P8-04): the supervisor is woken, the history shows it.
     onStalled: (agentId, silentForMs) => runtime.noteStalled(agentId, silentForMs),

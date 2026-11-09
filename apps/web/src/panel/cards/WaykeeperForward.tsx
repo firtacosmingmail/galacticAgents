@@ -1,5 +1,10 @@
-import { useRef, useState } from 'react';
-import type { Question, WaykeeperForward as Forward } from '@galactic/protocol';
+import { useRef, useSyncExternalStore } from 'react';
+import {
+  SIMILAR_APPROVALS_THRESHOLD,
+  type Id,
+  type Question,
+  type WaykeeperForward as Forward,
+} from '@galactic/protocol';
 import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
 
 /**
@@ -35,6 +40,35 @@ export function ForwardedBlock({ forward }: { forward: Forward }) {
   );
 }
 
+/**
+ * "Answered, but no standing approval stored: …" (the route's `notStored`), kept by question id:
+ * the answer turns the card into the answered one, which unmounts the button, so the note lives
+ * outside it and the answered card shows it too (as a stale refusal survives the flip).
+ */
+const notes = new Map<Id, string>();
+const listeners = new Set<() => void>();
+const subscribe = (l: () => void) => {
+  listeners.add(l);
+  return () => {
+    listeners.delete(l);
+  };
+};
+export function setStandingNote(questionId: Id, note: string | undefined): void {
+  if (note === undefined) notes.delete(questionId);
+  else notes.set(questionId, note);
+  for (const l of [...listeners]) l();
+}
+
+/** The not-stored note of a question, wherever its card is shown. */
+export function StandingNote({ questionId }: { questionId: Id }) {
+  const note = useSyncExternalStore(subscribe, () => notes.get(questionId));
+  return note ? (
+    <p className="muted" role="status">
+      {note}
+    </p>
+  ) : null;
+}
+
 function newAnswerId(): string {
   return typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
     ? crypto.randomUUID()
@@ -57,17 +91,16 @@ export function StandingApprovalButton({
 }) {
   const api = useApi();
   const { run, error, busy } = useAction();
-  const [note, setNote] = useState<string | undefined>();
   // The same key on every retry of this card's press.
   const answerId = useRef<string | undefined>(undefined);
   const n = forward.similar?.length ?? 0;
-  if (n < 3 || typeof api.standingApproval !== 'function') return null;
+  if (n < SIMILAR_APPROVALS_THRESHOLD || typeof api.standingApproval !== 'function') return null;
   const press = async () => {
     answerId.current ??= newAnswerId();
     const key = answerId.current;
     await run(async () => {
       const result = await api.standingApproval(q.id, q.version, key);
-      if (result.notStored) setNote(result.notStored);
+      setStandingNote(q.id, result.notStored);
     });
   };
   return (
@@ -80,11 +113,7 @@ export function StandingApprovalButton({
       >
         {`Approved ${n} times before — let the Waykeeper approve these`}
       </button>
-      {note && (
-        <p className="muted" role="status">
-          {note}
-        </p>
-      )}
+      <StandingNote questionId={q.id} />
       <ErrorLine error={error} />
     </>
   );

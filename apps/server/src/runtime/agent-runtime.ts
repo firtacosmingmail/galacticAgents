@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
 import {
+  approvalActivity,
   BRAIN_SLASH_COMMANDS,
+  waykeeperLabel,
   brainSlashCommands,
   excerpt,
   isHarnessMeta,
@@ -2323,6 +2325,26 @@ export class AgentRuntime {
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);
+    // A Waykeeper approval is also a durable line in the Steward's transcript (P13-06, §5.6).
+    if (
+      d.decision === 'allow' &&
+      event.type === 'permission.decided' &&
+      d.decidedBy?.type === 'agent'
+    ) {
+      const { tables } = this.opts.log;
+      const approver = d.decidedBy.id ? tables.agents.get(d.decidedBy.id) : undefined;
+      const name = approver
+        ? waykeeperLabel(
+            approver,
+            approver.projectId ? tables.projects.get(approver.projectId)?.name : undefined,
+          )
+        : 'the Waykeeper';
+      this.opts.transcripts.append(
+        live.agent.id,
+        'tool',
+        `${approvalActivity(name, event.reason, event.quote)}\n`,
+      );
+    }
   }
 
   /** Appends an event under the one write rule; the status store sees it as a log subscriber. */

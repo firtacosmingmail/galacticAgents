@@ -225,6 +225,18 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     expect(seen[1]!.recentActions.join('\n')).toContain(VIEW);
   });
 
+  it('leaves "Approved by <Waykeeper>: <reason>" in the Steward’s transcript (P13-06)', async () => {
+    const h = await hierarchy({ switchOn: true, seen: [] });
+    await until(() => h.ofType('question.opened').length === 1);
+    h.transcripts.flush();
+    const lines = h.transcripts.read(h.steward.id).filter((c) => c.text.includes('Approved by'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({
+      kind: 'tool',
+      text: 'Approved by Waykeeper · Site: a read-only query on the reviewed PR\n',
+    });
+  });
+
   it('the user allowing a forwarded card of a live Steward records the approval (P13-05)', async () => {
     const h = await hierarchy({ switchOn: true, seen: [] });
     await until(() => h.ofType('question.opened').length === 1);
