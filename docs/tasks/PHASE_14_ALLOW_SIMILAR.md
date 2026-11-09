@@ -77,6 +77,7 @@ P14-01…08 run in order.
 - **Acceptance:** the brief's tests pass (every listed prefix assignment asks under a folder rule, `LANG=C` and `GH_TOKEN=` stay covered; the four `GIT_*` paths are guarded; the four glued options are not allowed; `noglob cd` taints the later segments); SPEC 138 and TECHNOLOGY updated; the full gates are green.
 - Review round 1 (2026-11-09): `NAME+=` is an assignment everywhere `NAME=` is; `env NAME=…` behind any wrapper must be inert; a glued `..` is a path; `env -C`/`--chdir` is judged like a `cd`; a path only a clustered option reading gives cannot be placed (asks, no folder row), and non-clustering compilers (`gcc -Iinclude/x`) no longer ask.
 - Review round 2 (2026-11-09): `env -S`/`--split-string` makes a line unreadable; compilers' glued `-MF`/`-MJ`/`-dumpdir`/`-dumpbase` values and `-Wl,` parts are paths; a glob that may match a guarded name (`.gi?`, `.g*`, `[.]git`) is guarded.
+- Review round 3 (2026-11-09): a command's own `env` may carry only known options (else unreadable, never throws); a bracket class may match any guarded name; a line that changes glob options is unreadable; rustc's `link-arg` values are read.
 
 ## Exit criteria (verified 2026-11-09)
 
