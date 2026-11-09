@@ -1306,6 +1306,41 @@ export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
   '/dev/tty',
 ]);
 
+/**
+ * Whether a simple command sets variables or shell state a later command's destination could
+ * depend on: assignments, the variable builtins, sourcing, `read`, `eval`, `printf -v`, and
+ * function definitions. Any of them anywhere in a line hides every host (rulings R-d, R-e).
+ */
+const STATE_PROGRAMS = new Set([
+  'export',
+  'env',
+  'set',
+  'declare',
+  'typeset',
+  'readonly',
+  'local',
+  '.',
+  'source',
+  'read',
+  'mapfile',
+  'readarray',
+  'eval',
+  'alias',
+  'unset',
+  'shopt',
+  'function',
+]);
+function changesShellState(words: readonly string[]): boolean {
+  const head = words[0] ?? '';
+  return (
+    STATE_PROGRAMS.has(head) ||
+    /^[A-Za-z_][A-Za-z0-9_]*=/.test(head) ||
+    (head === 'printf' && words.includes('-v')) ||
+    /\(\)$/.test(head) ||
+    words[1] === '()'
+  );
+}
+
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
@@ -1314,7 +1349,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     reasons.push(reason);
     if (action === undefined) return;
     actions.add(action);
-    findings.push({ action, part: '', reason, ...extra });
+    const finding: Finding = { action, part: '', reason, ...extra };
+    // One row per distinct reason: the same rule matching twice in a part adds no second finding.
+    const same = (f: Finding) =>
+      f.action === finding.action &&
+      f.part === finding.part &&
+      f.segment === finding.segment &&
+      f.path === finding.path &&
+      JSON.stringify(f.hosts) === JSON.stringify(finding.hosts);
+    if (!findings.some(same)) findings.push(finding);
   };
   let guarded = false;
   const trimmed = command.trim();
@@ -1330,11 +1373,10 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   let cwd = cwdOf(ctx);
   // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
   // command's network destination: no host is then visible (ruling R-d).
-  const lineSetsEnv = lexed.commands.some((c) =>
-    /^(?:export|env|set|declare|typeset|readonly|local)$|^[A-Za-z_][A-Za-z0-9_]*=/.test(
-      c.words[0] ?? '',
-    ),
-  );
+  // The lexer drops the parentheses of a function definition, so that one is read from the text.
+  const lineSetsEnv =
+    lexed.commands.some((c) => changesShellState(c.words)) ||
+    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(trimmed);
 
   for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
@@ -1366,7 +1408,12 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const rule of ALL_RULES) {
       if (rule.pattern.test(scanned)) {
         const hosts =
-          rule.action === 'network' ? hostsOfCommand(simple.words, { lineSetsEnv }) : undefined;
+          rule.action === 'network'
+            ? hostsOfCommand(simple.words, {
+                lineSetsEnv,
+                hasRedirect: simple.redirects.length > 0,
+              })
+            : undefined;
         note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }

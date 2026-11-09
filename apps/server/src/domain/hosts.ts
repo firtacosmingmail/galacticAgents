@@ -5,6 +5,14 @@
  * back only when EVERY word is understood — exact option spellings (no prefixes, no glued
  * values), plain positionals — and anything else is `undefined`. git and httpie are never
  * host-coverable (`insteadOf` config, submodules, stdin bodies, request items).
+ *
+ * Words reach this module after the lexer, but the shell may still expand them (`{a,-x}`, `$X`,
+ * globs, `~`): any word of curl/wget/gh holding a shell-special character or whitespace is not
+ * understood (ruling R-e; quoting is not visible here, so quoted values are rejected too).
+ *
+ * Accepted limits: an inherited environment (HTTPS_PROXY and the like set before Mission Control
+ * started), `~/.curlrc` and `~/.wgetrc`, `curl -L` and wget redirects to other hosts, and gh
+ * following the current directory's git remote.
  */
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
@@ -15,7 +23,12 @@ export interface HostsOptions {
    * assignment segment): proxy, config and host variables then make every host unknown.
    */
   lineSetsEnv?: boolean;
+  /** The simple command has a redirection of any kind (`> /dev/tcp/host/80` opens a socket). */
+  hasRedirect?: boolean;
 }
+
+/** A word the shell could expand or split into something else (ruling R-e). */
+const SHELL_SPECIAL = /[$`{}*?[\]~\\\s]/;
 
 /** The lower-cased host of an http(s) URL; `undefined` for another scheme or an unparsable URL. */
 export function hostOfUrl(url: string): string | undefined {
@@ -195,10 +208,11 @@ export function hostsOfCommand(
   words: readonly string[],
   options: HostsOptions = {},
 ): string[] | undefined {
-  if (options.lineSetsEnv || words.length === 0 || ENV_ASSIGNMENT.test(words[0]!)) {
+  if (options.lineSetsEnv || options.hasRedirect || words.length === 0) return undefined;
+  if (ENV_ASSIGNMENT.test(words[0]!) || words.some((w) => SHELL_SPECIAL.test(w))) {
     return undefined;
   }
-  const program = words[0]!.split('/').pop()!.toLowerCase();
+  const program = words[0]!;
   const args = words.slice(1);
   switch (program) {
     case 'curl':

