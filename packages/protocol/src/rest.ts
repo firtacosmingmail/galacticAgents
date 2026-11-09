@@ -12,7 +12,6 @@ import {
   PermissionPolicy,
   type PermissionPolicyPreset,
   PermissionRule,
-  PermissionRuleScope,
   TrustLevel,
   WORK_NAME_MAX,
 } from './domain.js';
@@ -175,28 +174,27 @@ export type DismissResponse = z.infer<typeof DismissResponse>;
  * card's "Allow similar" chooser offers for an open permission request — the call and the parts
  * of it that asked (`call`, `asking`), then one row per reason, each already generalised with a
  * label and a preview of exactly what its rule would cover, or why it is not offered. `refused`
- * says why no rule can be made at all (a push, a request outside any project, a call the table no
- * longer asks about). `notRememberable`: parts that ask but cannot become a rule (allowed once
- * only). `callDigest` binds the preview to the call. `allowed`: whether this client may make
- * rules (the Mac, or any client with `autoApproveRemote`).
+ * says why no rule can be made at all (a request outside any project, a call the table no longer
+ * asks about, …). `notRememberable`: parts that ask but cannot become a rule (a push, guarded
+ * ground, an unreadable part, a path the engine cannot tell): allowed once only. `callDigest`
+ * binds the preview to the call (empty when the request names none). `allowed`: whether this
+ * client may make rules (the Mac, or any client with `autoApproveRemote`).
  */
 export const SimilarOption = z.object({
-  /** Stable row key: `folder:/tmp/pr83`, `site:github.com`, `prefix`, `category`. */
-  key: z.string().optional(),
-  kind: z.enum(['folder', 'site', 'prefix', 'category']).optional(),
-  /** P9-17 only; P14 rows use `kind` (the old field goes when the server and the web move over). */
-  scope: PermissionRuleScope,
+  /** Stable row key: `folder:/private/tmp/pr83`, `site:github.com`, `prefix`, `category`. */
+  key: z.string(),
+  kind: z.enum(['folder', 'site', 'prefix', 'category']),
   available: z.boolean(),
   label: z.string().optional(),
   preview: z.string().optional(),
   /**
    * What binds this preview to the rule stored (P9-17 review S1): sent back with
-   * `allow-similar`, which refuses (409 `stale`) when the rule it drafts again differs.
+   * `allow-similar`, which refuses (409 `stale`) when no row it drafts again has it.
    */
   digest: z.string().optional(),
   /** The shown parts of the call this row would cover. */
   covers: z.array(z.string()).optional(),
-  /** A folder row's wider choices, narrowest to widest. */
+  /** A folder row's wider choices, narrowest to widest (each sent back by its own digest). */
   widen: z
     .array(z.object({ label: z.string(), preview: z.string(), digest: z.string() }))
     .optional(),
@@ -210,11 +208,11 @@ export const SimilarPreviewResponse = z.object({
   projectName: z.string().optional(),
   refused: z.string().optional(),
   /** The command, or `<tool> <subject>` for another tool (P14). */
-  call: z.string().optional(),
-  /** The shown parts of the uncovered reasons (P14). */
-  asking: z.array(z.string()).optional(),
-  notRememberable: z.array(z.object({ part: z.string(), reason: z.string() })).optional(),
-  callDigest: z.string().optional(),
+  call: z.string(),
+  /** The shown parts of the reasons no rule of the project covers yet (P14). */
+  asking: z.array(z.string()),
+  notRememberable: z.array(z.object({ part: z.string(), reason: z.string() })),
+  callDigest: z.string(),
   options: z.array(SimilarOption),
   allowed: z.boolean(),
 });
@@ -222,15 +220,13 @@ export type SimilarPreviewResponse = z.infer<typeof SimilarPreviewResponse>;
 
 /**
  * `POST /api/questions/:id/allow-similar` (P9-17, amended by P14): answers the request "allow"
- * once and stores one rule per ticked row — `digests` are the previews' for those rows, and a rule
- * drafted again that differs is refused (409 `stale`). `version` and `answerId` as for an answer.
- * `scope` and `digest` are the P9-17 single-rule form, kept until the server and web move over.
+ * once and stores one rule per ticked row — `digests` are the previews' for those rows (or a
+ * folder row's wider step), `callDigest` the preview's for the call; a call or a row drafted
+ * again that differs is refused (409 `stale`). `version` and `answerId` as for an answer.
  */
 export const AllowSimilarBody = z.object({
-  scope: PermissionRuleScope,
-  digest: z.string().min(1).max(128),
-  digests: z.array(z.string().min(1).max(128)).min(1).max(20).optional(),
-  callDigest: z.string().min(1).max(128).optional(),
+  digests: z.array(z.string().min(1).max(128)).min(1).max(20),
+  callDigest: z.string().min(1).max(128),
   version: z.number().int().nonnegative().optional(),
   answerId: z.string().min(1).max(100).optional(),
 });
@@ -239,11 +235,9 @@ export type AllowSimilarBody = z.infer<typeof AllowSimilarBody>;
 /**
  * `rules`: the rules stored. `ruleNotStored`: the request was allowed once, but the rules could
  * not be stored after it (the project closed meanwhile, say) — said to the user (P9-17 review S6).
- * `rule` is the P9-17 single-rule reply, kept until the server moves over.
  */
 export const AllowSimilarResponse = z.object({
   ok: z.literal(true),
-  rule: PermissionRule.optional(),
   rules: z.array(PermissionRule).optional(),
   ruleNotStored: z.string().optional(),
 });

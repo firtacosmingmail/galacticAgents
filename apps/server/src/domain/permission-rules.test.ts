@@ -11,15 +11,20 @@ import {
   type PolicyContext,
 } from './permissions.js';
 import {
+  askingOf,
   commandMatchesPrefix,
   coverage,
   draftDigest,
   physicalPath,
   prefixRefusal,
   proposePrefix,
+  callDigest,
   similarOptions,
+  systemRealPath,
+  unattendedRuleRefusal,
   type Coverage,
   type RealPath,
+  type Row,
   type RuleDraft,
 } from './permission-rules.js';
 
@@ -51,21 +56,46 @@ const REAL = fs(['/home/u', '/etc', '/data'], {
 const bash = (command: string): ToolCall => ({ toolName: 'Bash', input: { command } });
 const read = (file_path: string): ToolCall => ({ toolName: 'Read', input: { file_path } });
 
-/** The rule the server would store for `scope` of a request (asserting it is offered). */
+/** The rule the server would store for the first row of `kind` (asserting it is offered). */
 function ruleFrom(
   call: ToolCall,
-  scope: RuleDraft['scope'],
+  kind: Row['kind'],
   policy: PermissionPolicy = DEFAULT,
 ): PermissionRule {
   const found = similarOptions({ call, ctx, policy, realPath: REAL });
   expect(found.refused).toBeUndefined();
-  const option = found.options.find((o) => o.scope === scope);
-  if (!option?.available) throw new Error(`${scope} not offered: ${JSON.stringify(option)}`);
-  const { preview: _preview, ...draft } = option.draft;
+  const row = found.rows.find((r) => r.kind === kind);
+  if (!row?.available) throw new Error(`${kind} not offered: ${JSON.stringify(found.rows)}`);
+  const { preview: _preview, ...draft } = row.draft;
   return {
     ...draft,
-    id: `r-${scope}`,
+    id: `r-${kind}`,
     projectId: 'p-1',
+    createdBy: { type: 'user' },
+    createdAt: '2026-10-12T10:00:00.000Z',
+    origin: 'local',
+  };
+}
+
+/**
+ * A stored legacy exact rule (P9-17; no longer drafted since P14): the call's text — the command,
+ * or a file tool's real paths — and the categories the table asked about.
+ */
+function exactRule(
+  call: ToolCall,
+  text: string,
+  policy: PermissionPolicy = DEFAULT,
+): PermissionRule {
+  const asking = askingOf(policy, evaluate(policy, call, ctx));
+  return {
+    id: 'r-exact',
+    projectId: 'p-1',
+    scope: 'exact',
+    tool: call.toolName,
+    match: { kind: 'text', text },
+    categories: asking.categories,
+    ...(asking.unclassified ? { unclassified: true } : {}),
+    label: text,
     createdBy: { type: 'user' },
     createdAt: '2026-10-12T10:00:00.000Z',
     origin: 'local',
@@ -153,8 +183,11 @@ describe('physical paths (P9-17)', () => {
 });
 
 describe('rule matching (P9-17)', () => {
-  it('exact: the same command only', () => {
-    const rule = ruleFrom(bash('curl -s https://example.com/api'), 'exact');
+  it('a stored exact rule: the same command only', () => {
+    const rule = exactRule(
+      bash('curl -s https://example.com/api'),
+      'curl -s https://example.com/api',
+    );
     expect(rule).toMatchObject({ match: { kind: 'text' }, categories: ['network'] });
     expect(allows([rule], bash('curl -s https://example.com/api'))).toBe(rule.id);
     expect(allows([rule], bash('  curl -s https://example.com/api  '))).toBe(rule.id);
@@ -181,13 +214,12 @@ describe('rule matching (P9-17)', () => {
     expect(allows([rule], bash('npm install "unterminated'))).toBeUndefined();
   });
 
-  it('folder: real-path containment, symlinks and `..` resolved, same kind of tool', () => {
-    const rule = ruleFrom(read('~/specs/a.md'), 'prefix');
-    expect(rule).toMatchObject({
+  it('a stored file-tool folder rule: real-path containment, same kind of tool', () => {
+    const rule = forged('r-prefix', {
+      scope: 'prefix',
       tool: 'Read',
       match: { kind: 'folder', folder: '/home/u/specs' },
       categories: ['outside_workspace'],
-      label: '~/specs/…',
     });
     expect(allows([rule], read('/home/u/specs/sub/b.md'))).toBe(rule.id);
     expect(allows([rule], read('../../specs/c.md'))).toBe(rule.id);
@@ -211,10 +243,13 @@ describe('rule matching (P9-17)', () => {
   });
 
   it('a folder reached through a symlink is stored as its real path', () => {
-    const rule = ruleFrom(read('~/notes/today.md'), 'prefix');
-    expect(rule.match).toEqual({ kind: 'folder', folder: '/data/notes' });
+    const rule = ruleFrom(read('~/notes/today.md'), 'folder');
+    expect(rule.match).toEqual({ kind: 'folder', folder: '/data/notes', access: 'any' });
     expect(allows([rule], read('/data/notes/old.md'))).toBe(rule.id);
     expect(allows([rule], read('~/notes/other.md'))).toBe(rule.id);
+    // Made for a file tool's folder, it covers commands and writing there too (ruling 2).
+    expect(allows([rule], write('/data/notes/new.md'))).toBe(rule.id);
+    expect(allows([rule], bash('cat /data/notes/old.md'))).toBe(rule.id);
   });
 
   it('category: any tool the table asks about only in those categories', () => {
@@ -268,15 +303,14 @@ describe('rule matching (P9-17)', () => {
     expect(allows([network], bash('python3 -c "import urllib"'))).toBeUndefined();
   });
 
-  it('an exact rule made from an unreadable call matches that call again, and nothing else', () => {
+  it('a stored exact rule made from an unreadable call matches that call again, and nothing else', () => {
     const call = bash('python3 -c "print(1)"');
     const found = similarOptions({ call, ctx, policy: DEFAULT, realPath: REAL });
-    expect(found.options.map((o) => [o.scope, o.available])).toEqual([
-      ['exact', true],
-      ['prefix', false],
-      ['category', false],
+    expect(found.rows).toEqual([]);
+    expect(found.notRememberable.map((n) => n.reason)).toEqual([
+      expect.stringMatching(/cannot read/),
     ]);
-    const rule = ruleFrom(call, 'exact');
+    const rule = exactRule(call, 'python3 -c "print(1)"');
     expect(rule.unclassified).toBe(true);
     expect(allows([rule], call)).toBe(rule.id);
     expect(allows([rule], bash('python3 -c "print(2)"'))).toBeUndefined();
@@ -304,11 +338,15 @@ describe('folder rules on the real file system (P9-17)', () => {
       symlinkSync(join(root, 'secret'), join(home, 'specs', 'out'));
       const real: PolicyContext = { workspace: ws, cwd: ws, home };
       const found = similarOptions({ call: read('~/specs/a.md'), ctx: real, policy: DEFAULT });
-      const option = found.options[1];
-      if (!option?.available) throw new Error('no folder offered');
-      expect(option.draft.match).toEqual({ kind: 'folder', folder: join(home, 'specs') });
+      const row = found.rows.find((r) => r.kind === 'folder');
+      if (!row?.available) throw new Error('no folder offered');
+      expect(row.draft.match).toEqual({
+        kind: 'folder',
+        folder: join(home, 'specs'),
+        access: 'any',
+      });
       const rule: PermissionRule = {
-        ...option.draft,
+        ...row.draft,
         id: 'r-fs',
         projectId: 'p-1',
         createdBy: { type: 'user' },
@@ -329,7 +367,7 @@ describe('folder rules on the real file system (P9-17)', () => {
 });
 
 describe('the chooser (P9-17)', () => {
-  it('offers the three scopes with previews of what each matches', () => {
+  it('offers the prefix and the category with previews of what each matches, never exactly this', () => {
     const found = similarOptions({
       call: bash('npm install zod'),
       ctx,
@@ -337,38 +375,40 @@ describe('the chooser (P9-17)', () => {
       realPath: REAL,
     });
     expect(found.refused).toBeUndefined();
-    const [exact, prefix, category] = found.options;
-    expect(exact).toMatchObject({ scope: 'exact', available: true });
-    expect(exact?.available && exact.draft.preview).toMatch(
-      /Exactly the command `npm install zod`/,
-    );
+    const [prefix, category] = found.rows;
+    expect(found.rows.map((r) => r.kind)).toEqual(['prefix', 'category']);
     expect(prefix?.available && prefix.draft.preview).toMatch(/starts with `npm install`/);
     expect(category?.available && category.draft.preview).toMatch(/only as network access/);
   });
 
-  it('refuses a push, a call the table denies or allows, and a write to configuration', () => {
+  it('refuses a call the table denies or allows; a push or a write to configuration gets no row', () => {
     const push = similarOptions({ call: bash('git push'), ctx, policy: DEFAULT, realPath: REAL });
-    expect(push.refused).toMatch(/push always asks/);
-    expect(push.options).toEqual([]);
+    expect(push.refused).toBeUndefined();
+    expect(push.rows).toEqual([]);
+    expect(push.notRememberable).toEqual([
+      { part: 'git push', reason: expect.stringMatching(/push always asks/) },
+    ]);
     expect(
       similarOptions({ call: bash('rm -rf dist'), ctx, policy: { rules: { destructive: 'deny' } } })
         .refused,
     ).toMatch(/denies/);
     expect(similarOptions({ call: bash('ls'), ctx, policy: DEFAULT }).refused).toMatch(/allows/);
-    expect(
-      similarOptions({
-        call: { toolName: 'Edit', input: { file_path: `${WS}/.git/hooks/pre-commit` } },
-        ctx,
-        policy: DEFAULT,
-      }).refused,
-    ).toMatch(/configuration/);
+    const config = similarOptions({
+      call: { toolName: 'Edit', input: { file_path: `${WS}/.git/hooks/pre-commit` } },
+      ctx,
+      policy: DEFAULT,
+    });
+    expect(config.rows).toEqual([]);
+    expect(config.notRememberable.map((n) => n.reason)).toEqual([
+      expect.stringMatching(/configuration/),
+    ]);
   });
 
   it('never offers a folder as broad as the root or the home folder', () => {
     const home = similarOptions({ call: read('~/todo.txt'), ctx, policy: DEFAULT, realPath: REAL });
-    expect(home.options[1]).toMatchObject({ scope: 'prefix', available: false });
+    expect(home.rows[0]).toMatchObject({ kind: 'folder', available: false });
     const root = similarOptions({ call: read('/x'), ctx, policy: DEFAULT, realPath: REAL });
-    expect(root.options[1]).toMatchObject({ scope: 'prefix', available: false });
+    expect(root.rows[0]).toMatchObject({ kind: 'folder', available: false });
   });
 });
 
@@ -458,10 +498,12 @@ describe('guarded writes anywhere (P9-17 review B1)', () => {
           `${what} by ${rule.id}`,
         ).toBeUndefined();
       }
+      const found = similarOptions({ call, ctx: here, policy: DEFAULT, realPath: REAL });
+      expect(found.notRememberable.length, what).toBeGreaterThan(0);
       expect(
-        similarOptions({ call, ctx: here, policy: DEFAULT, realPath: REAL }).refused,
+        found.rows.filter((r) => r.available && r.kind === 'folder'),
         what,
-      ).toBeDefined();
+      ).toEqual([]);
     }
   });
 
@@ -493,8 +535,8 @@ describe('guarded writes anywhere (P9-17 review B1)', () => {
     ).toBeUndefined();
   });
 
-  it('outside the workspace, a write is allowed only by an exact or an edit folder rule', () => {
-    const exact = ruleFrom(write('/tmp/out.txt'), 'exact');
+  it('outside the workspace, a write is allowed by a stored exact or edit folder rule only', () => {
+    const exact = exactRule(write('/tmp/out.txt'), '/tmp/out.txt');
     expect(allows([exact], write('/tmp/out.txt'))).toBe(exact.id);
     expect(allows([outsideCategory], write('/tmp/out.txt'))).toBeUndefined();
     const readFolder = forged('r-read', {
@@ -509,19 +551,20 @@ describe('guarded writes anywhere (P9-17 review B1)', () => {
   });
 });
 
-describe('outside the workspace: exactly this or a folder (P9-17 review B2)', () => {
-  it('offers neither a prefix nor the category for a command that reaches outside', () => {
-    for (const command of ['cat /tmp/x', 'git -C / status', 'cp a /tmp/b', 'ls ../../..']) {
+describe('outside the workspace: a folder only (P9-17 review B2, P14)', () => {
+  it('offers neither a prefix nor the category for a command that only reaches outside', () => {
+    for (const [command, folder] of [
+      ['cat /tmp/x', ['folder:/tmp', true]],
+      ['git -C / status', ['folder:/', false]],
+      ['cp a /tmp/b', ['folder:/tmp', true]],
+      ['ls ../../..', ['folder:/', false]],
+    ] as const) {
       const found = similarOptions({ call: bash(command), ctx, policy: DEFAULT, realPath: REAL });
       expect(found.refused, command).toBeUndefined();
       expect(
-        found.options.map((o) => [o.scope, o.available]),
+        found.rows.map((r) => [r.key, r.available]),
         command,
-      ).toEqual([
-        ['exact', true],
-        ['prefix', false],
-        ['category', false],
-      ]);
+      ).toEqual([folder, ['category', false]]);
     }
   });
 
@@ -532,9 +575,8 @@ describe('outside the workspace: exactly this or a folder (P9-17 review B2)', ()
       policy: DEFAULT,
       realPath: REAL,
     });
-    expect(found.options.map((o) => [o.scope, o.available])).toEqual([
-      ['exact', true],
-      ['prefix', true],
+    expect(found.rows.map((r) => [r.key, r.available])).toEqual([
+      ['folder:/etc', true],
       ['category', false],
     ]);
   });
@@ -587,8 +629,8 @@ describe('shells and interpreters get no prefix (P9-17 review S3)', () => {
     ]) {
       expect(proposePrefix(command), command).toBeUndefined();
       const found = similarOptions({ call: bash(command), ctx, policy: RUN, realPath: REAL });
-      const prefix = found.options.find((o) => o.scope === 'prefix');
-      expect(prefix?.available, command).toBe(false);
+      const prefix = found.rows.find((r) => r.kind === 'prefix');
+      expect(prefix?.available ?? false, command).toBe(false);
     }
     expect(prefixRefusal(['python3'])).toMatch(/runs whatever code/);
     expect(proposePrefix('npx tsc --noEmit')).toEqual(['npx', 'tsc']);
@@ -606,7 +648,7 @@ describe('shells and interpreters get no prefix (P9-17 review S3)', () => {
 
   it('warns that npm run and make run scripts the agent can change', () => {
     const npm = similarOptions({ call: bash('npm run build'), ctx, policy: RUN, realPath: REAL });
-    const npmPrefix = npm.options.find((o) => o.scope === 'prefix');
+    const npmPrefix = npm.rows.find((r) => r.kind === 'prefix');
     expect(npmPrefix?.available && npmPrefix.draft.preview).toMatch(
       /package\.json, which the agent can change/,
     );
@@ -614,7 +656,7 @@ describe('shells and interpreters get no prefix (P9-17 review S3)', () => {
       /every command starts with `npm run`/,
     );
     const make = similarOptions({ call: bash('make test'), ctx, policy: RUN, realPath: REAL });
-    const makePrefix = make.options.find((o) => o.scope === 'prefix');
+    const makePrefix = make.rows.find((r) => r.kind === 'prefix');
     expect(makePrefix?.available && makePrefix.draft.preview).toMatch(/Makefile/);
     expect(makePrefix?.available && makePrefix.draft.label).toBe(
       'make test … (and any further arguments)',
@@ -663,17 +705,17 @@ describe('curl uploads are reads (P9-17 review S2)', () => {
 
 describe('the preview digest (P9-17 review S1)', () => {
   const optionsOf = (command: string) =>
-    similarOptions({ call: bash(command), ctx, policy: DEFAULT, realPath: REAL }).options.map(
-      (o) => (o.available ? draftDigest(o.draft) : ''),
+    similarOptions({ call: bash(command), ctx, policy: DEFAULT, realPath: REAL }).rows.map((r) =>
+      r.available ? draftDigest(r.draft) : '',
     );
 
-  it('differs between scopes and between rules, and is stable', () => {
+  it('differs between rows and between rules, and is stable', () => {
     const digests = optionsOf('npm install zod');
-    expect(new Set(digests).size).toBe(3);
+    expect(new Set(digests).size).toBe(2);
+    expect(optionsOf('curl https://a.dev')).not.toEqual(optionsOf('curl https://b.dev'));
     expect(optionsOf('npm install zod')).toEqual(digests);
-    const other = optionsOf('npm install ky');
-    expect(other[0]).not.toBe(digests[0]);
-    expect(other[1]).toBe(digests[1]);
+    // Another package: the same prefix and category, so the same rules.
+    expect(optionsOf('npm install ky')).toEqual(digests);
   });
 });
 
@@ -1032,5 +1074,242 @@ describe('coverage: every asked reason must be covered (P14-03)', () => {
     expect(allowed([legacyRead], write('/tmp/pr83/a.md'))).toBe(false);
     // A file-tool folder rule does not cover commands.
     expect(allowed([legacyRead], bash('cat /tmp/pr83/a.md'))).toBe(false);
+  });
+});
+
+describe('one tickable row per reason (P14-04)', () => {
+  /**
+   * Folders and files that exist (`links` maps a link to its target): `p/` resolves only for a
+   * folder, as `systemRealPath` does.
+   */
+  function tree(
+    dirs: string[],
+    files: string[] = [],
+    links: Record<string, string> = {},
+  ): RealPath {
+    return (p) => {
+      if (p.endsWith('/')) {
+        const dir = p.slice(0, -1);
+        return dirs.includes(dir) ? dir : undefined;
+      }
+      if (links[p]) return links[p];
+      return dirs.includes(p) || files.includes(p) ? p : undefined;
+    };
+  }
+  const TREE = tree(['/tmp', '/tmp/pr83', '/home', HOME, `${HOME}/notes`, WS], [`${HOME}/notes/a`]);
+  const options = (command: string, rules: PermissionRule[] = [], realPath: RealPath = TREE) =>
+    similarOptions({ call: bash(command), ctx, policy: DEFAULT, realPath, rules });
+  const available = (found: ReturnType<typeof similarOptions>, key: string) => {
+    const row = found.rows.find((r) => r.key === key);
+    if (!row?.available) throw new Error(`${key} not offered: ${JSON.stringify(found.rows)}`);
+    return row;
+  };
+  const stored = (draft: RuleDraft, id: string): PermissionRule => {
+    const { preview: _preview, ...rest } = draft;
+    return {
+      ...rest,
+      id,
+      projectId: 'p-1',
+      createdBy: { type: 'user' },
+      createdAt: '2026-11-09T10:00:00.000Z',
+      origin: 'local',
+    };
+  };
+
+  it('a cd outside and a site: a folder row (widened up to /tmp) and a site row, no exact row', () => {
+    const found = options('cd /tmp/pr83; gh pr view 83');
+    expect(found.refused).toBeUndefined();
+    expect(found.call).toBe('cd /tmp/pr83; gh pr view 83');
+    expect(found.asking).toEqual(['cd /tmp/pr83', 'gh pr view 83']);
+    expect(found.rows.map((r) => r.key)).toEqual([
+      'folder:/tmp/pr83',
+      'site:github.com',
+      'category',
+    ]);
+    expect(found.rows.every((r) => ['folder', 'site', 'prefix', 'category'].includes(r.kind))).toBe(
+      true,
+    );
+    const folder = available(found, 'folder:/tmp/pr83');
+    expect(folder.covers).toEqual(['cd /tmp/pr83']);
+    expect(folder.draft).toEqual({
+      scope: 'folder',
+      tool: 'Bash',
+      match: { kind: 'folder', folder: '/tmp/pr83', access: 'any' },
+      categories: ['outside_workspace'],
+      label: '/tmp/pr83/…',
+      preview:
+        'Any command or file tool reading or writing under /tmp/pr83 (symlinks followed) — a delete, a push, or a write to git or agent configuration there still asks.',
+    });
+    expect(folder.widen?.map((d) => [d.label, d.match])).toEqual([
+      ['/tmp/…', { kind: 'folder', folder: '/tmp', access: 'any' }],
+    ]);
+    const site = available(found, 'site:github.com');
+    expect(site.covers).toEqual(['gh pr view 83']);
+    expect(site.draft).toEqual({
+      scope: 'site',
+      tool: '*',
+      match: { kind: 'host', host: 'github.com' },
+      categories: ['network'],
+      label: 'github.com',
+      preview:
+        'Any address on github.com or its subdomains (github.com, *.github.com), from any tool — not other sites, never a push.',
+    });
+    expect(found.notRememberable).toEqual([]);
+  });
+
+  it('an assignment in the line hides the site: the category row covers the network instead', () => {
+    const found = options('cd /tmp/pr83; GH_TOKEN=$(gh auth token) gh pr view 83');
+    expect(found.rows.map((r) => [r.key, r.available])).toEqual([
+      ['folder:/tmp/pr83', true],
+      ['prefix', false],
+      ['category', true],
+    ]);
+    expect(available(found, 'category').covers).toEqual([
+      'gh auth token',
+      'GH_TOKEN=$() gh pr view 83',
+    ]);
+  });
+
+  it("a file's folder, never widened to the home folder; a folder's own parent stops before /", () => {
+    const notes = options('cat ~/notes/a');
+    expect(notes.rows.map((r) => r.key)).toEqual([`folder:${HOME}/notes`, 'category']);
+    const row = available(notes, `folder:${HOME}/notes`);
+    expect(row.draft.label).toBe('~/notes/…');
+    expect(row.widen).toBeUndefined();
+    expect(notes.rows[1]).toMatchObject({ kind: 'category', available: false });
+
+    const tmp = options('ls /tmp');
+    const t = available(tmp, 'folder:/tmp');
+    expect(t.draft.match).toEqual({ kind: 'folder', folder: '/tmp', access: 'any' });
+    expect(t.widen).toBeUndefined();
+  });
+
+  it('a folder under another drafted folder merges into it', () => {
+    const found = options('cat /tmp/pr83/a; ls /tmp');
+    expect(found.rows.filter((r) => r.kind === 'folder').map((r) => r.key)).toEqual([
+      'folder:/tmp',
+    ]);
+    expect(available(found, 'folder:/tmp').covers).toEqual(['cat /tmp/pr83/a', 'ls /tmp']);
+  });
+
+  it('the root and the home folder are too broad', () => {
+    expect(options('ls /').rows[0]).toMatchObject({
+      key: 'folder:/',
+      available: false,
+      reason: expect.stringMatching(/too broad \(the root or the home folder\)/),
+    });
+    expect(options('cat ~/todo.txt').rows[0]).toMatchObject({
+      key: `folder:${HOME}`,
+      available: false,
+    });
+  });
+
+  it('stores the real folder and shows the spelling the call used', () => {
+    const MAC = tree(['/private', '/private/tmp', '/private/tmp/pr83', HOME, WS], [], {
+      '/tmp': '/private/tmp',
+    });
+    const found = options('cd /tmp/pr83', [], MAC);
+    const row = available(found, 'folder:/private/tmp/pr83');
+    expect(row.draft.match).toEqual({ kind: 'folder', folder: '/private/tmp/pr83', access: 'any' });
+    expect(row.draft.label).toBe('/tmp/pr83/…');
+    expect(row.widen?.map((d) => d.label)).toEqual(['/private/tmp/…', '/private/…']);
+  });
+
+  it("the project's rules: a covered reason gets no row and is not asked about", () => {
+    const folder = available(options('cd /tmp/pr83; gh pr view 83'), 'folder:/tmp/pr83');
+    const found = options('cd /tmp/pr83; gh pr view 83', [stored(folder.draft, 'r-folder')]);
+    expect(found.rows.map((r) => r.key)).toEqual(['site:github.com', 'category']);
+    expect(found.asking).toEqual(['gh pr view 83']);
+  });
+
+  it('what no rule may cover is listed without a row', () => {
+    const opaque = options('bash -c "x"');
+    expect(opaque.rows).toEqual([]);
+    expect(opaque.notRememberable).toEqual([
+      { part: 'bash -c x', reason: expect.stringMatching(/cannot read/) },
+    ]);
+    const push = options('git push origin main; curl https://a.dev');
+    expect(push.refused).toBeUndefined();
+    expect(push.notRememberable).toEqual([
+      { part: 'git push origin main', reason: expect.stringMatching(/push always asks/) },
+    ]);
+    expect(push.rows.map((r) => r.key)).toEqual(['site:a.dev', 'category']);
+    const unknown = options('cd $X; ls');
+    expect(unknown.rows.filter((r) => r.kind === 'folder')).toEqual([]);
+    expect(unknown.notRememberable).toEqual([
+      { part: 'cd $X', reason: expect.stringMatching(/cannot tell where it points/) },
+    ]);
+    const guarded = options('echo x > /tmp/r/.git/config; ls /tmp/pr83');
+    expect(guarded.notRememberable).toEqual([
+      { part: 'echo x', reason: expect.stringMatching(/always asks/) },
+    ]);
+    expect(guarded.rows.map((r) => r.key)).toEqual(['folder:/tmp/pr83', 'category']);
+  });
+
+  it('a command in the workspace keeps its prefix and category rows', () => {
+    const found = options('npm install zod');
+    expect(found.rows.map((r) => [r.key, r.available])).toEqual([
+      ['prefix', true],
+      ['category', true],
+    ]);
+    expect(available(found, 'prefix').covers).toEqual(['npm install zod']);
+  });
+
+  it('the system real path names a folder only with a trailing separator', () => {
+    const dir = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-dir-')));
+    try {
+      writeFileSync(join(dir, 'f'), 'x');
+      expect(systemRealPath(`${dir}/`)).toBe(dir);
+      expect(systemRealPath(`${dir}/f`)).toBe(join(dir, 'f'));
+      expect(systemRealPath(`${dir}/f/`)).toBeUndefined();
+      expect(systemRealPath('/')).toBe('/');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('binds the preview to the call by a digest of the tool and its input', () => {
+    const a = callDigest(bash('ls /tmp'));
+    expect(a).toMatch(/^[0-9a-f]{32}$/);
+    expect(callDigest({ toolName: 'Bash', input: { command: 'ls /tmp' } })).toBe(a);
+    expect(callDigest(bash('ls /tmp/x'))).not.toBe(a);
+    expect(callDigest({ toolName: 'Read', input: { command: 'ls /tmp' } })).not.toBe(a);
+  });
+
+  it("a job's unattended rules never take the card's folder and site kinds", () => {
+    const site = {
+      scope: 'site' as const,
+      tool: '*',
+      match: { kind: 'host' as const, host: 'github.com' },
+      categories: ['network' as const],
+    };
+    expect(unattendedRuleRefusal(site)).toBe('site rules are for the permission card only');
+    expect(
+      unattendedRuleRefusal({
+        scope: 'folder',
+        tool: 'Bash',
+        match: { kind: 'folder', folder: '/tmp/x', access: 'any' },
+        categories: ['outside_workspace'],
+      }),
+    ).toBe('folder rules are for the permission card only');
+    expect(
+      unattendedRuleRefusal({
+        scope: 'prefix',
+        tool: 'Read',
+        match: { kind: 'folder', folder: '/tmp/x', access: 'any' },
+        categories: ['outside_workspace'],
+      }),
+    ).toBe('folder rules are for the permission card only');
+    expect(unattendedRuleRefusal({ ...site, scope: 'prefix' })).toBe(
+      'site rules are for the permission card only',
+    );
+    expect(
+      unattendedRuleRefusal({
+        scope: 'prefix',
+        tool: 'Read',
+        match: { kind: 'folder', folder: '/tmp/x' },
+        categories: ['outside_workspace'],
+      }),
+    ).toBeUndefined();
   });
 });

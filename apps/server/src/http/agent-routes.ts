@@ -677,8 +677,8 @@ export function registerAgentRoutes(
     /**
      * "Allow similar" (P9-17, SPEC decision 138). The preview lists what the card's chooser offers
      * for an open permission request — computed here from the request; `allowed` says whether this
-     * client may make a rule. `allow-similar` answers the request "allow" and stores the rule of
-     * the chosen scope on the asking agent's project, in one command; the Mac only unless
+     * client may make a rule. `allow-similar` answers the request "allow" once and stores one rule
+     * per ticked row on the asking agent's project, in one command; the Mac only unless
      * `autoApproveRemote` (403 `remote_control`), never from an agent's or a run's process (403
      * `agent_peer`). Removing a rule follows the same rules. No brain tool makes or removes one.
      */
@@ -701,8 +701,8 @@ export function registerAgentRoutes(
         try {
           const { value } = await commands.allowSimilar({
             questionId,
-            scope: body.scope,
-            digest: body.digest,
+            digests: body.digests,
+            callDigest: body.callDigest,
             by: USER,
             origin: originOf(req),
             ...(body.version !== undefined ? { version: body.version } : {}),
@@ -710,7 +710,7 @@ export function registerAgentRoutes(
           });
           return {
             ok: true,
-            ...(value.rule ? { rule: value.rule } : {}),
+            ...(value.rules ? { rules: value.rules } : {}),
             ...(value.ruleNotStored ? { ruleNotStored: value.ruleNotStored } : {}),
           } satisfies AllowSimilarResponse;
         } catch (error) {

@@ -45,22 +45,28 @@ const PREVIEW: SimilarPreviewResponse = {
   projectId: fx.project.id,
   projectName: fx.project.name,
   allowed: true,
+  call: 'npm install zod',
+  asking: ['npm install zod'],
+  notRememberable: [],
+  callDigest: 'c-1',
   options: [
     {
-      scope: 'exact',
+      key: 'site:registry.npmjs.org',
+      kind: 'site',
       available: true,
-      label: 'npm install zod',
-      preview: 'Exactly the command `npm install zod` (the table asks about it as network access).',
-      digest: 'd-exact',
+      label: 'registry.npmjs.org',
+      preview: 'Any address on registry.npmjs.org or its subdomains …',
+      digest: 'd-site',
     },
     {
-      scope: 'prefix',
+      key: 'prefix',
+      kind: 'prefix',
       available: true,
       label: 'npm install … (and any further arguments)',
       preview: 'Any command line in which every command starts with `npm install` …',
       digest: 'd-prefix',
     },
-    { scope: 'category', available: false, reason: 'not today' },
+    { key: 'category', kind: 'category', available: false, reason: 'not today' },
   ],
 };
 const RULE: PermissionRule = {
@@ -117,7 +123,7 @@ beforeEach(() => {
     answer: vi.fn(async () => ({ ok: true })),
     dismiss: vi.fn(async () => ({ ok: true })),
     similarPreview: vi.fn(async () => PREVIEW),
-    allowSimilar: vi.fn(async () => ({ ok: true, rule: RULE })),
+    allowSimilar: vi.fn(async () => ({ ok: true, rules: [RULE] })),
     removePermissionRule: vi.fn(async () => ({ ok: true })),
   };
 });
@@ -139,14 +145,14 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
       name: /Allow from now on in Auth refactor/,
     });
     expect(opener.getAttribute('aria-expanded')).toBe('true');
-    const exact = within(chooser).getByRole('radio', { name: /Exactly this/ }) as HTMLInputElement;
+    const site = within(chooser).getByRole('radio', { name: /This site/ }) as HTMLInputElement;
     const prefix = within(chooser).getByRole('radio', {
-      name: /prefix \/ folder/,
+      name: /command prefix/,
     }) as HTMLInputElement;
     const category = within(chooser).getByRole('radio', {
       name: /whole category/,
     }) as HTMLInputElement;
-    expect(exact.checked).toBe(true); // the first offered scope
+    expect(site.checked).toBe(true); // the first offered row
     expect(category.disabled).toBe(true);
     expect(chooser.textContent).toMatch(/Not offered: not today/);
     expect(chooser.textContent).toMatch(/starts with `npm install`/);
@@ -157,7 +163,7 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     await act(async () =>
       fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
     );
-    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', 'prefix', 'd-prefix', 2);
+    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', ['d-prefix'], 'c-1', 2);
     expect(api.answer).not.toHaveBeenCalled();
     expect(screen.queryByRole('group', { name: /Allow from now on/ })).toBeNull();
   });
@@ -166,7 +172,7 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     world();
     api.allowSimilar.mockResolvedValueOnce({
       ok: true,
-      ruleNotStored: 'allowed once; the rule was not stored: project app is completed',
+      ruleNotStored: 'allowed once; the rules were not stored: project app is completed',
     });
     show(<QuestionCard question={install} />);
     await act(async () =>
@@ -176,8 +182,8 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     await act(async () =>
       fireEvent.click(within(chooser).getByRole('button', { name: 'Allow and remember' })),
     );
-    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', 'exact', 'd-exact', 2);
-    expect(chooser.textContent).toMatch(/allowed once; the rule was not stored/);
+    expect(api.allowSimilar).toHaveBeenCalledWith('q-install', ['d-site'], 'c-1', 2);
+    expect(chooser.textContent).toMatch(/allowed once; the rules were not stored/);
   });
 
   it('Escape and Cancel close the chooser without answering', async () => {

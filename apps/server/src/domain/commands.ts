@@ -127,6 +127,7 @@ import {
 } from './permissions.js';
 import {
   aliasesOf,
+  callDigest,
   draftDigest,
   similarOptions,
   type RuleDraft,
@@ -1222,44 +1223,50 @@ export class Commands implements DomainCommands {
     };
   }
 
-  /** The chooser's options for an open permission request, with the project it would go to. */
+  /** The chooser's rows for an open permission request, with the project it would go to. */
   private similarFor(question: Question): SimilarOptions & { project?: Project } {
+    const call = question.context.toolCall;
+    const refuse = (refused: string, project?: Project) => ({
+      ...(project ? { project } : {}),
+      refused,
+      call: !call
+        ? ''
+        : call.toolName === 'Bash' &&
+            typeof (call.input as { command?: unknown })?.command === 'string'
+          ? (call.input as { command: string }).command.trim()
+          : call.toolName,
+      asking: [],
+      notRememberable: [],
+      rows: [],
+    });
     if (question.kind !== 'permission') {
-      return { refused: 'only a permission request can allow similar actions', options: [] };
+      return refuse('only a permission request can allow similar actions');
     }
     // An off-script flag call (P12-06) is approved once or the Steward is stopped: never a rule.
     if (question.context.offScript) {
-      return {
-        refused: 'an off-script launch-flag call is approved once or the Steward stopped',
-        options: [],
-      };
+      return refuse('an off-script launch-flag call is approved once or the Steward stopped');
     }
-    const call = question.context.toolCall;
-    if (!call) return { refused: 'the request names no tool call', options: [] };
+    if (!call) return refuse('the request names no tool call');
     // A publishing run works without rules (ruling R26): a rule made from its card would mislead.
     const asker = this.log.tables.agents.get(question.originAgentId);
     if (
       question.context.origin?.publishingRun ||
       (asker && isPublishingRun(this.log.tables, asker))
     ) {
-      return {
-        refused: 'a publishing run asks for every outward call: allow it once',
-        options: [],
-      };
+      return refuse('a publishing run asks for every outward call: allow it once');
     }
     const { projectId, policy, ctx } = this.permissionContextOf(question);
     const project = projectId ? this.log.tables.projects.get(projectId) : undefined;
     if (!project) {
-      return {
-        refused:
-          "the request belongs to no project (the Harmonizer's or a standalone task's): allow it once",
-        options: [],
-      };
+      return refuse(
+        "the request belongs to no project (the Harmonizer's or a standalone task's): allow it once",
+      );
     }
     if (RULES_END_IN.has(project.state)) {
-      return { project, refused: `project ${project.name} is ${project.state}`, options: [] };
+      return refuse(`project ${project.name} is ${project.state}`, project);
     }
-    return { project, ...similarOptions({ call, ctx, policy }) };
+    const rules = project.permissionRules ?? [];
+    return { project, ...similarOptions({ call, ctx, policy, rules }) };
   }
 
   /** Whether a request from `origin` may make or remove rules: the Mac, or `autoApproveRemote`. */
@@ -1268,46 +1275,59 @@ export class Commands implements DomainCommands {
   }
 
   /**
-   * What the card's "Allow similar" chooser offers for an open permission request (P9-17): one
-   * option per scope with its preview, computed here from the request (never by the client).
+   * What the card's "Allow similar" chooser offers for an open permission request (P9-17, amended
+   * by P14): the call, the parts that still ask, and one row per reason with its preview and the
+   * digest that binds it, computed here from the request (never by the client).
    */
   similarPreview(questionId: Id, write: WriteOptions = {}): SimilarPreviewResponse {
     const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
     const found = this.similarFor(question);
+    const call = question.context.toolCall;
+    const shown = (d: RuleDraft) => ({
+      label: d.label,
+      preview: d.preview,
+      digest: draftDigest(d),
+    });
     return {
       questionId,
       ...(found.project ? { projectId: found.project.id, projectName: found.project.name } : {}),
       ...(found.refused ? { refused: found.refused } : {}),
-      options: found.options.map((o) =>
-        o.available
+      call: found.call,
+      asking: found.asking,
+      notRememberable: found.notRememberable,
+      callDigest: call ? callDigest(call) : '',
+      options: found.rows.map((r) =>
+        r.available
           ? {
-              scope: o.scope,
+              key: r.key,
+              kind: r.kind,
               available: true,
-              label: o.draft.label,
-              preview: o.draft.preview,
-              digest: draftDigest(o.draft),
+              ...shown(r.draft),
+              covers: r.covers,
+              ...(r.widen ? { widen: r.widen.map(shown) } : {}),
             }
-          : { scope: o.scope, available: false, reason: o.reason },
+          : { key: r.key, kind: r.kind, available: false, reason: r.reason },
       ),
       allowed: this.mayWriteRules(write.origin) && !found.refused,
     };
   }
 
   /**
-   * The user's "Allow similar" (P9-17, decision 138): the request is answered "allow" (through
-   * its session first when one waits on it, like any answer) and the rule of `scope` the server
-   * drafts from it is stored on the asking agent's project. Refused before anything happens: not
-   * the user (agents never make rules), a remote or unknown origin without `autoApproveRemote`
-   * (decisions 37, 90), a stale `version`, a push, a request outside any project or of a project
-   * that takes no rules, a scope the chooser does not offer, and — 409 `stale` — a rule that is not
-   * the one the preview showed (`digest`, review S1). With no session waiting, the answer and the
-   * rule are one transaction; with one, the session gets the answer first and the rule is stored
-   * after it — should that fail (the project closed meanwhile), the request stays allowed once
-   * and `ruleNotStored` says why (review S6).
+   * The user's "Allow and remember ticked" (P9-17, decision 138, amended by P14): the request is
+   * answered "allow" once (through its session first when one waits on it, like any answer) and
+   * one rule per ticked row — drafted by the server from the request — is stored on the asking
+   * agent's project. Refused before anything happens: not the user (agents never make rules), a
+   * remote or unknown origin without `autoApproveRemote` (decisions 37, 90), a stale `version`, a
+   * request outside any project or of a project that takes no rules, no ticked row, and — 409
+   * `stale` — a call that is not the one the preview showed (`callDigest`) or a digest that is no
+   * row's (or wider folder's) any more (review S1). With no session waiting, the answer and the
+   * rules are one transaction; with one, the session gets the answer first and the rules are
+   * stored after it — should that fail (the project closed meanwhile), the request stays allowed
+   * once and `ruleNotStored` says why (review S6).
    */
   async allowSimilar(
     input: AllowSimilarInput,
-  ): Promise<CommandResult<{ rule?: PermissionRule; ruleNotStored?: string }>> {
+  ): Promise<CommandResult<{ rules?: PermissionRule[]; ruleNotStored?: string }>> {
     const { questionId, by } = input;
     if (by.type !== 'user') {
       throw new DomainError('invalid', 'only the user makes "Allow similar" rules');
@@ -1331,31 +1351,38 @@ export class Commands implements DomainCommands {
     if (found.refused || !found.project) {
       throw new DomainError('invalid', `no rule can be made: ${found.refused ?? 'no project'}`);
     }
-    const option = found.options.find((o) => o.scope === input.scope);
-    if (!option?.available) {
-      throw new DomainError(
-        'invalid',
-        `no ${input.scope} rule can be made: ${option && !option.available ? option.reason : 'not offered'}`,
-      );
+    if (input.digests.length === 0) {
+      throw new DomainError('invalid', 'tick at least one row to remember');
     }
-    const draft: RuleDraft = option.draft;
-    if (draftDigest(draft) !== input.digest) {
-      throw new DomainError(
+    const call = question.context.toolCall;
+    const stale = () =>
+      new DomainError(
         'stale',
-        'the rule is not the one the preview showed any more (the request or the table changed): look at the preview again',
+        'the rules are not the ones the preview showed any more (the request, the table or the rules changed): look at the preview again',
       );
+    if (!call || callDigest(call) !== input.callDigest) throw stale();
+    const offered = new Map<string, RuleDraft>();
+    for (const row of found.rows) {
+      if (!row.available) continue;
+      for (const d of [row.draft, ...(row.widen ?? [])]) offered.set(draftDigest(d), d);
+    }
+    const drafts: RuleDraft[] = [];
+    for (const digest of new Set(input.digests)) {
+      const draft = offered.get(digest);
+      if (!draft) throw stale();
+      drafts.push(draft);
     }
     const projectId = found.project.id;
-    // The rule's checks before the answer (review S6): nothing is answered for a rule refused.
-    checkRuleAllowed(found.project, draft);
+    // The rules' checks before the answer (review S6): nothing is answered for a rule refused.
+    for (const draft of drafts) checkRuleAllowed(found.project, draft);
     const made = { by, origin: input.origin ?? ('remote' as const), questionId };
     if (!this.agents?.hasQuestion(questionId)) {
-      // No session waits: the answer and the rule in one transaction.
+      // No session waits: the answer and the rules in one transaction.
       const result = await this.run((ctx) => {
         answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) });
-        return addPermissionRule(ctx, projectId, draft, made);
+        return drafts.map((d) => addPermissionRule(ctx, projectId, d, made));
       });
-      return { value: { rule: result.value }, events: result.events };
+      return { value: { rules: result.value }, events: result.events };
     }
     const answered = await this.answerQuestion({
       questionId,
@@ -1365,12 +1392,14 @@ export class Commands implements DomainCommands {
       ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
     });
     try {
-      const stored = await this.run((ctx) => addPermissionRule(ctx, projectId, draft, made));
-      return { value: { rule: stored.value }, events: [...answered.events, ...stored.events] };
+      const stored = await this.run((ctx) =>
+        drafts.map((d) => addPermissionRule(ctx, projectId, d, made)),
+      );
+      return { value: { rules: stored.value }, events: [...answered.events, ...stored.events] };
     } catch (error) {
       if (!(error instanceof DomainError)) throw error;
       return {
-        value: { ruleNotStored: `allowed once; the rule was not stored: ${error.message}` },
+        value: { ruleNotStored: `allowed once; the rules were not stored: ${error.message}` },
         events: answered.events,
       };
     }

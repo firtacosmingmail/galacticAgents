@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
@@ -9,6 +9,7 @@ import {
   type PermissionRule,
   type PermissionRuleMatch,
   type PermissionRuleScope,
+  type SimilarOption,
   type ToolCall,
 } from '@galactic/protocol';
 import {
@@ -57,12 +58,17 @@ import {
  * command prefix or the whole category would cover the whole computer, so neither ever covers one.
  */
 
-/** The real path of an existing file or folder (symlinks resolved), or `undefined`. */
+/**
+ * The real path of an existing file or folder (symlinks resolved), or `undefined`. A path ending
+ * in a separator names a folder only: `undefined` for a file (P14: a folder row's folder).
+ */
 export type RealPath = (path: string) => string | undefined;
 
 export const systemRealPath: RealPath = (p) => {
   try {
-    return realpathSync.native(p);
+    const real = realpathSync.native(p);
+    if (p.length > 1 && p.endsWith(sep) && !statSync(real).isDirectory()) return undefined;
+    return real;
   } catch {
     return undefined;
   }
@@ -402,14 +408,41 @@ export function draftDigest(
   return createHash('sha256').update(body).digest('hex').slice(0, 32);
 }
 
-export type ScopeOption =
-  | { scope: PermissionRuleScope; available: true; draft: RuleDraft }
-  | { scope: PermissionRuleScope; available: false; reason: string };
+/**
+ * What binds the chooser to the call it was drafted from (P14): a hash of the tool's name and its
+ * input. The preview sends it, "Allow and remember" sends it back, and the server refuses (409
+ * `stale`) when the request's call reads otherwise.
+ */
+export function callDigest(call: ToolCall): string {
+  const body = stableJson({ toolName: call.toolName, input: call.input ?? null });
+  return createHash('sha256').update(body).digest('hex').slice(0, 32);
+}
+
+/** One row of the chooser (P14): a reason of the call, generalised, or why it is not offered. */
+export type Row =
+  | {
+      /** `folder:<real folder>`, `site:<host>`, `prefix`, `category`. */
+      key: string;
+      kind: SimilarOption['kind'];
+      available: true;
+      draft: RuleDraft;
+      /** The shown parts of the call this row would cover, in command order. */
+      covers: string[];
+      /** A folder row's wider folders, narrowest first. */
+      widen?: RuleDraft[];
+    }
+  | { key: string; kind: SimilarOption['kind']; available: false; reason: string };
 
 export interface SimilarOptions {
-  /** Why no rule can be made from this request at all (a push, a denial, …). */
+  /** Why no rule can be made from this request at all (the table allows or denies it now, …). */
   refused?: string;
-  options: ScopeOption[];
+  /** The command, or `<tool> <subject>` for another tool. */
+  call: string;
+  /** The shown parts of the reasons no rule of the project covers yet. */
+  asking: string[];
+  /** Parts that ask but can never become a rule (a push, guarded ground, an unreadable part). */
+  notRememberable: { part: string; reason: string }[];
+  rows: Row[];
 }
 
 const shorten = (s: string, n = 120) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -422,198 +455,323 @@ function tildify(p: string, ctx: PolicyContext): string {
   return tildeOf(p, ctx.home ?? homedir());
 }
 
-const GROUP_TOOLS: Record<Group, string> = {
-  read: 'Reading, searching and listing (Read, Glob, Grep, LS)',
-  edit: 'Writing and editing (Write, Edit, MultiEdit, NotebookEdit)',
-};
+/** The call as the chooser shows it: the command, or the tool with what it names. */
+function callText(call: ToolCall, subject: Subject, ctx: PolicyContext): string {
+  if (subject.kind === 'command') return subject.command;
+  if (subject.kind === 'paths') {
+    const shown = subject.paths.map((p) => tildify(p, ctx)).join(', ');
+    return `${call.toolName} ${shown || shorten(subject.text)}`;
+  }
+  return `${call.toolName} ${shorten(subject.text)}`;
+}
 
 /**
- * The folder a folder rule would cover: the common folder of the call's paths — a file's folder,
- * or the folder itself for a search or a listing. Never the root, the home folder or above it.
+ * The folder a file tool's folder row would cover: the common folder of the call's real paths —
+ * a file's folder, or the folder itself for a search or a listing. `undefined` when the engine
+ * cannot tell where the call points.
  */
-function proposeFolder(
+function fileToolFolder(
   call: ToolCall,
   subject: Extract<Subject, { kind: 'paths' }>,
-  ctx: PolicyContext,
-): { folder: string } | { reason: string } {
-  if (subject.unreadable || subject.paths.length === 0) {
-    return { reason: 'the engine cannot tell where this call points' };
-  }
+): string | undefined {
+  if (subject.unreadable || subject.paths.length === 0) return undefined;
   const listing = call.toolName === 'Glob' || call.toolName === 'Grep' || call.toolName === 'LS';
   const folders = subject.paths.map((p) => (listing ? p : dirname(p)));
   let common = folders[0]!;
   for (const f of folders.slice(1)) {
     while (!within(common, f)) common = dirname(common);
   }
-  const home = ctx.home ?? homedir();
-  if (dirname(common) === common || within(common, home)) {
-    return { reason: `${tildify(common, ctx)} is too broad (the root or the home folder)` };
-  }
-  return { folder: common };
+  return common;
+}
+
+const NOT_REMEMBERABLE = {
+  push: 'a push always asks (decision 49)',
+  guarded:
+    'guarded ground (agent or git configuration, the deliverables folder, your shell set-up, ~/.ssh): it always asks',
+  opaque: 'the engine cannot read this part safely, so it always asks',
+  nowhere: 'the engine cannot tell where it points',
+  noSite: 'no visible site, and no command prefix or category covers it',
+  other: 'no rule can be offered for it',
+} as const;
+
+const TOO_BROAD = 'too broad (the root or the home folder)';
+
+/** The `cd`-like commands whose finding's path is the folder they enter. */
+const ENTERS = new Set(['cd', 'pushd', 'chdir']);
+
+function folderDraft(tool: string, folder: string, shown: string): RuleDraft {
+  return {
+    scope: 'folder',
+    tool,
+    match: { kind: 'folder', folder, access: 'any' },
+    categories: ['outside_workspace'],
+    label: `${shown}/…`,
+    preview: `Any command or file tool reading or writing under ${shown} (symlinks followed) — a delete, a push, or a write to git or agent configuration there still asks.`,
+  };
+}
+
+function siteDraft(host: string): RuleDraft {
+  return {
+    scope: 'site',
+    tool: '*',
+    match: { kind: 'host', host },
+    categories: ['network'],
+    label: host,
+    preview: `Any address on ${host} or its subdomains (${host}, *.${host}), from any tool — not other sites, never a push.`,
+  };
+}
+
+/** The non-empty parts of `findings`, de-duplicated, in command order. */
+const partsOf = (findings: readonly Finding[]) => [
+  ...new Set(findings.map((f) => f.part).filter((p) => p !== '')),
+];
+
+/**
+ * The reason lines of an unreadable call that no finding stands for — the parts the engine could
+ * not read — as `{ part }` (the text after the line's first `: `, else the whole call).
+ */
+function opaqueParts(c: Classification, call: string): string[] {
+  if (!c.unclassified) return [];
+  const known = new Set(c.findings.flatMap((f) => [f.reason, ...(f.merged ?? [])]));
+  const lines = c.reasons.filter((r) => !known.has(r) && !r.startsWith('curl reads and sends'));
+  const parts = lines.map((r) => {
+    const at = r.indexOf(': ');
+    return at < 0 ? call : r.slice(at + 2);
+  });
+  return [...new Set(parts.length > 0 ? parts : [call])];
 }
 
 /**
- * What the card's "Allow similar" chooser offers for a request (P9-17): one option per scope,
- * each with the rule the server would store and a preview of exactly what it matches, or why the
- * scope is not offered. Refused as a whole when the table does not ask about the call any more
- * (it allows or denies it now), for a push, for a write to configuration or deliverables.
+ * What the card's "Allow similar" chooser offers for a request (P9-17, amended by P14): the call,
+ * the parts of it that still ask, and one row per reason no rule of the project covers yet — a
+ * folder for the paths outside the workspace (with wider folders up to, never including, the root
+ * or the home folder), a site per visible host, the command's prefix and the whole category for
+ * the other reasons — each with the rule the server would store and a preview of exactly what it
+ * covers, or why it is not offered. No "exactly this" row: an exact rule is never drafted any
+ * more. A push, a guarded write and an unreadable part get no row (`notRememberable`); the rest of
+ * the call still gets its rows, so a later readable call benefits. Refused as a whole only when
+ * the table does not ask about the call any more, or the project's rules cover it now.
  */
-export function similarOptions(input: RuleInput): SimilarOptions {
+export function similarOptions(
+  input: RuleInput & { rules?: readonly PermissionRule[] },
+): SimilarOptions {
   const { call, ctx, policy } = input;
   const realPath = input.realPath ?? systemRealPath;
+  const subject = subjectOf(call, ctx, realPath);
+  const shownCall = callText(call, subject, ctx);
+  const nothing = { call: shownCall, asking: [], notRememberable: [], rows: [] };
   const verdict = evaluate(policy, call, ctx);
-  if (verdict.alwaysAllow) return { refused: 'this call needs no permission', options: [] };
-  const never = neverByRule(verdict);
-  if (never) return { refused: never, options: [] };
+  if (verdict.alwaysAllow) return { refused: 'this call needs no permission', ...nothing };
   if (verdict.decision !== 'ask') {
     return {
       refused: `the project's table ${verdict.decision === 'deny' ? 'denies' : 'allows'} this call now`,
-      options: [],
+      ...nothing,
     };
   }
-  const asking = askingOf(policy, verdict);
-  const subject = subjectOf(call, ctx, realPath);
+  const covered = coverage(input.rules ?? [], { ...input, realPath }, verdict);
+  if (covered.allowed) return { refused: "the project's rules cover this call now", ...nothing };
+  const uncovered = covered.uncovered;
   const tool = call.toolName;
-  const options: ScopeOption[] = [];
-  const asks =
-    asking.categories.length > 0
-      ? ` (the table asks about it as ${categoryWords(asking.categories)})`
-      : '';
-  const only =
-    asking.categories.length > 0
-      ? ` — only while the table asks about it as ${categoryWords(asking.categories)} and nothing else`
-      : '';
-  // Outside the workspace (review B2): exactly this, or a folder — never a prefix or the category.
-  const outside = asking.categories.includes('outside_workspace');
+  const notRememberable: { part: string; reason: string }[] = [];
+  const opaque = opaqueParts(verdict, shownCall);
+  const asking = [...new Set([...partsOf(uncovered), ...opaque])];
 
-  // Exactly this.
-  const exactText =
-    subject.kind === 'command'
-      ? subject.command
-      : subject.kind === 'paths'
-        ? subject.text
-        : subject.text;
-  const exactLabel =
-    subject.kind === 'paths'
-      ? `${tool} ${subject.paths.map((p) => tildify(p, ctx)).join(', ') || shorten(subject.text)}`
-      : subject.kind === 'command'
-        ? shorten(subject.command)
-        : `${tool} ${shorten(subject.text)}`;
-  options.push({
-    scope: 'exact',
-    available: true,
-    draft: {
-      scope: 'exact',
-      tool,
-      match: { kind: 'text', text: exactText },
-      categories: asking.categories,
-      ...(asking.unclassified ? { unclassified: true as const } : {}),
-      label: exactLabel,
-      preview:
-        subject.kind === 'command'
-          ? `Exactly the command \`${shorten(subject.command, 200)}\`${asks}.`
-          : subject.kind === 'paths'
-            ? `${GROUP_TOOLS[subject.group]} exactly ${subject.paths.map((p) => tildify(p, ctx)).join(', ') || 'what this call names'}${asks}.`
-            : `${tool} with exactly this input: ${shorten(subject.text, 200)}${asks}.`,
-    },
-  });
+  // What can never become a rule: a push, a guarded write — and, conservatively, any path on
+  // guarded ground, read or written (no folder row is offered there).
+  const isGuarded = (f: Finding) =>
+    f.guarded === true || (f.path !== undefined && guardedWriteReason(f.path, ctx) !== undefined);
+  const unremembered = new Set<Finding>();
+  for (const f of uncovered) {
+    if (f.action === 'push' || isGuarded(f)) {
+      unremembered.add(f);
+      notRememberable.push({
+        part: f.part || shownCall,
+        reason: f.action === 'push' ? NOT_REMEMBERABLE.push : NOT_REMEMBERABLE.guarded,
+      });
+    }
+  }
+  if (verdict.guarded && ![...unremembered].some((f) => f.action !== 'push')) {
+    notRememberable.push({ part: shownCall, reason: NOT_REMEMBERABLE.guarded });
+  }
+  for (const part of opaque) notRememberable.push({ part, reason: NOT_REMEMBERABLE.opaque });
+  const open = uncovered.filter((f) => !unremembered.has(f));
+  const inRow = new Set<Finding>();
+  const rows: Row[] = [];
 
-  // This prefix / folder.
-  if (asking.unclassified) {
-    options.push({
-      scope: 'prefix',
-      available: false,
-      reason: 'the engine cannot read this call, so only this exact call can be allowed',
-    });
-  } else if (subject.kind === 'command' && outside) {
-    options.push({
-      scope: 'prefix',
-      available: false,
-      reason:
-        'it reaches outside the workspace, where a command prefix would cover the whole computer: only this exact command can be allowed',
-    });
+  // Folders: each outside path's folder (its real path), merged into a drafted folder above it.
+  const home = ctx.home ?? homedir();
+  const realHome = physicalPath(home, ctx, realPath) ?? home;
+  const tooBroad = (f: string) => !coverableFolder(f, ctx) || within(f, realHome);
+  const folderOf = new Map<Finding, { folder: string; shown: string }>();
+  const outside = open.filter((f) => f.action === 'outside_workspace');
+  if (subject.kind === 'paths') {
+    const folder = fileToolFolder(call, subject);
+    for (const f of outside) {
+      if (folder !== undefined) folderOf.set(f, { folder, shown: tildify(folder, ctx) });
+    }
   } else if (subject.kind === 'command') {
-    const words = proposePrefix(subject.command);
-    options.push(
-      words
-        ? {
-            scope: 'prefix',
-            available: true,
-            draft: {
-              scope: 'prefix',
-              tool,
-              match: { kind: 'words', words },
-              categories: asking.categories,
-              label: `${words.join(' ')} … (and any further arguments)`,
-              preview:
-                `Any command line in which every command starts with \`${words.join(' ')}\`, ` +
-                'whatever arguments follow — a line that joins another command (;, &&, |, $(…)) ' +
-                `or redirects to a file is not covered${only}.${scriptWarning(words)}`,
-            },
-          }
-        : { scope: 'prefix', available: false, reason: noPrefixReason(subject.command) },
-    );
-  } else if (subject.kind === 'paths') {
-    const folder = proposeFolder(call, subject, ctx);
-    options.push(
-      'folder' in folder
-        ? {
-            scope: 'prefix',
-            available: true,
-            draft: {
-              scope: 'prefix',
-              tool,
-              match: { kind: 'folder', folder: folder.folder },
-              categories: asking.categories,
-              label: `${tildify(folder.folder, ctx)}/…`,
-              preview:
-                `${GROUP_TOOLS[subject.group]} anything under ${tildify(folder.folder, ctx)} ` +
-                `(symlinks followed: a link that leads elsewhere is not covered)${only}.`,
-            },
-          }
-        : { scope: 'prefix', available: false, reason: folder.reason },
-    );
-  } else {
-    options.push({
-      scope: 'prefix',
-      available: false,
-      reason: `${tool} has no command prefix or folder`,
+    for (const f of outside) {
+      const real = f.path !== undefined ? physicalPath(f.path, ctx, realPath) : undefined;
+      if (f.path === undefined || real === undefined) continue;
+      const name = f.words?.[commandHead(f.words)];
+      // A folder entered (`cd`), or one that exists as a folder (`p/` resolves).
+      const whole =
+        (name !== undefined && ENTERS.has(name)) || realPath(`${real}${sep}`) !== undefined;
+      const folder = whole ? real : dirname(real);
+      const lexical = whole ? f.path : dirname(f.path);
+      const sameFolder = physicalPath(lexical, ctx, realPath) === folder;
+      folderOf.set(f, { folder, shown: tildify(sameFolder ? lexical : folder, ctx) });
+    }
+  }
+  const candidates = [...new Set([...folderOf.values()].map((v) => v.folder))];
+  const outermost = (folder: string) =>
+    tooBroad(folder)
+      ? folder
+      : candidates
+          .filter((c) => !tooBroad(c) && within(c, folder))
+          .reduce((a, b) => (b.length < a.length ? b : a), folder);
+  const byFolder = new Map<string, Finding[]>();
+  for (const [f, v] of folderOf) {
+    const target = outermost(v.folder);
+    byFolder.set(target, [...(byFolder.get(target) ?? []), f]);
+  }
+  for (const [folder, findings] of byFolder) {
+    findings.forEach((f) => inRow.add(f));
+    const key = `folder:${folder}`;
+    if (tooBroad(folder)) {
+      rows.push({
+        key,
+        kind: 'folder',
+        available: false,
+        reason: `${tildify(folder, ctx)}: ${TOO_BROAD}`,
+      });
+      continue;
+    }
+    const shown =
+      [...folderOf.values()].find((v) => v.folder === folder)?.shown ?? tildify(folder, ctx);
+    const widen: RuleDraft[] = [];
+    for (let up = dirname(folder); !tooBroad(up); up = dirname(up)) {
+      widen.push(folderDraft(tool, up, tildify(up, ctx)));
+    }
+    rows.push({
+      key,
+      kind: 'folder',
+      available: true,
+      draft: folderDraft(tool, folder, shown),
+      covers: partsOf(findings),
+      ...(widen.length > 0 ? { widen } : {}),
     });
   }
 
-  // The whole category.
-  if (asking.unclassified || asking.categories.length === 0) {
-    options.push({
-      scope: 'category',
-      available: false,
-      reason: 'the engine cannot read this call, so it has no category',
+  // Sites: one per visible host of the network reasons.
+  const visible = open.filter((f) => f.action === 'network' && (f.hosts?.length ?? 0) > 0);
+  for (const host of [...new Set(visible.flatMap((f) => f.hosts ?? []))]) {
+    const findings = visible.filter((f) => f.hosts?.includes(host));
+    findings.forEach((f) => inRow.add(f));
+    rows.push({
+      key: `site:${host}`,
+      kind: 'site',
+      available: true,
+      draft: siteDraft(host),
+      covers: partsOf(findings),
     });
-  } else if (outside) {
-    options.push({
-      scope: 'category',
-      available: false,
-      reason:
-        'outside the workspace as a whole category would cover the whole computer: allow exactly this, or a folder',
-    });
-  } else {
-    options.push({
-      scope: 'category',
+  }
+
+  // The command's prefix, for its reasons that are neither outside nor on a visible site.
+  const other = open.filter((f) => f.action !== 'outside_workspace' && !visible.includes(f));
+  const order = (fs: readonly Finding[]) =>
+    PermissionAction.options.filter((a) => fs.some((f) => f.action === a));
+  if (subject.kind === 'command' && other.length > 0) {
+    const words = verdict.unclassified ? undefined : proposePrefix(subject.command);
+    const categories = order(other);
+    if (words) {
+      other.forEach((f) => inRow.add(f));
+      rows.push({
+        key: 'prefix',
+        kind: 'prefix',
+        available: true,
+        draft: {
+          scope: 'prefix',
+          tool,
+          match: { kind: 'words', words },
+          categories,
+          label: `${words.join(' ')} … (and any further arguments)`,
+          preview:
+            `Any command line in which every command starts with \`${words.join(' ')}\`, ` +
+            'whatever arguments follow — a line that joins another command (;, &&, |, $(…)) ' +
+            `or redirects to a file is not covered; only for ${categoryWords(categories)}, ` +
+            `never outside the workspace or a push.${scriptWarning(words)}`,
+        },
+        covers: partsOf(other),
+      });
+    } else {
+      rows.push({
+        key: 'prefix',
+        kind: 'prefix',
+        available: false,
+        reason: verdict.unclassified
+          ? 'the engine cannot read this call, so it has no prefix'
+          : noPrefixReason(subject.command),
+      });
+    }
+  }
+
+  // The whole category, for every reason that is not outside the workspace.
+  const inside = open.filter((f) => f.action !== 'outside_workspace');
+  const categories = order(inside);
+  if (categories.length > 0) {
+    inside.forEach((f) => inRow.add(f));
+    rows.push({
+      key: 'category',
+      kind: 'category',
       available: true,
       draft: {
         scope: 'category',
         tool: '*',
         match: { kind: 'categories' },
-        categories: asking.categories,
-        label: categoryWords(asking.categories),
+        categories,
+        label: categoryWords(categories),
         preview:
-          `Any tool call the table asks about only as ${categoryWords(asking.categories)} — ` +
+          `Any tool call the table asks about only as ${categoryWords(categories)} — ` +
           'never a push, never what the table denies, never anything outside the workspace, ' +
           'never a write to agent or git configuration, the deliverables folder or your shell ' +
           'and login set-up.',
       },
+      covers: partsOf(inside),
+    });
+  } else if (outside.length > 0) {
+    rows.push({
+      key: 'category',
+      kind: 'category',
+      available: false,
+      reason:
+        'outside the workspace as a whole category would cover the whole computer: allow a folder',
     });
   }
-  return { options };
+
+  // Whatever is left asks with no row: allowed once only.
+  for (const f of open) {
+    if (inRow.has(f) || f.part === '') continue;
+    notRememberable.push({
+      part: f.part,
+      reason:
+        f.action === 'outside_workspace'
+          ? NOT_REMEMBERABLE.nowhere
+          : f.action === 'network'
+            ? NOT_REMEMBERABLE.noSite
+            : NOT_REMEMBERABLE.other,
+    });
+  }
+  const seen = new Set<string>();
+  return {
+    call: shownCall,
+    asking,
+    notRememberable: notRememberable.filter((n) => {
+      const k = `${n.part}\n${n.reason}`;
+      return seen.has(k) ? false : (seen.add(k), true);
+    }),
+    rows,
+  };
 }
 
 // --- matching (the gate) --------------------------------------------------------------------
@@ -902,8 +1060,12 @@ export function unattendedRuleRefusal(
     folder: ['folder'],
     site: ['host'],
   };
-  if (scope === 'folder' || scope === 'site') {
-    return `a ${scope} rule is not offered to a job (P14)`;
+  // The card's per-reason kinds (P14) are not offered to a job: a folder or site scope, a host,
+  // or a folder made from a command (`access`).
+  if (scope === 'site' || match.kind === 'host')
+    return 'site rules are for the permission card only';
+  if (scope === 'folder' || (match.kind === 'folder' && match.access !== undefined)) {
+    return 'folder rules are for the permission card only';
   }
   if (!pairs[scope].includes(match.kind)) {
     return `a ${scope} rule never matches ${match.kind === 'categories' ? 'whole categories' : `a ${match.kind}`}`;

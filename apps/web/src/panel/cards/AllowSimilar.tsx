@@ -1,9 +1,9 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type {
   Id,
-  PermissionRuleScope,
   Project,
   Question,
+  SimilarOption,
   SimilarPreviewResponse,
 } from '@galactic/protocol';
 import { ApiError } from '../../console/api.js';
@@ -53,12 +53,12 @@ export function useOffersSimilar(q: Question, world: WorldState): Project | unde
   return project;
 }
 
-const SCOPE_WORDS: Record<PermissionRuleScope, string> = {
-  exact: 'Exactly this',
-  prefix: 'This command prefix / folder',
-  category: 'This whole category',
+// P14-04 kept this one-choice chooser compiling against the per-reason rows; P14-05 rewrites it.
+const KIND_WORDS: Record<SimilarOption['kind'], string> = {
   folder: 'This folder',
   site: 'This site',
+  prefix: 'This command prefix',
+  category: 'This whole category',
 };
 
 type Preview =
@@ -80,7 +80,7 @@ export function AllowSimilar({
   const api = useApi();
   const [open, setOpen] = useState(false);
   const [preview, setPreview] = useState<Preview>({ status: 'loading' });
-  const [scope, setScope] = useState<PermissionRuleScope | undefined>();
+  const [scope, setScope] = useState<string | undefined>();
   const { run, error, busy, clear } = useAction();
   const chooserId = useId();
   const opener = useRef<HTMLButtonElement>(null);
@@ -93,7 +93,7 @@ export function AllowSimilar({
       (data) => {
         if (!live) return;
         setPreview({ status: 'ready', data });
-        setScope(data.options.find((o) => o.available)?.scope);
+        setScope(data.options.find((o) => o.available)?.key);
       },
       (e: unknown) => live && setPreview({ status: 'error', error: (e as Error).message }),
     );
@@ -116,13 +116,14 @@ export function AllowSimilar({
   };
   const allow = async () => {
     if (!scope || preview.status !== 'ready') return;
-    const digest = preview.data.options.find((o) => o.scope === scope)?.digest;
+    const digest = preview.data.options.find((o) => o.key === scope)?.digest;
     if (!digest) return;
+    const { callDigest } = preview.data;
     let stale: string | undefined;
     const ok = await run(async () => {
       let result;
       try {
-        result = await api.allowSimilar(q.id, scope, digest, q.version);
+        result = await api.allowSimilar(q.id, [digest], callDigest, q.version);
       } catch (e) {
         if (e instanceof ApiError && e.code === 'stale') stale = e.message;
         throw e;
@@ -179,19 +180,19 @@ export function AllowSimilar({
             <>
               {preview.data.options.map((o) => (
                 <label
-                  key={o.scope}
+                  key={o.key}
                   className={`allow-similar-option${o.available ? '' : ' is-off'}`}
                 >
                   <input
                     type="radio"
                     name={`${chooserId}-scope`}
-                    value={o.scope}
-                    checked={scope === o.scope}
+                    value={o.key}
+                    checked={scope === o.key}
                     disabled={!o.available || busy}
-                    onChange={() => setScope(o.scope)}
+                    onChange={() => setScope(o.key)}
                   />
                   <span>
-                    <strong>{SCOPE_WORDS[o.scope]}</strong>
+                    <strong>{KIND_WORDS[o.kind]}</strong>
                     {o.label ? (
                       <>
                         {': '}

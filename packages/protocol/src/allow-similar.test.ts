@@ -14,9 +14,6 @@ const base = {
   origin: 'local',
 };
 
-// The P9-17 fields stay required until the server and web move over (Tasks 4 and 5).
-const old = { scope: 'folder', digest: 'x' };
-
 describe('per-reason "Allow similar" shapes (P14-01)', () => {
   it('parses a site rule on a host', () => {
     const rule = { ...base, scope: 'site', match: { kind: 'host', host: 'github.com' } };
@@ -43,14 +40,12 @@ describe('per-reason "Allow similar" shapes (P14-01)', () => {
   });
 
   it('needs at least one digest and a call digest to allow similar', () => {
-    expect(AllowSimilarBody.safeParse({ ...old, digests: [], callDigest: 'c' }).success).toBe(
-      false,
-    );
-    expect(AllowSimilarBody.safeParse({ ...old, digests: ['d'], callDigest: 'c' }).success).toBe(
-      true,
-    );
+    expect(AllowSimilarBody.safeParse({ digests: ['d'] }).success).toBe(false);
+    expect(AllowSimilarBody.safeParse({ scope: 'exact', digest: 'x' }).success).toBe(false);
+    expect(AllowSimilarBody.safeParse({ digests: [], callDigest: 'c' }).success).toBe(false);
+    expect(AllowSimilarBody.safeParse({ digests: ['d'], callDigest: 'c' }).success).toBe(true);
     expect(
-      AllowSimilarBody.safeParse({ ...old, digests: Array(21).fill('d'), callDigest: 'c' }).success,
+      AllowSimilarBody.safeParse({ digests: Array(21).fill('d'), callDigest: 'c' }).success,
     ).toBe(false);
   });
 

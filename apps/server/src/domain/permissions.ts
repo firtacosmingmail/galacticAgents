@@ -67,6 +67,8 @@ export interface Finding {
   /** The simple command's words and whether it redirects to a file (commands only). */
   words?: string[];
   redirects?: boolean;
+  /** A write to guarded ground (`guardedWriteReason`): no rule ever covers it (P14). */
+  guarded?: true;
   /**
    * Other reason lines of `reasons` this finding stands for: a second rule that reported the same
    * part and subject (`cd X` outside and leaving the workspace) adds no finding of its own.
@@ -389,13 +391,14 @@ function classifyPaths(
 
   const reasons: string[] = [];
   const findings: Finding[] = [];
-  const note = (part: string, reason: string, path?: string) => {
+  const note = (part: string, reason: string, path?: string, guarded?: true) => {
     reasons.push(reason);
     findings.push({
       action: 'outside_workspace',
       part,
       reason,
       ...(path !== undefined ? { path } : {}),
+      ...(guarded ? { guarded } : {}),
     });
   };
   let guarded = false;
@@ -407,6 +410,7 @@ function classifyPaths(
         `${tool} ${p}`,
         `${tool} on ${p}: ${guard}`,
         unalias(resolvePath(p, ctx, cwdOf(ctx)), ctx),
+        true,
       );
       guarded = true;
     } else if (!isInsideWorkspace(p, ctx)) {
@@ -1589,7 +1593,10 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       JSON.stringify(f.hosts) === JSON.stringify(finding.hosts);
     const existing = findings.find(same);
     if (!existing) findings.push(finding);
-    else if (existing.reason !== reason) (existing.merged ??= []).push(reason);
+    else {
+      if (existing.reason !== reason) (existing.merged ??= []).push(reason);
+      if (finding.guarded) existing.guarded = true;
+    }
   };
   let guarded = false;
   const trimmed = command.trim();
@@ -1659,7 +1666,11 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
     for (const g of guardedTargets(simple, here)) {
       guarded = true;
-      note('outside_workspace', `${g.path}: ${g.reason}`, seg(placeOf(g.path)));
+      note(
+        'outside_workspace',
+        `${g.path}: ${g.reason}`,
+        seg({ ...placeOf(g.path), guarded: true }),
+      );
     }
 
     const h = commandHead(simple.words);
