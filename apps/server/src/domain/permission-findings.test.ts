@@ -1032,4 +1032,26 @@ describe('residual holes, review round 3 (P14-08)', () => {
       expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
     }
   });
+
+  it("(d) rustc's -C link-arg(s) values are read like -Wl, parts", () => {
+    for (const cmd of [
+      'rustc -Clink-arg=-o/etc/x a.rs',
+      'rustc -C link-arg=-o/etc/x a.rs',
+      'rustc -C link-args=-o/etc/x a.rs',
+      "rustc -C 'link-args=-L lib -o /etc/x' a.rs",
+      'rustc --codegen link-arg=/etc/x a.rs',
+    ]) {
+      expect(findings(cmd), cmd).toContainEqual(
+        expect.objectContaining({ action: 'outside_workspace', path: '/etc/x' }),
+      );
+    }
+    // `--codegen=link-arg=/x` holds zsh's `=/x` expansion: unreadable, it asks.
+    expect(classifyCommand('rustc --codegen=link-arg=/etc/x a.rs', ctx).unclassified).toBe(true);
+    expect(classifyCommand('rustc -Clink-arg=-o.git/hooks/pre-commit a.rs', ctx).guarded).toBe(
+      true,
+    );
+    expect(
+      findings('rustc -C opt-level=3 a.rs').some((f) => f.action === 'outside_workspace'),
+    ).toBe(false);
+  });
 });

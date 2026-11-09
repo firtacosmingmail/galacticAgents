@@ -2131,6 +2131,10 @@ function guardedTargets(
       }
       if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
     }
+    for (const part of passThroughParts(command.words.slice(h + 1))) {
+      const values = part.startsWith('-') ? optionValues(part) : [];
+      candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [part]));
+    }
   }
   const out: { path: string; reason: string }[] = [];
   for (const c of candidates) {
@@ -2202,6 +2206,25 @@ const COMPILER_PATH_OPTION =
   /^-(?:isystem|iquote|idirafter|imacros|include|iprefix|iwithprefixbefore|iwithprefix|isysroot|iframework|imultilib|MF|MJ|dumpdir|dumpbase-ext|dumpbase)(.+)$/;
 /** An option that hands its comma-separated parts to the linker, assembler or preprocessor. */
 const PASS_THROUGH_OPTION = /^-W[alp],/;
+/** rustc's linker arguments: `-Clink-arg=…`, `-C link-args=…`, `--codegen[=]link-arg=…`. */
+const LINK_ARG = /^(?:-C|--codegen=?)?(link-args?)=(.*)$/s;
+
+/**
+ * The words an option passes on to another program (P14-08 review N-2, round 3): each comma
+ * part of `-Wl,`/`-Wa,`/`-Wp,`, and rustc's `link-arg=` value or `link-args=` words.
+ */
+function passThroughParts(words: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const [k, w] of words.entries()) {
+    if (PASS_THROUGH_OPTION.test(w)) out.push(...w.split(',').slice(1));
+    const m = LINK_ARG.exec(w);
+    const prev = words[k - 1];
+    if (m && (/^(?:-C|--codegen)/.test(w) || prev === '-C' || prev === '--codegen')) {
+      out.push(...(m[1] === 'link-args' ? m[2]!.split(/\s+/) : [m[2]!]));
+    }
+  }
+  return out.filter((p) => p !== '');
+}
 
 function pathsOf(command: SimpleCommand): CommandPaths {
   const out: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
@@ -2213,13 +2236,13 @@ function pathsOf(command: SimpleCommand): CommandPaths {
   for (const w of command.words) {
     const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
     if (long !== undefined) add(long, false);
-    // `-Wl,-o,/x`: each part is a word of its own (P14-08 review N-2).
-    if (PASS_THROUGH_OPTION.test(w)) for (const part of w.split(',').slice(1)) add(part, false);
     add(w, false);
     // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
     // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).
     if (ASSIGNMENT_WORD.test(w)) for (const part of assignedPaths(w)) add(part, false);
   }
+  // `-Wl,-o,/x`, `-Clink-arg=-o/x`: each passed-on part is a word of its own (P14-08 review N-2).
+  for (const part of passThroughParts(command.words)) add(part, false);
   // A file curl reads and sends is a read target, wherever it is (P9-17 review S2).
   for (const f of curlUploads(command.words)) add(f, true);
   for (const r of command.redirects) {
