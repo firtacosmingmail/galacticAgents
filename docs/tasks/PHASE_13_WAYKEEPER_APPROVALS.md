@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-02 · **Task status:** P13-02 in progress
-**Phase status:** in progress (1/7) — branch `agent-waykeeper-approvals`
+**Current task:** P13-03 · **Task status:** P13-02 done (2026-11-09)
+**Phase status:** in progress (2/7) — branch `agent-waykeeper-approvals`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -41,7 +41,7 @@ All seven run in order.
 - **Acceptance:** the plan's Task 1 tests pass; typecheck is green.
 
 ### P13-02 — Command splitter
-- **Status:** in progress · **Depends on:** P13-01 · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** P13-01 · **Parallel with:** —
 - Plan Task 2.
 
 ### P13-03 — Request judge
