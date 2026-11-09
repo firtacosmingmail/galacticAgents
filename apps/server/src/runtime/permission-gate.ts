@@ -11,8 +11,8 @@ import {
   type PermissionRule,
   type ToolCall,
 } from '@galactic/protocol';
-import { evaluate, type PolicyContext } from '../domain/permissions.js';
-import { aliasesOf, matchingRule, type RealPath } from '../domain/permission-rules.js';
+import { evaluate, type Finding, type PolicyContext } from '../domain/permissions.js';
+import { aliasesOf, coverage, type RealPath } from '../domain/permission-rules.js';
 
 /** The workspace's other spellings: shared with the chooser's offline context (P9-17 review S8). */
 export { aliasesOf };
@@ -70,8 +70,9 @@ export interface GateOptions {
   launchFlags?: () => readonly LaunchFlag[];
   /**
    * The project's "Allow similar" rules (P9-17, decision 138), read on every check like the
-   * policy: a call the table asks about that one of them matches is allowed — never one the table
-   * denies, never a push, never a configuration or deliverables write (`matchingRule`).
+   * policy: a call the table asks about is allowed when they cover every reason it asks for —
+   * never one the table denies, never a push, never a configuration or deliverables write
+   * (`coverage`, P14-03). A call they cover in part asks about the rest only.
    */
   rules?: () => readonly PermissionRule[];
   /**
@@ -89,11 +90,15 @@ export interface GateOptions {
   /** How a folder rule resolves symlinks (tests); default: the file system's. */
   realPath?: RealPath;
   /**
-   * Told about every call a rule allowed through `check()` (the adapters' hook), so the runtime
-   * logs it as `permission.decided{allow, ruleId}`. `decide()` callers log it themselves. Must not
-   * throw (a throw is swallowed).
+   * Told about every call rules allowed through `check()` (the adapters' hook), with every rule
+   * that covered part of it, so the runtime logs it as `permission.decided{allow, ruleIds}`.
+   * `decide()` callers log it themselves. Must not throw (a throw is swallowed).
    */
-  onRuleAllow?: (call: ToolCall, ruleId: Id, action: PermissionAction | undefined) => void;
+  onRuleAllow?: (
+    call: ToolCall,
+    ruleIds: readonly Id[],
+    action: PermissionAction | undefined,
+  ) => void;
   /**
    * Told about every call `check()` allows, whatever the reason (P13-04: the Steward's recent
    * actions the request judge sees). Not told about `decide()`. Must not throw (a throw is
@@ -216,18 +221,33 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
       }
       if (once) return { verdict: { decision: 'allow' }, ...action, allowedOnce: true };
     }
-    // A rule turns an `ask` into an `allow` (P9-17) — never under a policy that did not parse.
+    // Rules turn an `ask` into an `allow` when they cover every reason it asks for (P9-17,
+    // P14-03) — never under a policy that did not parse. Covered in part: ask about the rest.
     if (verdict.decision === 'ask' && !policyNote && opts.rules) {
       const rules = opts.rules();
-      const rule =
-        rules.length > 0
-          ? matchingRule(
-              rules,
-              { call, ctx, policy, ...(opts.realPath ? { realPath: opts.realPath } : {}) },
-              verdict,
-            )
-          : undefined;
-      if (rule) return { verdict: { decision: 'allow' }, ...action, ruleId: rule.id };
+      if (rules.length > 0) {
+        const covered = coverage(
+          rules,
+          { call, ctx, policy, ...(opts.realPath ? { realPath: opts.realPath } : {}) },
+          verdict,
+        );
+        const [first, ...more] = covered.ruleIds;
+        if (covered.allowed && first !== undefined) {
+          return { verdict: { decision: 'allow' }, ...action, ruleIds: [first, ...more] };
+        }
+        const rest = covered.uncovered[0]?.action;
+        if (first !== undefined && rest !== undefined) {
+          const labels = rules.filter((r) => covered.ruleIds.includes(r.id)).map((r) => r.label);
+          const linesOf = (f: Finding) => [f.reason, ...(f.merged ?? [])];
+          const uncovered = new Set(covered.uncovered.flatMap(linesOf));
+          const ofFindings = new Set(verdict.findings.flatMap(linesOf));
+          // The reasons still asked about, plus those no finding stands for (an unreadable part,
+          // a file curl sends); the covered ones become one muted line, last.
+          const reasons = verdict.reasons.filter((r) => uncovered.has(r) || !ofFindings.has(r));
+          reasons.push(`already allowed by: ${labels.join(', ')}`);
+          return { verdict: { decision: 'ask', action: rest, reasons }, action: rest };
+        }
+      }
     }
     switch (verdict.decision) {
       case 'allow':
@@ -276,9 +296,9 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
           // Logging an allowance never turns it into something else.
         }
       }
-      if (verdict.decision === 'allow' && decision.ruleId && opts.onRuleAllow) {
+      if (verdict.decision === 'allow' && decision.ruleIds && opts.onRuleAllow) {
         try {
-          opts.onRuleAllow(call, decision.ruleId, decision.action);
+          opts.onRuleAllow(call, decision.ruleIds, decision.action);
         } catch {
           // Logging an allowance never turns it into something else.
         }
@@ -305,8 +325,8 @@ export interface Decision {
   action?: PermissionAction;
   /** A refusal for the tool-call cap (logged as the agent's failure, not as a permission). */
   cap?: true;
-  /** The project's "Allow similar" rule that allowed the call (P9-17). */
-  ruleId?: Id;
+  /** The project's "Allow similar" rules that together allowed the call (P9-17, P14-03). */
+  ruleIds?: [Id, ...Id[]];
   /** The one call an approved publish let through (P11-06). */
   allowedOnce?: true;
   /** The launch flag whose tool this call is (P12-04): the runtime's scope watch decides it. */

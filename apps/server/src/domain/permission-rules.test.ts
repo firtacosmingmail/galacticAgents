@@ -12,12 +12,13 @@ import {
 } from './permissions.js';
 import {
   commandMatchesPrefix,
+  coverage,
   draftDigest,
-  matchingRule,
   physicalPath,
   prefixRefusal,
   proposePrefix,
   similarOptions,
+  type Coverage,
   type RealPath,
   type RuleDraft,
 } from './permission-rules.js';
@@ -71,6 +72,9 @@ function ruleFrom(
   };
 }
 
+/** The rule that allowed a call alone (the old single-rule tests), or `undefined`. */
+const ruleOf = (c: Coverage) => (c.allowed ? c.ruleIds.join(',') : undefined);
+
 /** Whether `rules` allow `call`, as the gate asks: only when the table asks about it. */
 function allows(
   rules: PermissionRule[],
@@ -79,7 +83,7 @@ function allows(
 ): string | undefined {
   const verdict = evaluate(policy, call, ctx);
   if (verdict.decision !== 'ask') return undefined;
-  return matchingRule(rules, { call, ctx, policy, realPath: REAL }, verdict)?.id;
+  return ruleOf(coverage(rules, { call, ctx, policy, realPath: REAL }, verdict));
 }
 
 describe('command prefixes (P9-17)', () => {
@@ -255,7 +259,9 @@ describe('rule matching (P9-17)', () => {
     const verdict = evaluate(DEFAULT, deliverables, withFolders);
     expect(verdict.decision).toBe('ask');
     expect(
-      matchingRule([outside], { call: deliverables, ctx: withFolders, policy: DEFAULT }, verdict),
+      ruleOf(
+        coverage([outside], { call: deliverables, ctx: withFolders, policy: DEFAULT }, verdict),
+      ),
     ).toBeUndefined();
 
     // An opaque command: only an exact rule made from that very call.
@@ -310,8 +316,9 @@ describe('folder rules on the real file system (P9-17)', () => {
         origin: 'local',
       };
       const check = (call: ToolCall) =>
-        matchingRule([rule], { call, ctx: real, policy: DEFAULT }, evaluate(DEFAULT, call, real))
-          ?.id;
+        ruleOf(
+          coverage([rule], { call, ctx: real, policy: DEFAULT }, evaluate(DEFAULT, call, real)),
+        );
       expect(check(read('~/specs/b.md'))).toBe('r-fs');
       expect(check(read('~/specs/out/key'))).toBeUndefined();
       expect(check(read('~/specs/out/../secret/key'))).toBeUndefined();
@@ -447,7 +454,7 @@ describe('guarded writes anywhere (P9-17 review B1)', () => {
       const verdict = evaluate(DEFAULT, call, here);
       for (const rule of [outsideCategory, homeEdit, otherEdit]) {
         expect(
-          matchingRule([rule], { call, ctx: here, policy: DEFAULT, realPath: REAL }, verdict),
+          ruleOf(coverage([rule], { call, ctx: here, policy: DEFAULT, realPath: REAL }, verdict)),
           `${what} by ${rule.id}`,
         ).toBeUndefined();
       }
@@ -482,7 +489,7 @@ describe('guarded writes anywhere (P9-17 review B1)', () => {
     const verdict = evaluate(DEFAULT, call, ctx);
     expect(verdict.guarded).toBeUndefined(); // lexically an ordinary file
     expect(
-      matchingRule([otherEdit], { call, ctx, policy: DEFAULT, realPath: links }, verdict),
+      ruleOf(coverage([otherEdit], { call, ctx, policy: DEFAULT, realPath: links }, verdict)),
     ).toBeUndefined();
   });
 
@@ -667,5 +674,251 @@ describe('the preview digest (P9-17 review S1)', () => {
     const other = optionsOf('npm install ky');
     expect(other[0]).not.toBe(digests[0]);
     expect(other[1]).toBe(digests[1]);
+  });
+});
+
+describe('coverage: every asked reason must be covered (P14-03)', () => {
+  const W = '/w';
+  const wctx: PolicyContext = { workspace: W, cwd: W, home: HOME };
+  const ASKS: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'ask',
+      network: 'ask',
+      destructive: 'ask',
+      push: 'ask',
+    },
+  };
+  const RUN_ASKS: PermissionPolicy = { rules: { ...ASKS.rules, run_workspace: 'ask' } };
+  const FS = fs(['/w', '/tmp', '/etc', '/home/u'], {
+    '/tmp/pr83/out': '/etc',
+    '/tmp/pr83/hooks': '/tmp/pr83/.git/hooks',
+  });
+
+  const folder = forged('r-folder', {
+    scope: 'folder',
+    tool: 'Bash',
+    match: { kind: 'folder', folder: '/tmp/pr83', access: 'any' },
+    categories: ['outside_workspace'],
+  });
+  const site = forged('r-site', {
+    scope: 'site',
+    tool: '*',
+    match: { kind: 'host', host: 'github.com' },
+    categories: ['network'],
+  });
+  const npmRun = forged('r-npm', {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['npm', 'run'] },
+    categories: ['run_workspace'],
+  });
+  const network = forged('r-net', {
+    scope: 'category',
+    tool: '*',
+    match: { kind: 'categories' },
+    categories: ['network'],
+  });
+
+  function cover(rules: PermissionRule[], call: ToolCall, policy: PermissionPolicy = ASKS) {
+    const verdict = evaluate(policy, call, wctx);
+    expect(verdict.decision, JSON.stringify(call)).toBe('ask');
+    return coverage(rules, { call, ctx: wctx, policy, realPath: FS }, verdict);
+  }
+  const allowed = (rules: PermissionRule[], call: ToolCall, policy?: PermissionPolicy) =>
+    cover(rules, call, policy).allowed;
+
+  it('a folder rule covers the folder reasons, never a delete there', () => {
+    expect(cover([folder], bash('cd /tmp/pr83; ls'))).toEqual({
+      allowed: true,
+      ruleIds: ['r-folder'],
+      uncovered: [],
+    });
+    const rm = cover([folder], bash('cd /tmp/pr83; rm -rf x'));
+    expect(rm.allowed).toBe(false);
+    expect(rm.ruleIds).toEqual(['r-folder']);
+    expect(rm.uncovered.map((f) => f.action)).toEqual(['destructive']);
+    expect(allowed([folder], bash('cat /tmp/pr83/sub/a.txt'))).toBe(true);
+    expect(allowed([folder], bash('cat /tmp/pr8/x'))).toBe(false);
+    expect(allowed([folder], bash('cat /tmp/pr83-old/x'))).toBe(false);
+    expect(allowed([folder], bash('cat /tmp/pr83/../etc/passwd'))).toBe(false);
+  });
+
+  it('a folder rule follows symlinks, and never trusts `..` in a command', () => {
+    expect(allowed([folder], bash('cat /tmp/pr83/out/passwd'))).toBe(false);
+    expect(allowed([folder], bash('cd /tmp/pr83/out; cat passwd'))).toBe(false);
+    // `out/..` is the link target's parent to the kernel; lexically it is /tmp/pr83.
+    expect(allowed([folder], bash('cat /tmp/pr83/out/../etc/passwd'))).toBe(false);
+    expect(allowed([folder], bash('cd /tmp/pr83/out/..; cat etc/passwd'))).toBe(false);
+    // A git range is not a parent folder.
+    expect(allowed([folder], bash('cd /tmp/pr83; git log origin/dev..HEAD'))).toBe(true);
+  });
+
+  it('a folder rule from a command covers file tools of both groups under it', () => {
+    expect(allowed([folder], read('/tmp/pr83/a.md'))).toBe(true);
+    expect(allowed([folder], write('/tmp/pr83/a.md'))).toBe(true);
+    expect(allowed([folder], read('/tmp/pr83/out/passwd'))).toBe(false);
+    expect(allowed([folder], read('/tmp/other/a.md'))).toBe(false);
+    expect(
+      allowed([folder], { toolName: 'Glob', input: { pattern: '/tmp/pr83/{a,../../x}' } }),
+    ).toBe(false);
+  });
+
+  it('a folder rule never covers the root, the home folder or above it', () => {
+    const home = forged('r-home', {
+      scope: 'folder',
+      tool: 'Bash',
+      match: { kind: 'folder', folder: HOME, access: 'any' },
+      categories: ['outside_workspace'],
+    });
+    const root = { ...home, id: 'r-root', match: { ...home.match, folder: '/' } };
+    expect(allowed([home], bash('cat ~/notes.txt'))).toBe(false);
+    expect(allowed([root], bash('cat /tmp/x'))).toBe(false);
+  });
+
+  it('a site rule covers the host and its subdomains on a label boundary only', () => {
+    expect(allowed([site], bash('gh pr view 1'))).toBe(true);
+    expect(allowed([site], bash('curl https://api.github.com/x'))).toBe(true);
+    expect(
+      allowed([site], {
+        toolName: 'WebFetch',
+        input: { url: 'https://github.com/a', prompt: 'x' },
+      }),
+    ).toBe(true);
+    for (const no of [
+      'curl https://github.com.evil.net/',
+      'curl https://evilgithub.com/',
+      'curl https://github.io/',
+      'npm install',
+      'curl https://github.com https://evil.net',
+    ]) {
+      expect(allowed([site], bash(no)), no).toBe(false);
+    }
+    expect(allowed([site], { toolName: 'WebSearch', input: { query: 'github' } })).toBe(false);
+  });
+
+  it('a folder and a site rule together cover a call that needs both', () => {
+    const both = cover([folder, site], bash('cd /tmp/pr83; gh pr view 83'));
+    expect(both).toEqual({ allowed: true, ruleIds: ['r-folder', 'r-site'], uncovered: [] });
+    const onlyFolder = cover([folder], bash('cd /tmp/pr83; gh pr view 83'));
+    expect(onlyFolder.allowed).toBe(false);
+    expect(onlyFolder.ruleIds).toEqual(['r-folder']);
+    expect(onlyFolder.uncovered).toEqual([
+      expect.objectContaining({ action: 'network', hosts: ['github.com'] }),
+    ]);
+  });
+
+  it('a prefix rule covers the reasons of the commands it starts, nothing else', () => {
+    expect(allowed([npmRun], bash('npm run build'), RUN_ASKS)).toBe(true);
+    expect(allowed([npmRun], bash('npm run a && npm run b'), RUN_ASKS)).toBe(true);
+    expect(allowed([npmRun], bash('npm test'), RUN_ASKS)).toBe(false);
+    const curl = cover([npmRun], bash('npm run build; curl https://x.io'), RUN_ASKS);
+    expect(curl.allowed).toBe(false);
+    expect(curl.uncovered).toEqual([
+      expect.objectContaining({ action: 'network', part: 'curl https://x.io' }),
+    ]);
+    expect(allowed([npmRun], bash('npm run build > /tmp/o'), RUN_ASKS)).toBe(false);
+    // Per segment: a prefix made for the network covers the segment it starts, with no redirect.
+    const install = forged('r-install', {
+      scope: 'prefix',
+      tool: 'Bash',
+      match: { kind: 'words', words: ['npm', 'install'] },
+      categories: ['network'],
+    });
+    expect(allowed([install], bash('npm install zod'))).toBe(true);
+    expect(allowed([install], bash('curl https://x.io; npm install zod'))).toBe(false);
+    expect(allowed([install], bash('npm install zod > out.txt'))).toBe(false);
+    expect(allowed([install], bash('npm install zod <<EOF\nx\nEOF'))).toBe(false);
+    // Never for a shell or an interpreter, never for another category.
+    const py = forged('r-py', {
+      scope: 'prefix',
+      tool: 'Bash',
+      match: { kind: 'words', words: ['python3'] },
+      categories: ['network'],
+    });
+    expect(allowed([py], bash('python3 fetch.py https://x.io'))).toBe(false);
+    expect(allowed([npmRun], bash('npm run fetch https://x.io'))).toBe(false);
+  });
+
+  it('a prefix or category rule never covers an outside-the-workspace reason', () => {
+    const cat = forged('r-cat', {
+      scope: 'prefix',
+      tool: 'Bash',
+      match: { kind: 'words', words: ['cat'] },
+      categories: ['outside_workspace'],
+    });
+    const outside = forged('r-out', {
+      scope: 'category',
+      tool: '*',
+      match: { kind: 'categories' },
+      categories: ['outside_workspace', 'network'],
+    });
+    expect(allowed([network], bash('cat /tmp/x'))).toBe(false);
+    expect(allowed([cat, outside], bash('cat /tmp/x'))).toBe(false);
+    expect(allowed([outside], read('/tmp/x'))).toBe(false);
+    expect(allowed([network], bash('curl https://x.io'))).toBe(true);
+  });
+
+  it('an opaque call: only a legacy exact rule made from it', () => {
+    const call = bash('bash -c "curl https://github.com"');
+    expect(allowed([folder, site, npmRun, network], call)).toBe(false);
+    const exact = forged('r-exact', {
+      scope: 'exact',
+      tool: 'Bash',
+      match: { kind: 'text', text: 'bash -c "curl https://github.com"' },
+      categories: ['network'],
+    });
+    expect(allowed([exact], call)).toBe(false); // not made from an unreadable call
+    const made: PermissionRule = { ...exact, id: 'r-made', unclassified: true };
+    expect(cover([made], call)).toEqual({ allowed: true, ruleIds: ['r-made'], uncovered: [] });
+    expect(allowed([made], bash('bash -c "curl https://github.com/x"'))).toBe(false);
+  });
+
+  it('a push is never covered', () => {
+    const push = cover([site, network], bash('git push'));
+    expect(push).toMatchObject({ allowed: false, ruleIds: [] });
+    expect(allowed([site], bash('gh pr view 1; git push'))).toBe(false);
+    const forgedPush: PermissionRule = {
+      ...network,
+      id: 'r-push',
+      categories: ['network', 'push'],
+    };
+    expect(allowed([forgedPush], bash('curl https://x.io'))).toBe(false);
+  });
+
+  it('a guarded write is never covered, even under a folder rule', () => {
+    const repo = { ...folder, id: 'r-repo', match: { ...folder.match, folder: '/tmp/r' } };
+    expect(allowed([repo], bash('echo x > /tmp/r/.git/config'))).toBe(false);
+    expect(allowed([repo], write('/tmp/r/.git/config'))).toBe(false);
+    // Through a symlink: lexically an ordinary file, guarded once the link is followed.
+    expect(allowed([folder], bash('echo x > /tmp/pr83/hooks/pre-commit'))).toBe(false);
+    expect(allowed([folder], bash('echo x > /tmp/pr83/notes.txt'))).toBe(true);
+  });
+
+  it('a legacy exact rule still allows its exact command, and a legacy folder rule its tool group', () => {
+    const exact = forged('r-exact', {
+      scope: 'exact',
+      tool: 'Bash',
+      match: { kind: 'text', text: 'cat /tmp/x' },
+      categories: ['outside_workspace'],
+    });
+    expect(cover([exact], bash('cat /tmp/x'))).toEqual({
+      allowed: true,
+      ruleIds: ['r-exact'],
+      uncovered: [],
+    });
+    expect(allowed([exact], bash('cat /tmp/y'))).toBe(false);
+    const legacyRead = forged('r-read', {
+      scope: 'prefix',
+      tool: 'Read',
+      match: { kind: 'folder', folder: '/tmp/pr83' },
+      categories: ['outside_workspace'],
+    });
+    expect(allowed([legacyRead], read('/tmp/pr83/a.md'))).toBe(true);
+    expect(allowed([legacyRead], write('/tmp/pr83/a.md'))).toBe(false);
+    // A file-tool folder rule does not cover commands.
+    expect(allowed([legacyRead], bash('cat /tmp/pr83/a.md'))).toBe(false);
   });
 });

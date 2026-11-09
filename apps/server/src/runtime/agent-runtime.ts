@@ -746,8 +746,8 @@ export class AgentRuntime {
       },
       // The project's "Allow similar" rules (P9-17), read on every check like its table.
       rules: () => this.rulesOf(agent.id, req),
-      onRuleAllow: (call, ruleId, action) =>
-        this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleId }),
+      onRuleAllow: (call, ruleIds, action) =>
+        this.permissionDecided(live, { toolCall: call, decision: 'allow', action, ruleIds }),
       // What the request judge reads as the Steward's recent actions (P13-04).
       onAllow: (call) => this.noteAllowed(live, call),
       ...(allowances
@@ -2037,7 +2037,7 @@ export class AgentRuntime {
   ): boolean {
     const call = raw.question.toolCall;
     if (!call) return false;
-    const { verdict, action, ruleId, allowedOnce, launchFlag } = live.gate.decide(call);
+    const { verdict, action, ruleIds, allowedOnce, launchFlag } = live.gate.decide(call);
     if (launchFlag) {
       // A launch flag's tool (P12-06): the scope watch decides, never the policy or a rule.
       this.watchScope(live, call, event, launchFlag);
@@ -2058,7 +2058,7 @@ export class AgentRuntime {
         action,
         ...(verdict.decision === 'deny' ? { reason: verdict.reason } : {}),
         ...(allowedOnce ? { reason: APPROVED_PUBLISH } : {}),
-        ...(ruleId ? { ruleId } : {}),
+        ...(ruleIds ? { ruleIds } : {}),
       },
       event.questionId,
     );
@@ -2298,8 +2298,8 @@ export class AgentRuntime {
       decision: 'allow' | 'deny';
       action: PermissionAction | undefined;
       reason?: string;
-      /** The "Allow similar" rule that allowed it (P9-17). */
-      ruleId?: Id;
+      /** The "Allow similar" rules that together allowed it (P9-17, P14-03). */
+      ruleIds?: readonly Id[];
       /** Who decided (default: the system's policy); the scope watch names the supervisor. */
       decidedBy?: Actor;
       /** The standing approval the Waykeeper relied on (P13-04). */
@@ -2324,7 +2324,10 @@ export class AgentRuntime {
       ...(d.action ? { action: d.action } : {}),
       ...(d.reason ? { reason: redactSecrets(d.reason) } : {}),
       decidedBy: d.decidedBy ?? SYSTEM,
-      ...(d.ruleId ? { ruleId: d.ruleId } : {}),
+      // `ruleId` (what older readers know) is always the first of `ruleIds` (P14-03).
+      ...(d.ruleIds && d.ruleIds.length > 0
+        ? { ruleId: d.ruleIds[0]!, ruleIds: [...d.ruleIds] }
+        : {}),
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
       ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
