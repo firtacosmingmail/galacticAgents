@@ -161,6 +161,23 @@ export function approvalActivity(name: string, reason?: string, quote?: string):
   return `Approved by ${name}${reason ? `: ${reason}` : ''}${quote ? ` — you asked: "${quote}"` : ''}`;
 }
 
+/**
+ * Whether a `permission.decided` is an approval the Waykeeper's request judge gave (P13, final
+ * review M2): an allow by an agent marked `waykeeperApproval`. A P12 scope-watch allow, also by an
+ * agent, is not one: it gets no "Approved by" line and is not counted.
+ */
+export function isWaykeeperApproval(event: {
+  decision: 'allow' | 'deny';
+  decidedBy: { type: string };
+  waykeeperApproval?: true | undefined;
+}): boolean {
+  return (
+    event.decision === 'allow' &&
+    event.decidedBy.type === 'agent' &&
+    event.waykeeperApproval === true
+  );
+}
+
 /** "Waykeeper · <project name>" (the panel's label for a project's Waykeeper). */
 export function waykeeperLabel(
   agent: { id: Id; projectId?: Id | undefined },

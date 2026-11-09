@@ -24,6 +24,7 @@ const decided = (extra: object = {}): EventEnvelope => ({
     decision: 'allow',
     reason: 'it runs the task’s own tests',
     decidedBy: { type: 'agent', id: 'a-wk' },
+    waykeeperApproval: true,
     ...extra,
   } as EventEnvelope['event'],
 });
@@ -42,6 +43,13 @@ describe('replayed approval activity (P13-06)', () => {
       names,
     );
     expect(two[fx.agent.id]?.currentActivity).toMatch(/ — you asked: "run the tests"$/);
+  });
+
+  it('ignores a scope-watch allow, by an agent but unmarked (final review M2)', () => {
+    const statuses = { [fx.agent.id]: record };
+    expect(
+      foldReplayStatus(statuses, decided({ waykeeperApproval: undefined }), new Map(), names),
+    ).toBe(statuses);
   });
 
   it('ignores the system’s decisions', () => {

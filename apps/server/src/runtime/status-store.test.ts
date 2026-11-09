@@ -182,6 +182,7 @@ describe('StatusStore — folding', () => {
       decision: 'allow',
       reason: 'it runs the task’s own tests',
       decidedBy: { type: 'agent', id: 'a-wk' },
+      waykeeperApproval: true,
       ...extra,
     });
     store.rebuild(
@@ -197,6 +198,17 @@ describe('StatusStore — folding', () => {
     );
     // The system's table decisions say nothing.
     store.rebuild(log([spawned, decided({ decidedBy: { type: 'system' } })]));
+    expect(store.get('a-1')?.currentActivity).toBeUndefined();
+    // Nor does a scope-watch allow, also by an agent but unmarked (final review M2).
+    store.rebuild(
+      log([
+        spawned,
+        decided({
+          waykeeperApproval: undefined,
+          reason: "consistent with the Steward's approvals: the local page",
+        }),
+      ]),
+    );
     expect(store.get('a-1')?.currentActivity).toBeUndefined();
   });
 

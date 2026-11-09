@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   approvalActivity,
+  isWaykeeperApproval,
   BRAIN_SLASH_COMMANDS,
   waykeeperLabel,
   brainSlashCommands,
@@ -2247,6 +2248,7 @@ export class AgentRuntime {
             action: asked,
             reason: d.reason,
             decidedBy: { type: 'agent', id: waykeeperId },
+            waykeeperApproval: true,
             ...(d.standingApprovalId !== undefined
               ? { standingApprovalId: d.standingApprovalId }
               : {}),
@@ -2304,6 +2306,8 @@ export class AgentRuntime {
       standingApprovalId?: Id;
       /** The user's words that granted a push or an upload (P13-04). */
       quote?: string;
+      /** The Waykeeper's request judge approved it (P13-04): never set by the scope watch. */
+      waykeeperApproval?: true;
     },
     questionId?: Id,
   ): void {
@@ -2323,13 +2327,15 @@ export class AgentRuntime {
       ...(d.ruleId ? { ruleId: d.ruleId } : {}),
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
+      ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);
-    // A Waykeeper approval is also a durable line in the Steward's transcript (P13-06, §5.6).
+    // A Waykeeper approval is also a durable line in the Steward's transcript (P13-06, §5.6); a
+    // scope-watch allow, also decided by an agent, is not one (final review M2).
     if (
-      d.decision === 'allow' &&
       event.type === 'permission.decided' &&
+      isWaykeeperApproval(event) &&
       d.decidedBy?.type === 'agent'
     ) {
       try {

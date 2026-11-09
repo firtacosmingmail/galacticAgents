@@ -1,5 +1,6 @@
 import {
   approvalActivity,
+  isWaykeeperApproval,
   describeTool,
   ENDED_STATES,
   type AgentCaps,
@@ -200,11 +201,7 @@ export class StatusStore {
     }
     // The Waykeeper approved a Steward's request (P13-06, design §5.6): the Steward's activity
     // says so; its state is untouched.
-    if (
-      event.type === 'permission.decided' &&
-      event.decision === 'allow' &&
-      event.decidedBy.type === 'agent'
-    ) {
+    if (event.type === 'permission.decided' && isWaykeeperApproval(event)) {
       const e = this.entries.get(event.agentId);
       if (e && !ENDED_STATES.has(e.record.state)) {
         const approver = event.decidedBy.id;

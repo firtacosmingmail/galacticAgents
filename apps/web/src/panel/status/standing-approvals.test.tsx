@@ -128,6 +128,7 @@ const decided = (
     decision,
     reason: `reason ${seq}`,
     decidedBy: by,
+    waykeeperApproval: true,
     ...extra,
   },
 });
@@ -161,6 +162,17 @@ describe('the count of Waykeeper approvals (P13-06)', () => {
     expect(rows[0]!.textContent).toContain('you asked: “run <b>the</b> tests”');
     expect(rows[0]!.querySelector('b')).toBeNull();
     expect(rows[1]!.textContent).toMatch(/Bash pnpm test 1/);
+  });
+
+  it('does not count a scope-watch allow, by an agent but unmarked (final review M2)', async () => {
+    api.historyEvents.mockResolvedValueOnce({
+      projectId: 'p-1',
+      events: [decided(1), decided(2, { waykeeperApproval: undefined })],
+      seq: 2,
+      hasMore: false,
+    });
+    show(fx.project);
+    expect(await screen.findByText(/The Waykeeper approved 1 request$/)).toBeTruthy();
   });
 
   it('says 0 requests with no toggle when there are none', async () => {

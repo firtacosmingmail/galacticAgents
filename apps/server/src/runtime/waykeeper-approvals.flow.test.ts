@@ -145,7 +145,7 @@ async function hierarchy(opts: {
     const append = c.transcripts.append.bind(c.transcripts);
     c.transcripts.append = (agentId, kind, text) => {
       if (text.startsWith('Approved by')) throw new Error('transcript disk full');
-      append(agentId, kind, text);
+      return append(agentId, kind, text);
     };
   }
   const steward = (

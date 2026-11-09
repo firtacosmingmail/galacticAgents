@@ -398,10 +398,12 @@ export const QuestionReassigned = z.object({
  * The project's policy table decided a tool call without the user (P2-04): `allow` answered a
  * permission request at once, `deny` refused it (or the gate refused the call before any request
  * existed). `questionId` is the adapter's request the decision answered; absent when the gate
- * refused the call outright. No question row is ever opened for it. `decidedBy` is always the
- * system. Since P13 (SPEC decision 154) the Waykeeper's request judge may approve on the user's
- * behalf: that decision is still recorded as the system's, with `standingApprovalId` or `quote`
- * saying what it rested on; the judge never decides a permission the table denies.
+ * refused the call outright. No question row is ever opened for it. `decidedBy` is the system for
+ * the table's decisions; the P12 scope watch records a launch-flag allow as the Steward's
+ * supervisor. Since P13 (SPEC decision 154) the Waykeeper's request judge may approve on the user's
+ * behalf: that decision is recorded with `decidedBy` = the project's Waykeeper and
+ * `waykeeperApproval: true`, with `standingApprovalId` or `quote` saying what it rested on; the
+ * judge never decides a permission the table denies.
  */
 export const PermissionDecided = z.object({
   type: z.literal('permission.decided'),
@@ -420,6 +422,12 @@ export const PermissionDecided = z.object({
   standingApprovalId: Id.optional(),
   /** The user's words the Waykeeper's judge leaned on to approve it (P13, decision 154). */
   quote: z.string().optional(),
+  /**
+   * The Waykeeper's request judge approved it (P13, decision 154): only such a decision is
+   * "Approved by <Waykeeper>" and counted among the Waykeeper's approvals. The P12 scope watch's
+   * launch-flag allows, also decided by an agent, never carry it.
+   */
+  waykeeperApproval: z.literal(true).optional(),
 });
 
 /**

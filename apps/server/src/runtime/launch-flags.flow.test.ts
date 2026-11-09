@@ -3,7 +3,14 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { launchOf, type Event, type Id, type ScopeJudgeInput } from '@galactic/protocol';
+import {
+  isWaykeeperApproval,
+  launchOf,
+  type Event,
+  type EventOfType,
+  type Id,
+  type ScopeJudgeInput,
+} from '@galactic/protocol';
 import { ClaudeSdkAdapter } from '../adapters/claude-sdk/claude-sdk-adapter.js';
 import { FakeSdk } from '../adapters/claude-sdk/fake-sdk.js';
 import { createFakeScopeJudge } from '../adapters/fake/fake-scope-judge.js';
@@ -328,6 +335,19 @@ describe('Steward launch flags end to end (P12-10)', () => {
       'stop by user',
       'steward stopped',
     ]);
+    // A scope-watch allow is not a Waykeeper approval (final review M2): no "Approved by" line
+    // in the Steward's transcript, no marker on the decision.
+    h.composed.transcripts.flush();
+    expect(h.composed.transcripts.read(sid).filter((c) => c.text.includes('Approved by'))).toEqual(
+      [],
+    );
+    const allows = events().filter(
+      (e): e is EventOfType<'permission.decided'> =>
+        e.type === 'permission.decided' && e.agentId === sid && e.decision === 'allow',
+    );
+    expect(allows).toHaveLength(2);
+    expect(allows.every((e) => e.decidedBy.type === 'agent')).toBe(true);
+    expect(allows.every((e) => !isWaykeeperApproval(e))).toBe(true);
   }, 20_000);
 
   it('the Claude adapter launches the approved flags as extraArgs { chrome: null }', async () => {

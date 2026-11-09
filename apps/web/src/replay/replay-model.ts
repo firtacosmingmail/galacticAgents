@@ -1,5 +1,6 @@
 import {
   approvalActivity,
+  isWaykeeperApproval,
   describeTool,
   ENDED_STATES,
   type AgentState,
@@ -49,11 +50,7 @@ export function foldReplayStatus(
   names?: Pick<WorldState, 'agents' | 'projects'>,
 ): Record<Id, StatusRecord> {
   // A Waykeeper approved a Steward's request: its activity says so, as live (`StatusStore`).
-  if (
-    event.type === 'permission.decided' &&
-    event.decision === 'allow' &&
-    event.decidedBy.type === 'agent'
-  ) {
+  if (event.type === 'permission.decided' && isWaykeeperApproval(event)) {
     const record = statuses[event.agentId];
     if (!record || ENDED_STATES.has(record.state)) return statuses;
     const approver = event.decidedBy.id ? names?.agents[event.decidedBy.id] : undefined;

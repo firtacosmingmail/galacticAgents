@@ -1,5 +1,10 @@
 import { useEffect, useState } from 'react';
-import type { EventEnvelope, Project, StandingApproval } from '@galactic/protocol';
+import {
+  isWaykeeperApproval,
+  type EventEnvelope,
+  type Project,
+  type StandingApproval,
+} from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { agentLabel, ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
 
@@ -57,7 +62,7 @@ async function readApprovals(
     });
     for (const { seq, at, event } of res.events as EventEnvelope[]) {
       if (event.type !== 'permission.decided') continue;
-      if (event.decision !== 'allow' || event.decidedBy.type !== 'agent') continue;
+      if (!isWaykeeperApproval(event)) continue;
       out.push({
         seq,
         at,
