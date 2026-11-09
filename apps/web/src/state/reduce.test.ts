@@ -171,3 +171,44 @@ describe('applyEvent', () => {
     expect(w.seq).toBe(Object.keys(ev).length);
   });
 });
+
+describe('applyEvent: Waykeeper approvals (P13)', () => {
+  const project = (w: ReturnType<typeof emptyWorld>) => w.projects['p-1']!;
+  const base = () => applyEvent(emptyWorld(), env(1, ev['project.created']));
+
+  it('turns the flag on and off without touching updatedAt', () => {
+    let w = applyEvent(base(), env(2, ev['waykeeper_approvals.set']));
+    expect(project(w).waykeeperApprovals).toBe(true);
+    expect(project(w).updatedAt).toBe(fx.project.updatedAt);
+    w = applyEvent(
+      w,
+      env(3, {
+        type: 'waykeeper_approvals.set',
+        projectId: 'p-1',
+        on: false,
+        by: { type: 'user' },
+      }),
+    );
+    expect('waykeeperApprovals' in project(w)).toBe(false);
+  });
+
+  it('adds and removes standing approvals', () => {
+    let w = applyEvent(base(), env(2, ev['standing_approval.added']));
+    expect(project(w).standingApprovals).toHaveLength(1);
+    w = applyEvent(w, env(3, ev['standing_approval.removed']));
+    expect('standingApprovals' in project(w)).toBe(false);
+  });
+
+  it('records approvals, keeping the newest 100', () => {
+    let w = base();
+    for (let i = 0; i < 101; i++) {
+      const e = ev['approval.recorded'];
+      if (e.type !== 'approval.recorded') throw new Error('fixture');
+      w = applyEvent(w, env(i + 2, { ...e, approval: { ...e.approval, summary: `s${i}` } }));
+    }
+    const list = project(w).recordedApprovals!;
+    expect(list).toHaveLength(100);
+    expect(list[0]!.summary).toBe('s1');
+    expect(list[99]!.summary).toBe('s100');
+  });
+});

@@ -7,6 +7,7 @@ import { applyChanges, type EventEnvelope } from './events.js';
 import type { Area, Job } from './long-term.js';
 import type { Id, Meta } from './primitives.js';
 import { summarize, type SystemSummary } from './summary.js';
+import { MAX_RECORDED_APPROVALS } from './waykeeper-approvals.js';
 import type { Snapshot } from './ws.js';
 
 /**
@@ -404,6 +405,52 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
           ...next.projects,
           [project.id]: rules.length > 0 ? { ...rest, permissionRules: rules } : rest,
         },
+      };
+    }
+    case 'waykeeper_approvals.set': {
+      // Waykeeper approvals (P13) live on the project's row; `updatedAt` stays, as on the server.
+      const project = next.projects[event.projectId];
+      if (!project) return next;
+      const { waykeeperApprovals: _old, ...rest } = project;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: event.on ? { ...rest, waykeeperApprovals: true } : rest,
+        },
+      };
+    }
+    case 'standing_approval.added': {
+      const project = next.projects[event.approval.projectId];
+      if (!project) return next;
+      const approvals = [...(project.standingApprovals ?? []), event.approval];
+      return {
+        ...next,
+        projects: { ...next.projects, [project.id]: { ...project, standingApprovals: approvals } },
+      };
+    }
+    case 'standing_approval.removed': {
+      const project = next.projects[event.projectId];
+      if (!project?.standingApprovals) return next;
+      const approvals = project.standingApprovals.filter((a) => a.id !== event.approvalId);
+      const { standingApprovals: _old, ...rest } = project;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: approvals.length > 0 ? { ...rest, standingApprovals: approvals } : rest,
+        },
+      };
+    }
+    case 'approval.recorded': {
+      const project = next.projects[event.projectId];
+      if (!project) return next;
+      const recorded = [...(project.recordedApprovals ?? []), event.approval].slice(
+        -MAX_RECORDED_APPROVALS,
+      );
+      return {
+        ...next,
+        projects: { ...next.projects, [project.id]: { ...project, recordedApprovals: recorded } },
       };
     }
 

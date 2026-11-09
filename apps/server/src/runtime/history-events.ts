@@ -291,7 +291,12 @@ export function touches(event: Event, m: Members): boolean {
     case 'permission.rule_added':
       return m.projects.has(event.rule.projectId);
     case 'permission.rule_removed':
+    case 'waykeeper_approvals.set':
+    case 'standing_approval.removed':
+    case 'approval.recorded':
       return m.projects.has(event.projectId);
+    case 'standing_approval.added':
+      return m.projects.has(event.approval.projectId);
     case 'control.stop':
     case 'control.cancel':
     case 'control.pause':

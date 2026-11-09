@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { SetAnswer } from './question-set.js';
 import { Provider } from './providers.js';
+import { RecordedApproval, StandingApproval } from './waykeeper-approvals.js';
 import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
@@ -398,7 +399,9 @@ export const QuestionReassigned = z.object({
  * permission request at once, `deny` refused it (or the gate refused the call before any request
  * existed). `questionId` is the adapter's request the decision answered; absent when the gate
  * refused the call outright. No question row is ever opened for it. `decidedBy` is always the
- * system: an LLM never decides a permission.
+ * system. Since P13 (SPEC decision 154) the Waykeeper's request judge may approve on the user's
+ * behalf: that decision is still recorded as the system's, with `standingApprovalId` or `quote`
+ * saying what it rested on; the judge never decides a permission the table denies.
  */
 export const PermissionDecided = z.object({
   type: z.literal('permission.decided'),
@@ -413,6 +416,10 @@ export const PermissionDecided = z.object({
   decidedBy: Actor,
   /** The project's "Allow similar" rule that allowed it (P9-17, decision 138): "allowed by rule". */
   ruleId: Id.optional(),
+  /** The project's standing approval that approved it (P13, decision 154). */
+  standingApprovalId: Id.optional(),
+  /** The user's words the Waykeeper's judge leaned on to approve it (P13, decision 154). */
+  quote: z.string().optional(),
 });
 
 /**
@@ -434,6 +441,39 @@ export const PermissionRuleRemoved = z.object({
   ruleId: Id,
   by: Actor,
   reason: z.string(),
+});
+
+/** The user turned Waykeeper approvals on or off for a project (P13, decision 154). */
+export const WaykeeperApprovalsSet = z.object({
+  type: z.literal('waykeeper_approvals.set'),
+  projectId: Id,
+  on: z.boolean(),
+  by: Actor,
+});
+
+/** A standing approval was added to a project (P13); appended to `Project.standingApprovals`. */
+export const StandingApprovalAdded = z.object({
+  type: z.literal('standing_approval.added'),
+  approval: StandingApproval,
+});
+
+/**
+ * A standing approval is gone (P13): removed by the user, or by the system when the project was
+ * closed, cancelled or archived. Dropped from `Project.standingApprovals`.
+ */
+export const StandingApprovalRemoved = z.object({
+  type: z.literal('standing_approval.removed'),
+  projectId: Id,
+  approvalId: Id,
+  by: Actor,
+  reason: z.string(),
+});
+
+/** The Waykeeper's approval was recorded on the project (P13); keeps the newest 100. */
+export const ApprovalRecorded = z.object({
+  type: z.literal('approval.recorded'),
+  projectId: Id,
+  approval: RecordedApproval,
 });
 
 // ---------------------------------------------------------------------------
@@ -548,6 +588,10 @@ export const ProjectChanges = Project.omit({
   state: true,
   // Rules change only by their own events (P9-17), never by a project update.
   permissionRules: true,
+  // Nor do Waykeeper approvals (P13): their own events only.
+  waykeeperApprovals: true,
+  standingApprovals: true,
+  recordedApprovals: true,
 })
   .extend({
     repoPath: z.string().nullable(),
@@ -905,6 +949,10 @@ export const Event = z.discriminatedUnion('type', [
   PermissionDecided,
   PermissionRuleAdded,
   PermissionRuleRemoved,
+  WaykeeperApprovalsSet,
+  StandingApprovalAdded,
+  StandingApprovalRemoved,
+  ApprovalRecorded,
   ProposalCreated,
   ProposalApproved,
   ProposalEdited,

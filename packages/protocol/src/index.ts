@@ -34,3 +34,4 @@ export * from './providers.js';
 export * from './long-term.js';
 export * from './schedule.js';
 export * from './launch-flags.js';
+export * from './waykeeper-approvals.js';

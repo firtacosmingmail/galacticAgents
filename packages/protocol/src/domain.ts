@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { Actor } from './actor.js';
 import { Id, Meta, Timestamp } from './primitives.js';
 import { QuestionSetRef } from './question-set.js';
 import {
@@ -9,9 +10,9 @@ import {
   SpendContext,
 } from './long-term-questions.js';
 import { LaunchContext, OffScriptContext } from './launch-flags.js';
+import { RecordedApproval, StandingApproval, WaykeeperForward } from './waykeeper-approvals.js';
 import { Provider, UsageLimitContext } from './providers.js';
 import {
-  ActorType,
   AgentRole,
   AgentRuntime,
   AgentState,
@@ -32,9 +33,7 @@ import {
 export const Host = z.object({ kind: HostKind, id: Id });
 export type Host = z.infer<typeof Host>;
 
-/** An agent, the user, or the system itself. `id` is absent for user and system. */
-export const Actor = z.object({ type: ActorType, id: Id.optional() });
-export type Actor = z.infer<typeof Actor>;
+export { Actor } from './actor.js';
 
 /** Hard caps enforced by the process supervisor (SPEC decision 18, TECHNOLOGY §5.4). */
 export const AgentCaps = z.object({
@@ -196,6 +195,18 @@ export const Project = z.object({
    * only by `permission.rule_added` / `permission.rule_removed`, never by a project update.
    */
   permissionRules: z.array(PermissionRule).optional(),
+  /**
+   * The Waykeeper judges this project's Steward permission requests (P13; decision 154); absent:
+   * off. Changed only by `waykeeper_approvals.set`, never by a project update.
+   */
+  waykeeperApprovals: z.literal(true).optional(),
+  /**
+   * The project's standing approvals (P13), oldest first; absent: none. Changed only by
+   * `standing_approval.added` / `standing_approval.removed`; they end with the project.
+   */
+  standingApprovals: z.array(StandingApproval).optional(),
+  /** The Waykeeper's recent approvals (newest 100), for spotting repeats; only `approval.recorded`. */
+  recordedApprovals: z.array(RecordedApproval).optional(),
   /** Pinned work is never archived by the retention timer (decision 4, 11b). */
   pinned: z.boolean().optional(),
   /**
@@ -559,6 +570,8 @@ export const QuestionContext = z.object({
   launch: LaunchContext.optional(),
   /** A flag call the scope judge found off-script (P12-02); user-held only. */
   offScript: OffScriptContext.optional(),
+  /** What the Waykeeper forwarded and why (P13); the card shows it. */
+  waykeeper: WaykeeperForward.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });
