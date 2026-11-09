@@ -10,6 +10,7 @@ import { submitAnswer } from '../../client/answer-queue.js';
 import { AnswerNoticeFor, isPending, QueuedAnswerBox, useQueuedAnswer } from './QueuedAnswer.js';
 import { DismissQuestion, withdrawnLabel } from './DismissQuestion.js';
 import { AllowSimilar, useOffersSimilar } from './AllowSimilar.js';
+import { ForwardedBlock, StandingApprovalButton } from './WaykeeperForward.js';
 import { FindingActions, FindingDetails } from './FindingCard.js';
 import { SpendActions, SpendDetails } from './SpendCard.js';
 import { PublishActions, PublishDetails } from './PublishCard.js';
@@ -196,6 +197,7 @@ export function QuestionCard({
           </code>
         </p>
       )}
+      {permission && q.context.waykeeper && <ForwardedBlock forward={q.context.waykeeper} />}
       {!userHeld && (
         <p className="muted">
           Its supervisor may answer it from context; you can answer it yourself instead.
@@ -238,6 +240,9 @@ export function QuestionCard({
             Refuse
           </button>
           {similar && <AllowSimilar question={q} project={similar} busy={busy} onStale={stale} />}
+          {q.context.waykeeper && (
+            <StandingApprovalButton question={q} forward={q.context.waykeeper} busy={busy} />
+          )}
         </div>
       ) : (
         <form

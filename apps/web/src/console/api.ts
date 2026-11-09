@@ -16,6 +16,10 @@ import type {
   PermissionRuleScope,
   RemovePermissionRuleResponse,
   SimilarPreviewResponse,
+  StandingApprovalBody,
+  StandingApprovalResponse,
+  WaykeeperApprovalsBody,
+  WaykeeperApprovalsResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -83,7 +87,7 @@ export class ApiError extends Error {
 
 export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   const call = async <T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
   ): Promise<T> => {
@@ -225,6 +229,32 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<RemovePermissionRuleResponse>(
         'DELETE',
         `/api/projects/${encodeURIComponent(projectId)}/permission-rules/${encodeURIComponent(ruleId)}`,
+      ),
+    /**
+     * Answers a forwarded permission request "allow" and stores a standing approval of its kind
+     * (P13-06): open to the phone too (decision 154). `notStored` says why none was stored.
+     */
+    standingApproval: (questionId: string, version?: number, answerId?: string) =>
+      call<StandingApprovalResponse>(
+        'POST',
+        `/api/questions/${encodeURIComponent(questionId)}/standing-approval`,
+        {
+          ...(version !== undefined ? { version } : {}),
+          ...(answerId !== undefined ? { answerId } : {}),
+        } satisfies StandingApprovalBody,
+      ),
+    /** The project's "Waykeeper approves Stewards' requests" switch; "on" is the Mac's alone. */
+    setWaykeeperApprovals: (projectId: string, on: boolean) =>
+      call<WaykeeperApprovalsResponse>(
+        'PUT',
+        `/api/projects/${encodeURIComponent(projectId)}/waykeeper-approvals`,
+        { on } satisfies WaykeeperApprovalsBody,
+      ),
+    /** Removes a project's standing approval; applies to the next request. */
+    removeStandingApproval: (projectId: string, approvalId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'DELETE',
+        `/api/projects/${encodeURIComponent(projectId)}/standing-approvals/${encodeURIComponent(approvalId)}`,
       ),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),

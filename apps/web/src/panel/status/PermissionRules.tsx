@@ -1,5 +1,6 @@
 import type { PermissionRule, PermissionRuleScope, Project } from '@galactic/protocol';
 import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
+import { StandingApprovals } from './StandingApprovals.js';
 import { useClientRules } from '../deliverables/use-deliverables.js';
 
 /**
@@ -59,6 +60,7 @@ export function PermissionRules({ project }: { project: Project }) {
         </ul>
       )}
       <ErrorLine error={error} />
+      <StandingApprovals project={project} />
     </>
   );
 }

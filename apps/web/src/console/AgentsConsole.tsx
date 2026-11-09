@@ -16,6 +16,7 @@ import {
   OffScriptActions,
   OffScriptDetails,
 } from '../panel/cards/LaunchCard.js';
+import { ForwardedBlock } from '../panel/cards/WaykeeperForward.js';
 import { useAppStore } from '../state/store.js';
 import { createApi, type Api } from './api.js';
 
@@ -376,6 +377,9 @@ function QuestionCard({
       {offScript ? null : <p>{question.context.text}</p>}
       {launch && question.context.launch && <LaunchDetails question={question} />}
       {offScript && <OffScriptDetails question={question} />}
+      {permission && question.context.waykeeper && (
+        <ForwardedBlock forward={question.context.waykeeper} />
+      )}
       {permission && !offScript && call && (
         <p className="muted">
           {question.context.permissionAction ? `${question.context.permissionAction}: ` : ''}

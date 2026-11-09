@@ -334,6 +334,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       isHarnessMeta(log.tables.agents.get(agentId)?.meta)
         ? Number.POSITIVE_INFINITY
         : stallThreshold(runtime),
+    // "Approved by Waykeeper · <project>: <reason>" names the approving Waykeeper (P13-06).
+    agentName: (id) => {
+      const agent = log.tables.agents.get(id);
+      if (agent?.role !== 'waykeeper') return undefined;
+      const project = agent.projectId ? log.tables.projects.get(agent.projectId) : undefined;
+      return `Waykeeper · ${project?.name ?? agent.projectId ?? agent.id}`;
+    },
     // A stall the ticker saw is logged (P8-04): the supervisor is woken, the history shows it.
     onStalled: (agentId, silentForMs) => runtime.noteStalled(agentId, silentForMs),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),

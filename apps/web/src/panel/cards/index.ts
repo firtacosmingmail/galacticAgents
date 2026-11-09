@@ -35,3 +35,4 @@ export {
   OfflineAnswers,
   QueuedAnswerBox,
 } from './QueuedAnswer.js';
+export { ForwardedBlock, StandingApprovalButton } from './WaykeeperForward.js';
