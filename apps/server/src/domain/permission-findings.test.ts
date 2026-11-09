@@ -977,4 +977,21 @@ describe('residual holes, review round 3 (P14-08)', () => {
       expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
     }
   });
+
+  it('(b) a segment with a bracket class may match any guarded name', () => {
+    for (const cmd of [
+      'cp e .gi[[:alpha:]]/hooks/pre-commit',
+      'cp e .[[:lower:]]it/hooks/pre-commit',
+      'cp e .[[:alnum:]][[:alnum:]][[:alnum:]]/hooks/pre-commit',
+      'cd .gi[[:alpha:]] && cp ../e hooks/pre-commit',
+      'env -C .gi[[:alpha:]]/hooks touch pre-commit',
+      'cp e .gi[!]x]/hooks/pre-commit',
+      'cp e .gi[^]x]/hooks/pre-commit',
+      'cp e ~/.ss[[:alpha:]]/authorized_keys',
+      'cp e ~/[[:upper:]]ibrary/LaunchAgents/x.plist',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+  });
 });

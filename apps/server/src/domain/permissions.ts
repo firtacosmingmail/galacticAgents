@@ -2060,7 +2060,10 @@ function guardedGlobReason(word: string, ctx: PolicyContext): string | undefined
 
 /** Whether a glob segment can match `name` in zsh without GLOB_DOTS (case-folded). */
 function zshGlobMatches(seg: string, name: string): boolean {
-  if (name.startsWith('.') && !/^[.[]/.test(seg)) return false;
+  // A bracket class may be anything zsh reads as one (`[[:alpha:]]`, `[!]x]`): fail closed
+  // (P14-08 review round 3).
+  if (seg.includes('[')) return true;
+  if (name.startsWith('.') && !seg.startsWith('.')) return false;
   return globSegmentMatches(seg.toLowerCase(), name.toLowerCase());
 }
 
