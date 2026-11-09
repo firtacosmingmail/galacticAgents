@@ -1677,6 +1677,11 @@ describe('final review fixes (P14-07)', () => {
       expect(cover([pr83], bash('cd /tmp/pr83 && nice env LANG=C git diff')).allowed).toBe(true);
     });
 
+    it('I-4: a later split outside gets no folder row', () => {
+      const found = options(bash('sort -ro/srv/x a'));
+      expect(keys(found).some((k) => k.startsWith('folder:'))).toBe(false);
+    });
+
     it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
       for (const command of [
         'noglob cd /tmp/pr83 && rm -rf *',

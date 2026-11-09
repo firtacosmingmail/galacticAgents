@@ -684,8 +684,12 @@ describe('residual holes (P14-08)', () => {
       ).toBe(true);
       expect(decision(cmd), cmd).not.toBe('allow');
     }
+    // A cluster reading cannot be placed (review round 1, I-4).
     expect(findings('sort -ro/etc/x a')).toContainEqual(
-      expect.objectContaining({ action: 'outside_workspace', path: '/etc/x' }),
+      expect.objectContaining({
+        action: 'outside_workspace',
+        reason: '-ro/etc/x: cannot tell where it points',
+      }),
     );
     expect(findings('sort -o/tmp/x a')).toContainEqual(
       expect.objectContaining({ action: 'outside_workspace', path: '/tmp/x' }),
@@ -725,5 +729,35 @@ describe('residual holes, review round 1 (P14-08)', () => {
     }
     // The command behind it is still found.
     expect(classifyCommand('X+=1 rm -rf build', ctx).actions).toContain('destructive');
+  });
+
+  it('I-2: a glued `..` is a path', () => {
+    for (const cmd of ['tar -C.. -xf a.tar', 'make -C..', 'cp a -t..', 'sort -o.. a']) {
+      expect(outside(cmd).length, cmd).toBeGreaterThan(0);
+      expect(decision(cmd), cmd).not.toBe('allow');
+    }
+  });
+
+  it('I-4: only the first split is a resolved path; a later one outside is unresolvable', () => {
+    for (const cmd of [
+      'gcc -Iinclude/foo a.c',
+      'gcc -Lbuild/lib a.c',
+      'gcc -obuild/x a.c',
+      'clang++ -Iinclude/foo a.cc',
+    ]) {
+      expect(outside(cmd), cmd).toEqual([]);
+      expect(decision(cmd), cmd).toBe('allow');
+    }
+    // gcc's own long single-dash options still read their glued path.
+    expect(findings('gcc -isystem/usr/x a.c')).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/usr/x' }),
+    );
+    // A clustering program: the absolute tail is not a resolved path, it cannot be placed.
+    const ro = outside('sort -ro/srv/x a');
+    expect(ro.length).toBeGreaterThan(0);
+    expect(ro.every((f) => f.path === undefined)).toBe(true);
+    expect(decision('sort -ro/srv/x a')).not.toBe('allow');
+    // Every split still feeds the guarded-write check.
+    expect(classifyCommand('install -Dt.git/hooks x', ctx).guarded).toBe(true);
   });
 });

@@ -1725,10 +1725,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
-    const { paths, unresolvable } = pathsOf(simple);
+    const { paths, unresolvable, clustered } = pathsOf(simple);
     for (const p of paths) {
       if (!isInsideWorkspace(p, here)) {
         note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p)));
+      }
+    }
+    for (const c of clustered) {
+      if (!isInsideWorkspace(c.path, here)) {
+        note('outside_workspace', `${c.shown}: cannot tell where it points`, seg());
       }
     }
     for (const p of unresolvable) {
@@ -1933,6 +1938,12 @@ export interface CommandPaths {
   paths: string[];
   /** Tokens with a shell variable, substitution or `~user` the engine cannot expand lexically. */
   unresolvable: string[];
+  /**
+   * Paths only a cluster reading of an option word gives (`-ro/x`: `-r -o /x`; P14-08 review
+   * I-4), with the word they come from: one outside the workspace cannot be placed (it asks, with
+   * no folder row); one inside is nothing.
+   */
+  clustered: { path: string; shown: string }[];
 }
 
 /**
@@ -1941,22 +1952,47 @@ export interface CommandPaths {
  * ../foo` is checked. `$HOME` and `$PWD` are expanded; any other `$VAR` or substitution inside
  * a path-like token makes it unresolvable, and so does `~user`.
  */
-export function pathsInCommand(command: string): CommandPaths {
-  const out: CommandPaths = { paths: [], unresolvable: [] };
+export function pathsInCommand(command: string): Omit<CommandPaths, 'clustered'> {
+  const out: Omit<CommandPaths, 'clustered'> = { paths: [], unresolvable: [] };
   for (const c of lexCommand(command).commands) {
     const p = pathsOf(c);
-    out.paths.push(...p.paths);
+    // A caller that only reads `paths` judges the cluster readings too (fail closed).
+    out.paths.push(...p.paths, ...p.clustered.map((x) => x.path));
     out.unresolvable.push(...p.unresolvable);
   }
   return out;
 }
 
+/**
+ * Programs whose single-dash options never cluster (`gcc -Iinclude/x` is `include/x`, not `-I -i
+ * …`): only the value after the first letter counts (P14-08 review I-4).
+ */
+const NON_CLUSTERING = new Set([
+  'cc',
+  'c++',
+  'gcc',
+  'g++',
+  'clang',
+  'clang++',
+  'ld',
+  'javac',
+  'swiftc',
+  'rustc',
+]);
+/** The compilers' long single-dash options with a glued path (`-isystem/usr/x`). */
+const COMPILER_PATH_OPTION =
+  /^-(?:isystem|iquote|idirafter|imacros|include|iprefix|iwithprefix|iwithprefixbefore|isysroot|iframework|imultilib)(.+)$/;
+
 function pathsOf(command: SimpleCommand): CommandPaths {
-  const out: CommandPaths = { paths: [], unresolvable: [] };
+  const out: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
+  const head = command.words[commandHead(command.words)];
+  const clusters = head === undefined || !NON_CLUSTERING.has(baseName(head));
   const add = (word: string, isTarget: boolean) => {
-    for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word);
+    for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word, clusters);
   };
   for (const w of command.words) {
+    const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
+    if (long !== undefined) add(long, false);
     add(w, false);
     // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
     // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).
@@ -2036,35 +2072,58 @@ function assignedPaths(word: string): string[] {
 interface OptionValue {
   value: string;
   strict: boolean;
+  /** Read after the second or a later option letter: only a cluster reading gives it. */
+  later: boolean;
 }
 
 /**
  * The values an option word may carry (none for a word that carries none): `--opt=<value>` (any
  * `-…=`), and a value glued to single-dash option letters — after ANY of them, since the letters
  * may be a cluster (`-ro/etc/x` is `-r -o /etc/x`; `-ox/../x` is `-o x/../x`): every suffix that
- * contains a `/` (P14-07 M5, P14-08) or starts with `$` or `~` (`-o$HOME/.zshrc`; `strict`: an
- * expanded path, outside or unknown). A suffix of neither kind stays an option (`-la`, `-n5`).
+ * contains a `/`, is `..` (P14-07 M5, P14-08: `-C..`) or starts with `$` or `~` (`-o$HOME/.zshrc`;
+ * `strict`: an expanded path, outside or unknown). A suffix of none of these kinds stays an option
+ * (`-la`, `-n5`).
  */
 function optionValues(word: string): OptionValue[] {
   const out: OptionValue[] = [];
   const eq = word.indexOf('=');
-  if (eq > 0 && word.startsWith('-')) out.push({ value: word.slice(eq + 1), strict: false });
+  if (eq > 0 && word.startsWith('-')) {
+    out.push({ value: word.slice(eq + 1), strict: false, later: false });
+  }
   const m = /^-([A-Za-z0-9]+)(.*)$/.exec(word);
   if (m) {
     const [, letters = '', rest = ''] = m;
     for (let i = 1; i <= letters.length; i++) {
       const value = letters.slice(i) + rest;
-      if (/^[$~]/.test(value)) out.push({ value, strict: true });
-      else if (value.includes('/')) out.push({ value, strict: false });
+      const later = i > 1;
+      if (/^[$~]/.test(value)) out.push({ value, strict: true, later });
+      else if (value.includes('/') || value === '..') out.push({ value, strict: false, later });
     }
   }
   return out;
 }
 
-function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
+/**
+ * A word's path tokens into `out`. An option word's first value is a path; a later one (a cluster
+ * reading, `clusters` only) goes to `out.clustered` (P14-08 review I-4).
+ */
+function pathToken(
+  raw: string,
+  isTarget: boolean,
+  out: CommandPaths,
+  shown: string,
+  clusters = true,
+): void {
   if (!isTarget && raw.startsWith('-')) {
     for (const v of optionValues(raw)) {
-      if (v.strict || !v.value.startsWith('-')) wordPath(v.value, v.strict, out, shown);
+      if (!v.strict && v.value.startsWith('-')) continue;
+      if (!v.later) wordPath(v.value, v.strict, out, shown);
+      else if (clusters) {
+        const seen: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
+        wordPath(v.value, v.strict, seen, shown);
+        out.clustered.push(...seen.paths.map((path) => ({ path, shown })));
+        out.unresolvable.push(...seen.unresolvable);
+      }
     }
     return;
   }
