@@ -641,6 +641,9 @@ function matchesScope(
         prefixRefusal(match.words) === undefined &&
         commandMatchesPrefix(subject.command, match.words)
       );
+    case 'host':
+      // P14 (Task 3 makes the matcher): a site rule matches nothing until then.
+      return false;
     case 'folder':
       return (
         rule.scope === 'prefix' &&
@@ -707,7 +710,12 @@ export function unattendedRuleRefusal(
     exact: ['text'],
     prefix: ['words', 'folder'],
     category: ['categories'],
+    folder: ['folder'],
+    site: ['host'],
   };
+  if (scope === 'folder' || scope === 'site') {
+    return `a ${scope} rule is not offered to a job (P14)`;
+  }
   if (!pairs[scope].includes(match.kind)) {
     return `a ${scope} rule never matches ${match.kind === 'categories' ? 'whole categories' : `a ${match.kind}`}`;
   }
@@ -762,6 +770,8 @@ export function unattendedRuleLabel(
       const doing = groupOf(tool) === 'read' ? 'reading' : 'writing and editing';
       return `${doing} under ${tildeOf(resolve(match.folder), opts.home ?? homedir())}/…${only}`;
     }
+    case 'host':
+      return `${tool} to ${match.host}${only}`;
     case 'categories':
       return `any call the table asks about only as ${categoryWords(categories)}`;
   }

@@ -15,6 +15,8 @@ const SCOPE: Record<PermissionRuleScope, string> = {
   exact: 'exactly',
   prefix: 'prefix / folder',
   category: 'category',
+  folder: 'folder',
+  site: 'site',
 };
 
 function when(at: string): string {

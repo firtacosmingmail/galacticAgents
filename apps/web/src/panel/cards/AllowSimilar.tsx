@@ -57,6 +57,8 @@ const SCOPE_WORDS: Record<PermissionRuleScope, string> = {
   exact: 'Exactly this',
   prefix: 'This command prefix / folder',
   category: 'This whole category',
+  folder: 'This folder',
+  site: 'This site',
 };
 
 type Preview =

@@ -21,7 +21,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | done (2026-11-04; `p11-1-ai-providers` and `p11-2-fixes` merged into `phase-11`, merged into `main` 2026-11-04) | 15/15 | — |
 | 12 — Steward launch flags (`--chrome`) | `PHASE_12_LAUNCH_FLAGS.md` | done (2026-11-06; branch `agent-launch-flags`) | 10/10 | — |
 | 13 — Waykeeper approvals | `PHASE_13_WAYKEEPER_APPROVALS.md` | in progress (branch `agent-waykeeper-approvals`; P13-07 blocked, waiting for Cosmin's real run) | 7/8 | P13-07 |
-| 14 — "Allow similar" per reason | `PHASE_14_ALLOW_SIMILAR.md` | in progress (branch `agent-allow-similar-reasons`) | 0/6 | P14-01 |
+| 14 — "Allow similar" per reason | `PHASE_14_ALLOW_SIMILAR.md` | in progress (branch `agent-allow-similar-reasons`) | 1/6 | P14-02 |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7 → 9 → 10 → 11 → 12 → 13 → 14; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6. Phase 9 (deliverables) needs Phase 5 and the Phase 8 tasks P8-02, P8-03, P8-06 and P8-11; it does not wait for P7-06.
 

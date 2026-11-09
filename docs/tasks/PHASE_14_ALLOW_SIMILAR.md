@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-01 · **Task status:** P14-01 in progress
-**Phase status:** in progress (0/6) — branch `agent-allow-similar-reasons`
+**Current task:** P14-02 · **Task status:** P14-01 done (2026-11-09)
+**Phase status:** in progress (1/6) — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -35,7 +35,7 @@ P14-01…06 run in order.
 ## Tasks
 
 ### P14-01 — Protocol shapes and the phase board
-- **Status:** in progress · **Depends on:** — · **Parallel with:** —
+- **Status:** done (2026-11-09) · **Depends on:** — · **Parallel with:** —
 - Plan Task 1: `folder`/`site` scopes, `host` match, folder `access`, per-reason `SimilarOption`/preview/body/input shapes (new fields optional until Tasks 4–5), `PermissionDecided.ruleIds`.
 - **Acceptance:** the protocol schema tests pass (site and folder rules parse, empty `digests` fails, `ruleIds` and old `ruleId` parse); build and typecheck are green.
 

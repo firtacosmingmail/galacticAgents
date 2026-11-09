@@ -303,6 +303,9 @@ export interface AllowSimilarInput {
   scope: PermissionRuleScope;
   /** The preview's digest for `scope` (P9-17 review S1): a rule drafted again must match it. */
   digest: string;
+  /** P14: the digests of the ticked rows, and the call's (the P9-17 `scope`/`digest` go later). */
+  digests?: string[];
+  callDigest?: string;
   by: Actor;
   origin?: RequestOrigin;
   version?: number;
