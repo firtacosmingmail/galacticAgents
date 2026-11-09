@@ -20,7 +20,7 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 10 — Long-term projects, area moons and recurring jobs | `PHASE_10_LONG_TERM_PROJECTS.md` | done (2026-10-27; merged into `phase-10`, then into `phase-11`, merged into `main` 2026-11-04) | 8/8 | — |
 | 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | done (2026-11-04; `p11-1-ai-providers` and `p11-2-fixes` merged into `phase-11`, merged into `main` 2026-11-04) | 15/15 | — |
 | 12 — Steward launch flags (`--chrome`) | `PHASE_12_LAUNCH_FLAGS.md` | done (2026-11-06; branch `agent-launch-flags`) | 10/10 | — |
-| 13 — Waykeeper approvals | `PHASE_13_WAYKEEPER_APPROVALS.md` | in progress (branch `agent-waykeeper-approvals`) | 4/7 | P13-05 |
+| 13 — Waykeeper approvals | `PHASE_13_WAYKEEPER_APPROVALS.md` | in progress (branch `agent-waykeeper-approvals`) | 5/7 | P13-06 |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7 → 9 → 10 → 11 → 12 → 13; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6. Phase 9 (deliverables) needs Phase 5 and the Phase 8 tasks P8-02, P8-03, P8-06 and P8-11; it does not wait for P7-06.
 

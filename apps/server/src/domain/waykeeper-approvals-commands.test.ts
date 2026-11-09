@@ -228,7 +228,7 @@ describe('standingApproval', () => {
   it('is refused for a project that ended, answering nothing', async () => {
     const s = setup();
     const q = await s.forwarded({ similar: THREE });
-    s.cmd((ctx) => closeProject(ctx, s.project.id));
+    s.cmd((ctx) => closeProject(ctx, s.project.id, USER));
     const e = await s.refusal(s.commands.standingApproval({ questionId: q.id, by: USER }));
     expect(e.code).toBe('invalid');
     expect(s.w.tables.questions.get(q.id)!.status).toBe('open');
