@@ -16,6 +16,12 @@ import {
   type DraftQuestionInput,
   type OpenQuestionSetInput,
   type AllowSimilarInput,
+  type RemoveStandingApprovalInput,
+  type SetWaykeeperApprovalsInput,
+  type StandingApproval,
+  type StandingApprovalInput,
+  SIMILAR_APPROVALS_THRESHOLD,
+  needsUserQuote,
   type PermissionRule,
   type Project,
   type RemovePermissionRuleInput,
@@ -132,6 +138,12 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
+import {
+  addStandingApproval,
+  removeStandingApproval,
+  setWaykeeperApprovals,
+} from './waykeeper-approvals.js';
+import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
 import { createProposal, decideProposal, proposeJob, proposePlan } from './proposals.js';
 import {
@@ -853,7 +865,11 @@ export class Commands implements DomainCommands {
     const events = this.log
       .eventsSince(since, Number.MAX_SAFE_INTEGER)
       .map((e) => e.event)
-      .filter((e) => e.type === 'question.answered' && e.questionId === questionId);
+      .filter(
+        (e) =>
+          (e.type === 'question.answered' && e.questionId === questionId) ||
+          (e.type === 'approval.recorded' && e.approval.questionId === questionId),
+      );
     return { value: after, events };
   }
   /** An agent passes a set row up with `answerQuestionSet` (P8-19), never alone. */
@@ -1352,6 +1368,122 @@ export class Commands implements DomainCommands {
         events: answered.events,
       };
     }
+  }
+
+  /**
+   * The user's "let the Waykeeper approve these" (P13-05, SPEC decision 154): the forwarded request
+   * is answered "allow" (through its session first when one waits, like any answer, and recorded
+   * as an approval) and a standing approval of its kind is stored on the asking agent's project.
+   * Refused before anything happens: not the user, a stale `version` or a question answered
+   * already (so a second tap stores nothing twice), a request the Waykeeper did not forward, fewer
+   * than `SIMILAR_APPROVALS_THRESHOLD` similar approvals on the card, a push or an upload (never a
+   * standing approval, whatever the card says), a request of no project or of one that ended. A
+   * remote origin is allowed: it grants the Waykeeper nothing the user has not just allowed.
+   */
+  async standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApproval>> {
+    const { questionId, by } = input;
+    if (by.type !== 'user') {
+      throw new DomainError('invalid', 'only the user makes standing approvals');
+    }
+    const question = must(this.log.tables.questions.get(questionId), 'question', questionId);
+    const answer = {
+      questionId,
+      answer: 'allow',
+      answeredBy: by,
+      ...(input.version !== undefined ? { version: input.version } : {}),
+      ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
+    };
+    refuseSetRow(question);
+    checkAnswer(question, answer);
+    const forward = question.context.waykeeper;
+    if (question.kind !== 'permission' || !forward) {
+      throw new DomainError('invalid', 'only a request the Waykeeper forwarded can become one');
+    }
+    if ((forward.similar?.length ?? 0) < SIMILAR_APPROVALS_THRESHOLD) {
+      throw new DomainError(
+        'invalid',
+        `a standing approval needs ${SIMILAR_APPROVALS_THRESHOLD} similar approvals first`,
+      );
+    }
+    if (
+      question.context.permissionAction === 'push' ||
+      forward.parts.some((p) => p.categories.includes('push') || needsUserQuote(p))
+    ) {
+      throw new DomainError(
+        'invalid',
+        'a push or an upload is never a standing approval: allow it once',
+      );
+    }
+    const call = question.context.toolCall;
+    if (!call) throw new DomainError('invalid', 'the request names no tool call');
+    const { tables } = this.log;
+    const agent = tables.agents.get(question.originAgentId);
+    const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
+    const projectId = agent?.projectId ?? task?.projectId;
+    const project = projectId ? tables.projects.get(projectId) : undefined;
+    if (!project) throw new DomainError('invalid', 'the request belongs to no project');
+    if (RULES_END_IN.has(project.state)) {
+      throw new DomainError('invalid', `project ${project.name} is ${project.state}`);
+    }
+    const draft = {
+      kind: forward.kind,
+      examples: [...forward.similar!.map((r) => r.summary).slice(-9), precedentOf(call)].slice(-10),
+    };
+    const made = { by, origin: input.origin ?? ('remote' as const), questionId };
+    if (!this.agents?.hasQuestion(questionId)) {
+      return this.run((ctx) => {
+        answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) });
+        return addStandingApproval(ctx, project.id, draft, made);
+      });
+    }
+    const answered = await this.answerQuestion({
+      questionId,
+      answer: 'allow',
+      by,
+      ...(input.version !== undefined ? { version: input.version } : {}),
+      ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
+    });
+    const stored = await this.run((ctx) => addStandingApproval(ctx, project.id, draft, made));
+    return { value: stored.value, events: [...answered.events, ...stored.events] };
+  }
+
+  /** The user turns a project's Waykeeper approvals on or off (P13-05): on needs the Mac. */
+  setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(
+        new DomainError('invalid', 'only the user switches Waykeeper approvals'),
+      );
+    }
+    if (input.on && !this.mayWriteRules(input.origin)) {
+      return Promise.reject(
+        new DomainError(
+          'remote_control',
+          'Waykeeper approvals are turned on only from this machine',
+        ),
+      );
+    }
+    return this.run((ctx) => {
+      setWaykeeperApprovals(ctx, input.projectId, input.on, input.by);
+      return must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
+    });
+  }
+
+  /** The user removes a project's standing approval (P13-05), from anywhere. */
+  removeStandingApproval(
+    input: RemoveStandingApprovalInput,
+  ): Promise<CommandResult<StandingApproval>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user removes standing approvals'));
+    }
+    return this.run((ctx) =>
+      removeStandingApproval(
+        ctx,
+        input.projectId,
+        input.approvalId,
+        input.by,
+        'removed by the user',
+      ),
+    );
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */

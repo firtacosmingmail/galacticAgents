@@ -6,6 +6,10 @@ import {
   DraftBody,
   AgentRuntime as AgentRuntimeName,
   AllowSimilarBody,
+  StandingApprovalBody,
+  WaykeeperApprovalsBody,
+  type StandingApprovalResponse,
+  type WaykeeperApprovalsResponse,
   AnswerBody,
   DismissBody,
   ControlBody,
@@ -724,6 +728,66 @@ export function registerAgentRoutes(
             origin: originOf(req),
           });
           return { ok: true } satisfies RemovePermissionRuleResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+    }
+
+    /**
+     * Waykeeper approvals (P13-05, SPEC decision 154). `standing-approval` answers a forwarded
+     * request "allow" and stores a standing approval of its kind — open to a remote client (it
+     * widens nothing the user has not just allowed). The switch turns on only from the Mac (403
+     * `remote_control`; off from anywhere); removing a standing approval works from anywhere. None
+     * from an agent's or a run's process (403 `agent_peer`).
+     */
+    if (commands) {
+      app.post('/api/questions/:id/standing-approval', async (req, reply) => {
+        const body = parse(StandingApprovalBody, req.body ?? {}, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const questionId = (req.params as { id: string }).id;
+        try {
+          const { value } = await commands.standingApproval({
+            questionId,
+            by: USER,
+            origin: originOf(req),
+            ...(body.version !== undefined ? { version: body.version } : {}),
+            ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
+          });
+          return { ok: true, approval: value } satisfies StandingApprovalResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.put('/api/projects/:id/waykeeper-approvals', async (req, reply) => {
+        const body = parse(WaykeeperApprovalsBody, req.body, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const projectId = (req.params as { id: string }).id;
+        try {
+          await commands.setWaykeeperApprovals({
+            projectId,
+            on: body.on,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.delete('/api/projects/:id/standing-approvals/:approvalId', async (req, reply) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { id, approvalId } = req.params as { id: string; approvalId: string };
+        try {
+          await commands.removeStandingApproval({
+            projectId: id,
+            approvalId,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
         } catch (error) {
           return refuse(req, reply, error);
         }

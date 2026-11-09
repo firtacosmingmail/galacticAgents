@@ -3,6 +3,7 @@ import {
   MAX_RECORDED_APPROVALS,
   type Actor,
   type Id,
+  type Question,
   type RecordedApproval,
   type RequestOrigin,
   type StandingApproval,
@@ -10,6 +11,7 @@ import {
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { RULES_END_IN } from './project-rules.js';
+import { precedentOf } from '../runtime/scope-watch.js';
 
 /**
  * A project's Waykeeper approvals as rows (P13-01, SPEC decision 154), kept on its row like the
@@ -138,4 +140,39 @@ export function endStandingApprovals(
     const { recordedApprovals: _old, ...row } = project;
     ctx.tables.projects.upsert(row);
   }
+}
+
+/** The project a question's asking agent works for (a Steward's is its task's), when it has one. */
+export function projectIdOfAsker(ctx: CommandContext, question: Question): Id | undefined {
+  const agent = ctx.tables.agents.get(question.originAgentId);
+  const task = agent?.taskId ? ctx.tables.tasks.get(agent.taskId) : undefined;
+  return agent?.projectId ?? task?.projectId;
+}
+
+/**
+ * The user's "allow" of a request the Waykeeper forwarded is an approval to remember: recorded on
+ * the asking agent's project in the answer's own transaction, with the kind the judge named and a
+ * redacted one-line summary of the call (the precedent line). Anything else records nothing: a deny,
+ * a plain permission request, an answer by anyone but the user, a project that ended.
+ */
+export function recordForwardedAllow(
+  ctx: CommandContext,
+  question: Question,
+  answer: string,
+  by: Actor,
+): void {
+  const forward = question.context.waykeeper;
+  const call = question.context.toolCall;
+  if (question.kind !== 'permission' || !forward || !call) return;
+  if (answer !== 'allow' || by.type !== 'user') return;
+  const projectId = projectIdOfAsker(ctx, question);
+  const project = projectId ? ctx.tables.projects.get(projectId) : undefined;
+  if (!project || RULES_END_IN.has(project.state)) return;
+  recordApproval(ctx, project.id, {
+    kind: forward.kind,
+    summary: precedentOf(call),
+    agentId: question.originAgentId,
+    questionId: question.id,
+    at: ctx.now,
+  });
 }

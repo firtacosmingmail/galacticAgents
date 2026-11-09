@@ -21,6 +21,7 @@ import type { CommandContext } from './event-log.js';
 import { applyJobAnswer } from './findings.js';
 import { approvedPublish } from './publish.js';
 import { applyLimitAnswer, checkLimitAnswer } from './usage-limits.js';
+import { recordForwardedAllow } from './waykeeper-approvals.js';
 
 /**
  * Question commands (P1-23, P2-01; SPEC §2.6, TECHNOLOGY §5.3). The server owns questions: an
@@ -277,6 +278,8 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   applyJobAnswer(ctx, question, { isLiving: input.isLiving });
   // A usage limit's choice is recorded with the answer (P11-07), so a restart still carries it out.
   applyLimitAnswer(ctx, question);
+  // The user's allow of a request the Waykeeper forwarded is remembered (P13-05).
+  recordForwardedAllow(ctx, question, input.answer, input.answeredBy);
   return question;
 }
 

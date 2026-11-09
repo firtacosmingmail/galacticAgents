@@ -19,6 +19,7 @@ import {
 import { ControlTarget } from './events.js';
 import { JobRun, LONG_TERM_LIMITS } from './long-term.js';
 import { Id, Timestamp } from './primitives.js';
+import { StandingApproval } from './waykeeper-approvals.js';
 
 // ---------------------------------------------------------------------------
 // The small REST control surface (TECHNOLOGY §2.2; the ops console of P1-11). Results arrive on
@@ -228,6 +229,30 @@ export type AllowSimilarResponse = z.infer<typeof AllowSimilarResponse>;
 /** `DELETE /api/projects/:id/permission-rules/:ruleId`'s reply (P9-17). */
 export const RemovePermissionRuleResponse = z.object({ ok: z.literal(true) });
 export type RemovePermissionRuleResponse = z.infer<typeof RemovePermissionRuleResponse>;
+
+/**
+ * `POST /api/questions/:id/standing-approval` (P13-05): answers the forwarded request "allow" and
+ * stores a standing approval of its kind. `version` and `answerId` as for an answer.
+ */
+export const StandingApprovalBody = z.object({
+  version: z.number().int().nonnegative().optional(),
+  answerId: z.string().min(1).max(100).optional(),
+});
+export type StandingApprovalBody = z.infer<typeof StandingApprovalBody>;
+
+export const StandingApprovalResponse = z.object({
+  ok: z.literal(true),
+  approval: StandingApproval,
+});
+export type StandingApprovalResponse = z.infer<typeof StandingApprovalResponse>;
+
+/** `PUT /api/projects/:id/waykeeper-approvals` (P13-05): the project's switch. */
+export const WaykeeperApprovalsBody = z.object({ on: z.boolean() });
+export type WaykeeperApprovalsBody = z.infer<typeof WaykeeperApprovalsBody>;
+
+/** `PUT …/waykeeper-approvals` and `DELETE …/standing-approvals/:approvalId`'s reply (P13-05). */
+export const WaykeeperApprovalsResponse = z.object({ ok: z.literal(true) });
+export type WaykeeperApprovalsResponse = z.infer<typeof WaykeeperApprovalsResponse>;
 
 /** A refused answer: `stale` when the question was answered or moved since `version`. */
 export const AnswerRefusal = z.object({

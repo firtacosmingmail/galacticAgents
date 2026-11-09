@@ -16,6 +16,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
@@ -312,6 +313,38 @@ export interface AllowSimilarInput {
 export interface RemovePermissionRuleInput {
   projectId: Id;
   ruleId: Id;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/**
+ * The user's "let the Waykeeper approve these" on a forwarded permission card (P13-05, SPEC
+ * decision 154): the request is answered "allow" and a standing approval of its kind is stored on
+ * the asking agent's project, in one command. Only the user; allowed from a remote client too (it
+ * widens nothing the user has not allowed). Refused unless the card carries at least
+ * `SIMILAR_APPROVALS_THRESHOLD` similar approvals, and never for a push or an upload. `version`
+ * and `answerId` as for an answer.
+ */
+export interface StandingApprovalInput {
+  questionId: Id;
+  by: Actor;
+  origin?: RequestOrigin;
+  version?: number;
+  answerId?: string;
+}
+
+/** The user turns a project's Waykeeper approvals on or off; `on` needs the Mac (or `autoApproveRemote`). */
+export interface SetWaykeeperApprovalsInput {
+  projectId: Id;
+  on: boolean;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/** The user removes a project's standing approval, from anywhere. */
+export interface RemoveStandingApprovalInput {
+  projectId: Id;
+  approvalId: Id;
   by: Actor;
   origin?: RequestOrigin;
 }
@@ -640,6 +673,15 @@ export interface DomainCommands {
    * denied); a stale `version` is refused like a stale answer.
    */
   dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>>;
+
+  /** The user's standing approval from a forwarded card (P13-05): answers "allow" and stores it. */
+  standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApproval>>;
+  /** Turns a project's Waykeeper approvals on or off (P13-05). */
+  setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>>;
+  /** Removes a project's standing approval (P13-05). */
+  removeStandingApproval(
+    input: RemoveStandingApprovalInput,
+  ): Promise<CommandResult<StandingApproval>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;
