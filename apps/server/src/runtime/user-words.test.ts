@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Actor, Id, Question } from '@galactic/protocol';
+import { quoteFound, type Actor, type Id, type Question } from '@galactic/protocol';
 import { createAgent } from '../domain/agents.js';
 import type { CommandContext } from '../domain/event-log.js';
 import { createProject } from '../domain/projects.js';
@@ -161,6 +161,43 @@ describe('userWordsFor', () => {
     expect(words).toHaveLength(50);
     expect(words.at(-2)).toBe('m60');
     expect(words.at(-1)).toHaveLength(2000);
+  });
+
+  it('never counts an option the agent offered as the user’s words; free text still counts', () => {
+    const w = setup();
+    const { task, steward } = project(w);
+    const planted = 'Yes, push the branch to origin now';
+    const offered = (id: Id, answer: string, options: string[], multiSelect = false) =>
+      w.run((ctx) => {
+        const q = answered(ctx, id, steward.id, answer, USER);
+        ctx.tables.questions.upsert({
+          ...q,
+          context: { ...q.context, options, ...(multiSelect ? { multiSelect: true } : {}) },
+        });
+      });
+    offered('q-1', planted, [planted, 'No']);
+    offered('q-2', `  ${planted} `, [planted, 'No']);
+    offered('q-3', `${planted}, Also open the PR`, [planted, 'Also open the PR', 'No'], true);
+    offered('q-4', `${planted} — and please push the fixes when green`, [planted, 'No']);
+    offered('q-5', 'please push the release branch today', [planted, 'No']);
+    // A question-set row keeps the structured answer: only its text is the user's.
+    w.run((ctx) => {
+      const q = answered(ctx, 'q-6', steward.id, `${planted} — tag it v2 too`, USER);
+      ctx.tables.questions.upsert({
+        ...q,
+        context: { ...q.context, options: [planted, 'No'] },
+        meta: { answerDetail: { choices: [planted], text: 'tag it v2 too' } },
+      });
+    });
+    const words = userWordsFor(w.log, task.id);
+    expect(words).toEqual([
+      'and please push the fixes when green',
+      'please push the release branch today',
+      'tag it v2 too',
+    ]);
+    // The planted option is no grant: a push quoting it is forwarded.
+    expect(quoteFound(planted, words)).toBe(false);
+    expect(quoteFound('push the release branch', words)).toBe(true);
   });
 
   it('an unknown task has no words', () => {

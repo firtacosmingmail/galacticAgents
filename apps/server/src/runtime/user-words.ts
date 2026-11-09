@@ -1,4 +1,4 @@
-import type { Agent, Id } from '@galactic/protocol';
+import { answerDetailOf, type Agent, type Id, type Question } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 
 /**
@@ -36,7 +36,8 @@ interface Said {
  *
  *   - his messages (`message.sent` with a `user` sender) to the task's Stewards and to the
  *     project's Waykeepers;
- *   - his answers (`answeredBy` the user) to questions of the project's agents;
+ *   - his answers (`answeredBy` the user) to questions of the project's agents — only what he
+ *     wrote: never an option the agent offered (`freeTextOf`);
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
@@ -85,10 +86,10 @@ function collect(log: EventLogReader, taskId: Id): string[] {
       q.status === 'answered' &&
       q.answeredBy?.type === 'user' &&
       typeof q.answer === 'string' &&
-      q.answer.trim() &&
       asking.has(q.originAgentId)
     ) {
-      said.push({ at: q.updatedAt, seq: Number.MAX_SAFE_INTEGER, text: q.answer });
+      const text = freeTextOf(q, q.answer);
+      if (text) said.push({ at: q.updatedAt, seq: Number.MAX_SAFE_INTEGER, text });
     }
   }
 
@@ -104,6 +105,54 @@ function collect(log: EventLogReader, taskId: Id): string[] {
   return byTime(said)
     .slice(-MAX_USER_WORDS)
     .map((s) => s.text.slice(0, MAX_USER_WORD_CHARS));
+}
+
+/** How a multi-select answer joins its choices, and its choices to its text (`renderSetAnswer`). */
+const CHOICE_JOIN = ', ';
+const TEXT_JOIN = ' — ';
+
+/**
+ * The part of an answer the user wrote himself: an option the asking agent offered is the agent's
+ * text, not his (final review I1). An answer that is only options (one, or several joined as a
+ * multi-select answer) has none; "<options> — <text>" keeps the text; anything else is kept whole.
+ */
+function freeTextOf(q: Question, answer: string): string | undefined {
+  const options = new Set((q.context.options ?? []).map((o) => o.trim()).filter(Boolean));
+  if (options.size === 0) return answer.trim() || undefined;
+  const detail = answerDetailOf(q);
+  if (detail) return detail.skipped ? undefined : detail.text?.trim() || undefined;
+  const a = answer.trim();
+  if (!a || madeOfOptions(a, options)) return undefined;
+  for (let at = a.indexOf(TEXT_JOIN); at >= 0; at = a.indexOf(TEXT_JOIN, at + 1)) {
+    if (madeOfOptions(a.slice(0, at).trim(), options)) {
+      return a.slice(at + TEXT_JOIN.length).trim() || undefined;
+    }
+  }
+  return a;
+}
+
+/** Whether `text` is one or more of `options` joined by `CHOICE_JOIN`. */
+function madeOfOptions(text: string, options: ReadonlySet<string>): boolean {
+  const memo = new Map<number, boolean>();
+  const from = (i: number): boolean => {
+    const known = memo.get(i);
+    if (known !== undefined) return known;
+    let ok = false;
+    for (const o of options) {
+      if (!text.startsWith(o, i)) continue;
+      const end = i + o.length;
+      if (
+        end === text.length ||
+        (text.startsWith(CHOICE_JOIN, end) && from(end + CHOICE_JOIN.length))
+      ) {
+        ok = true;
+        break;
+      }
+    }
+    memo.set(i, ok);
+    return ok;
+  };
+  return text.length > 0 && from(0);
 }
 
 const byTime = (said: Said[]): Said[] =>
