@@ -461,8 +461,7 @@ describe('ApprovalWatch', () => {
 
     it('a push hidden in inline code forwards without the judge', async () => {
       const { judge, seen } = scripted(approve());
-      // No brackets: a `[` in a word may match a guarded name (P14-08 review round 3).
-      const { c, approve: approved, forward } = call(`python -c "subprocess.run(('git','push'))"`);
+      const { c, approve: approved, forward } = call(`python -c "subprocess.run(['git','push'])"`);
       await new ApprovalWatch({ judge }).handle(c);
       expect(seen).toEqual([]);
       expect(approved).not.toHaveBeenCalled();

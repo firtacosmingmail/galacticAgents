@@ -525,6 +525,31 @@ export function globLocations(pattern: string): string[] | null {
   });
 }
 
+/**
+ * Where the bracket expression opening at `seg[open]` ends (the index of its closing `]`), read
+ * the way zsh reads one: an optional `!` or `^`, a `]` taken as a member when it comes first, and
+ * `[:class:]` units. `-1` when it never closes.
+ */
+function bracketEnd(seg: string, open: number): number {
+  let k = open + 1;
+  if (seg[k] === '!' || seg[k] === '^') k++;
+  if (seg[k] === ']') k++;
+  while (k < seg.length) {
+    if (seg[k] === ']') return k;
+    if (seg[k] === '[' && seg[k + 1] === ':') {
+      const end = seg.indexOf(':]', k + 2);
+      if (end < 0) return -1;
+      k = end + 2;
+    } else k++;
+  }
+  return -1;
+}
+
+/**
+ * Whether a glob segment can match `name`. A bracket expression matches exactly one character,
+ * whatever its members (conservative); one that never closes makes the segment match anything
+ * (fail closed: P14-08 review round 4).
+ */
 function globSegmentMatches(seg: string, name: string): boolean {
   let rx = '';
   for (let k = 0; k < seg.length; k++) {
@@ -532,12 +557,10 @@ function globSegmentMatches(seg: string, name: string): boolean {
     if (c === '*') rx += '.*';
     else if (c === '?') rx += '.';
     else if (c === '[') {
-      const close = seg.indexOf(']', k + 2);
-      if (close < 0) rx += '\\[';
-      else {
-        rx += '.'; // any class may match the character: conservative
-        k = close;
-      }
+      const close = bracketEnd(seg, k);
+      if (close < 0) return true;
+      rx += '.';
+      k = close;
     } else rx += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
   return new RegExp(`^${rx}$`).test(name);
@@ -2096,10 +2119,8 @@ function guardedGlobReason(word: string, ctx: PolicyContext): string | undefined
 
 /** Whether a glob segment can match `name` in zsh without GLOB_DOTS (case-folded). */
 function zshGlobMatches(seg: string, name: string): boolean {
-  // A bracket class may be anything zsh reads as one (`[[:alpha:]]`, `[!]x]`): fail closed
-  // (P14-08 review round 3).
-  if (seg.includes('[')) return true;
-  if (name.startsWith('.') && !seg.startsWith('.')) return false;
+  // A segment that starts with a bracket may match a leading dot too (`[.]git`): conservative.
+  if (name.startsWith('.') && !/^[.[]/.test(seg)) return false;
   return globSegmentMatches(seg.toLowerCase(), name.toLowerCase());
 }
 

@@ -918,6 +918,9 @@ describe('residual holes, review round 3 (P14-08)', () => {
       push: 'allow',
     },
   };
+  const WORKSPACE_ALLOWED: PermissionPolicy = {
+    rules: { read_workspace: 'allow', edit_workspace: 'allow', run_workspace: 'allow' },
+  };
   const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
   const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
     evaluate(policy, call(cmd), ctx).decision;
@@ -995,6 +998,34 @@ describe('residual holes, review round 3 (P14-08)', () => {
     ]) {
       expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
       expect(decision(cmd), cmd).toBe('ask');
+    }
+  });
+
+  it('(b, round 4) a bracket expression matches one character; a malformed one anything', () => {
+    for (const cmd of [
+      'cp e .gi[[:alpha:]]/hooks/pre-commit',
+      'cp e .gi[!]x]/hooks/pre-commit',
+      'env -C .gi[[:alpha:]]/hooks touch pre-commit',
+      'cp e .gi[t]/hooks/x',
+      'cp e .gi[]t]/hooks/x',
+      'cp e [.]git/hooks/x',
+      'cp e .gi[/hooks/x',
+      'cp e .gi[[:alp/hooks/x',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    // Quotes are gone after lexing: a bracket in code or a pattern is one character, not a
+    // guarded name (decided as before round 3).
+    for (const [cmd, expected] of [
+      ["sed -i '' 's/[a-z]/x/' f.txt", 'allow'],
+      ['node -e "console.log(process.argv[2])"', 'ask'],
+      ['python3 -c "print([1,2])"', 'ask'],
+      ["npm test -- --grep '[unit]'", 'allow'],
+      ["cp x 'app/[id]/page.tsx'", 'allow'],
+    ] as const) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBeUndefined();
+      expect(decision(cmd, WORKSPACE_ALLOWED), cmd).toBe(expected);
     }
   });
 
