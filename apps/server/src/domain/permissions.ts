@@ -937,9 +937,13 @@ export function splitCommand(command: string): string[] {
 
 /**
  * Wrappers that run the next word as the command (`sudo rm`, `env X=1 rm`, `timeout 30 rm`);
- * skipped, with their options, to find the command's real name.
+ * skipped, with their options, to find the command's real name. zsh's precommand modifiers
+ * `noglob`, `nocorrect` and `-` too (P14-08: `noglob cd /tmp/x` enters /tmp/x).
  */
 const WRAPPERS = new Set([
+  'noglob',
+  'nocorrect',
+  '-',
   'sudo',
   'doas',
   'env',

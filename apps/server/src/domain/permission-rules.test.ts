@@ -1654,6 +1654,20 @@ describe('final review fixes (P14-07)', () => {
         true,
       );
     });
+
+    it('noglob, nocorrect, -, builtin and command do not hide a cd outside', () => {
+      for (const command of [
+        'noglob cd /tmp/pr83 && rm -rf *',
+        'nocorrect cd /tmp/pr83 && rm -rf *',
+        '- cd /tmp/pr83 && rm -rf *',
+        'builtin cd /tmp/pr83 && rm -rf *',
+        'command cd /tmp/pr83 && rm -rf *',
+      ]) {
+        const c = cover([pr83, rmPrefix, destructive], bash(command));
+        expect(c.allowed, command).toBe(false);
+        expect(uncoveredOf(c), command).toContain('destructive: rm -rf *');
+      }
+    });
   });
 
   describe('M2: widen never offers a system folder', () => {
