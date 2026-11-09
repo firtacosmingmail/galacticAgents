@@ -650,7 +650,8 @@ class ShellLexer {
     while (i < src.length) {
       const c = src[i]!;
       const next = src[i + 1];
-      if (c === ' ' || c === '\t' || c === '\r') {
+      // Only space and tab separate words: bash reads a carriage return as a word character.
+      if (c === ' ' || c === '\t') {
         flushWord();
         i++;
       } else if (c === '\n') {
@@ -740,7 +741,16 @@ class ShellLexer {
         i++;
         if (depth === 0 && nested) return i;
         if (depth > 0) depth--;
-      } else if ((c === '{' || c === '}') && word === null && isWordEnd(next)) {
+      } else if (
+        // `{` and `}` are reserved only in command position, as in bash: before any word or
+        // redirection of the simple command. Elsewhere they are ordinary arguments.
+        (c === '{' || c === '}') &&
+        word === null &&
+        pendingOp === null &&
+        cmd.words.length === 0 &&
+        cmd.redirects.length === 0 &&
+        isWordEnd(next)
+      ) {
         flushCommand(false);
         i++;
       } else {
@@ -1307,38 +1317,134 @@ export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Whether a simple command sets variables or shell state a later command's destination could
- * depend on: assignments, the variable builtins, sourcing, `read`, `eval`, `printf -v`, and
- * function definitions. Any of them anywhere in a line hides every host (rulings R-d, R-e).
+ * Bash builtins and reserved words. External programs cannot change the shell's state; only
+ * builtins, keywords and assignments can (ruling R-g).
  */
-const STATE_PROGRAMS = new Set([
-  'export',
-  'env',
-  'set',
-  'declare',
-  'typeset',
-  'readonly',
-  'local',
-  '.',
-  'source',
-  'read',
-  'mapfile',
-  'readarray',
-  'eval',
+const SHELL_BUILTINS = new Set([
   'alias',
-  'unset',
+  'bg',
+  'bind',
+  'break',
+  'builtin',
+  'caller',
+  'cd',
+  'command',
+  'compgen',
+  'complete',
+  'compopt',
+  'continue',
+  'declare',
+  'dirs',
+  'disown',
+  'echo',
+  'enable',
+  'eval',
+  'exec',
+  'exit',
+  'export',
+  'false',
+  'fc',
+  'fg',
+  'getopts',
+  'hash',
+  'help',
+  'history',
+  'jobs',
+  'kill',
+  'let',
+  'local',
+  'logout',
+  'mapfile',
+  'popd',
+  'printf',
+  'pushd',
+  'pwd',
+  'read',
+  'readarray',
+  'readonly',
+  'return',
+  'set',
+  'shift',
   'shopt',
+  'source',
+  'suspend',
+  'test',
+  'times',
+  'trap',
+  'true',
+  'type',
+  'typeset',
+  'ulimit',
+  'umask',
+  'unalias',
+  'unset',
+  'wait',
+  '.',
+  ':',
+  '[',
+  // Reserved words: they prefix or wrap other commands, so the next word is not the program.
   'function',
+  'coproc',
+  'time',
+  '!',
+  '[[',
+  '((',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'fi',
+  'do',
+  'done',
+  'while',
+  'until',
+  'for',
+  'case',
+  'esac',
+  'select',
+  'in',
+  '{',
+  '}',
+  // Not a builtin, but it runs its arguments as a command with a changed environment.
+  'env',
 ]);
-function changesShellState(words: readonly string[]): boolean {
-  const head = words[0] ?? '';
-  return (
-    STATE_PROGRAMS.has(head) ||
-    /^[A-Za-z_][A-Za-z0-9_]*=/.test(head) ||
-    (head === 'printf' && words.includes('-v')) ||
-    /\(\)$/.test(head) ||
-    words[1] === '()'
-  );
+/** Builtins that cannot change what a later command's network destination is. */
+const STATE_SAFE_BUILTINS = new Set([
+  'cd',
+  'pushd',
+  'popd',
+  'echo',
+  'true',
+  'false',
+  'test',
+  '[',
+  'pwd',
+  ':',
+  'printf',
+]);
+/** `NAME=`, `NAME+=`, `NAME[...]=` (an assignment word). */
+const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+/** A word the shell could expand into another word (a builtin's name, for one). */
+const EXPANDABLE = /[$`{}*?[\]~\\]/;
+/** `${NAME:=…}`, `${NAME=…}` and friends assign while they expand. */
+const ASSIGNING_EXPANSION = /\$\{[^}]*=/;
+
+/**
+ * Whether a simple command may change the shell's state (variables, functions, traps, hashed
+ * paths, options) that a later command's destination could depend on. An allowlist (ruling
+ * R-g): false only with no assignment word, no assigning expansion, and a program word that is
+ * an external program or one of the safe builtins (`printf` only without `-v…`).
+ */
+function changesShellState(simple: SimpleCommand): boolean {
+  const { words } = simple;
+  const texts = [...words, ...simple.redirects.map((r) => r.target), simple.heredocBody ?? ''];
+  if (texts.some((w) => ASSIGNING_EXPANSION.test(w))) return true;
+  const program = words[0];
+  if (program === undefined) return false;
+  if (STATE_SAFE_BUILTINS.has(program)) {
+    return program === 'printf' && words.some((w) => w.startsWith('-v'));
+  }
+  return ASSIGNMENT_WORD.test(program) || EXPANDABLE.test(program) || SHELL_BUILTINS.has(program);
 }
 
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
@@ -1375,7 +1481,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   // command's network destination: no host is then visible (ruling R-d).
   // The lexer drops the parentheses of a function definition, so that one is read from the text.
   const lineSetsEnv =
-    lexed.commands.some((c) => changesShellState(c.words)) ||
+    lexed.commands.some((c) => changesShellState(c)) ||
     /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(trimmed);
 
   for (const [segment, simple] of lexed.commands.entries()) {

@@ -19,8 +19,9 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
 export interface HostsOptions {
   /**
-   * The line assigns or exports environment variables anywhere (`export`, `env`, `set`, an
-   * assignment segment): proxy, config and host variables then make every host unknown.
+   * The line may change the shell's state anywhere (an assignment, a builtin outside the safe
+   * set, a keyword, a function definition): proxy, config and host variables then make every
+   * host unknown (ruling R-g).
    */
   lineSetsEnv?: boolean;
   /** The simple command has a redirection of any kind (`> /dev/tcp/host/80` opens a socket). */
@@ -171,7 +172,8 @@ const GH_READ_ONLY: Record<string, ReadonlySet<string> | undefined> = {
   run: set('view', 'list', 'watch'),
   release: set('view', 'list'),
   search: undefined,
-  auth: set('status', 'token'),
+  // `auth status` checks every host in gh's hosts.yml, not only github.com.
+  auth: set('token'),
 };
 
 /**

