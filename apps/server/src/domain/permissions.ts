@@ -480,6 +480,11 @@ export interface SimpleCommand {
   piped: boolean;
   /** It reads a heredoc or a here-string. */
   heredoc: boolean;
+  /**
+   * The bodies of the heredocs it reads, one after the other, as written (P13-02: for the judge's
+   * command splitter only — the gate itself still treats a body as data).
+   */
+  heredocBody?: string;
 }
 
 export interface LexedLine {
@@ -491,7 +496,7 @@ export interface LexedLine {
 
 /** What a word holds where a command substitution was; it reads as an unexpandable variable. */
 const SUBSTITUTION = '$()';
-const MAX_NESTING = 16;
+export const MAX_NESTING = 16;
 const REDIRECT_OPS = ['<<<', '<<-', '<<', '<>', '<&', '<', '>>', '>&', '>|', '>'];
 
 /**
@@ -505,7 +510,12 @@ const REDIRECT_OPS = ['<<<', '<<-', '<<', '<>', '<&', '<', '>>', '>&', '>|', '>'
 class ShellLexer {
   readonly commands: SimpleCommand[] = [];
   readonly opaque: string[] = [];
-  private heredocs: { delim: string; strip: boolean; expand: boolean }[] = [];
+  private heredocs: {
+    delim: string;
+    strip: boolean;
+    expand: boolean;
+    command: SimpleCommand;
+  }[] = [];
 
   constructor(
     private readonly src: string,
@@ -534,7 +544,12 @@ class ShellLexer {
       if (pendingOp !== null) {
         cmd.redirects.push({ op: pendingOp, target: word });
         if (pendingOp === '<<' || pendingOp === '<<-') {
-          this.heredocs.push({ delim: word, strip: pendingOp === '<<-', expand: !quoted });
+          this.heredocs.push({
+            delim: word,
+            strip: pendingOp === '<<-',
+            expand: !quoted,
+            command: cmd,
+          });
           cmd.heredoc = true;
         } else if (pendingOp === '<<<') cmd.heredoc = true;
         pendingOp = null;
@@ -730,6 +745,7 @@ class ShellLexer {
         if ((h.strip ? line.replace(/^\t+/, '') : line) === h.delim) break;
         body += `${line}\n`;
       }
+      h.command.heredocBody = (h.command.heredocBody ?? '') + body;
       // An unquoted delimiter expands the body: a substitution there would run.
       if (h.expand && /`|\$\(/.test(body)) this.opaque.push('heredoc body runs a substitution');
     }
@@ -1132,10 +1148,10 @@ const ESCAPE_RULES: CommandRule[] = [
 const ALL_RULES = [...DESTRUCTIVE_RULES, ...PUSH_RULES, ...NETWORK_RULES, ...ESCAPE_RULES];
 
 /** Interpreters that run a program read from stdin when given none (or `-`). */
-const INTERPRETER = new RegExp(
+export const INTERPRETER = new RegExp(
   `^(?:sh|bash|zsh|dash|fish|ksh|csh|tcsh|ash|${PYTHON}|pypy[0-9.]*|node|nodejs|bun|deno|perl|ruby|irb|php|lua|luajit|rscript|osascript|tclsh|groovy|jshell)$`,
 );
-const SHELLS = /^(?:sh|bash|zsh|dash|fish|ksh|csh|tcsh|ash)$/;
+export const SHELLS = /^(?:sh|bash|zsh|dash|fish|ksh|csh|tcsh|ash)$/;
 const EDITORS = /^(?:vi|vim|nvim|gvim|view|ex|vimdiff)$/;
 const INFO_FLAG = /^(?:--version|-version|-v|-V|--help|-h|--test)$/;
 
