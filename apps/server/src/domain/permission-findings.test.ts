@@ -873,4 +873,35 @@ describe('residual holes, review round 2 (P14-08)', () => {
       expect(decision(cmd), cmd).toBe('allow');
     }
   });
+
+  it('a glob that may match a guarded name is guarded (zsh: a leading dot is explicit)', () => {
+    for (const cmd of [
+      'touch .gi?/hooks/pre-commit',
+      'touch .g*/hooks/pre-commit',
+      'touch .gi[t]/hooks/pre-commit',
+      'touch [.]git/hooks/pre-commit',
+      'touch .git*/hooks/pre-commit',
+      'touch .GI?/hooks/pre-commit',
+      'cp e ~/.zsh?c',
+      'cp e ~/Libr*/LaunchAgents/x.plist',
+      'env -C .gi? touch hooks/pre-commit',
+      'env -C .g* touch hooks/pre-commit',
+      'env -C .gi[t] touch hooks/pre-commit',
+      'cd .gi? && touch hooks/pre-commit',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBe(true);
+      expect(decision(cmd), cmd).toBe('ask');
+    }
+    // zsh's glob groups are unreadable already.
+    expect(decision('touch (.git|x)/hooks/pre-commit')).toBe('ask');
+    // Without GLOB_DOTS, `?` and `*` never match a leading dot.
+    for (const cmd of [
+      'touch ?git/hooks/x',
+      'touch */hooks/x',
+      'rm -rf build/*',
+      'touch src/*.ts',
+    ]) {
+      expect(classifyCommand(cmd, ctx).guarded, cmd).toBeUndefined();
+    }
+  });
 });

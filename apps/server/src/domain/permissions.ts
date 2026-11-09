@@ -1801,7 +1801,8 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         );
         continue;
       }
-      envCwd = resolvePath(dir, ctx, envCwd ?? cwd);
+      const base = envCwd ?? cwd;
+      envCwd = resolvePath(dir, ctx, base);
       if (!isInsideWorkspace(envCwd, ctx)) {
         note(
           'outside_workspace',
@@ -1809,7 +1810,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
           seg({ path: unalias(envCwd, ctx) }),
         );
       }
-      const why = guardedWriteReason(envCwd, ctx);
+      const why = guardedWriteReason(envCwd, ctx) ?? guardedGlobReason(dir, { ...ctx, cwd: base });
       if (why) {
         guarded = true;
         note(
@@ -1867,6 +1868,12 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
         note('outside_workspace', `cd ${target}: cannot tell where it leads`, seg());
       } else {
         cwd = resolvePath(target ?? '', ctx, cwd);
+      }
+      // `cd .gi?` may enter `.git` (P14-08 review round 2): guarded, like `env -C`.
+      const globWhy = target === undefined ? undefined : guardedGlobReason(target, here);
+      if (globWhy) {
+        guarded = true;
+        note('outside_workspace', `${target}: ${globWhy}`, seg({ guarded: true }));
       }
       if (!isInsideWorkspace(cwd, ctx)) {
         note(
@@ -1986,6 +1993,61 @@ export function guardedWriteReason(p: string, ctx: PolicyContext): string | unde
   return undefined;
 }
 
+/** The single names `guardedWriteReason` protects, for matching globs against. */
+function guardedNames(ctx: PolicyContext): string[] {
+  const parts = (p: string) => p.split('/').filter((s) => s !== '');
+  return [
+    ...new Set([
+      '.git',
+      '.claude',
+      '.husky',
+      '.agents',
+      '.gemini',
+      '.codex',
+      '.mcp.json',
+      '.claude.json',
+      ...HOME_GUARDED_FILES.flatMap(parts),
+      ...HOME_GUARDED_TREES.flatMap(parts),
+      ...SYSTEM_GUARDED_TREES.flatMap(parts),
+      ...(ctx.userFolders ?? []).flatMap(parts),
+    ]),
+  ];
+}
+
+/** At most this many concrete paths are tried for one glob; more is guarded (fail closed). */
+const MAX_GLOB_INSTANCES = 256;
+
+/**
+ * Why a glob word may write guarded ground (P14-08 review round 2), or `undefined`: each glob
+ * segment is replaced by every guarded name it can match under zsh's rules — case-folded (APFS),
+ * and a name with a leading dot only by a segment that starts with `.` or a bracket class
+ * (`.gi?`, `.g*`, `[.]git`; no GLOB_DOTS, so `?git` and `*` never match `.git`) — and each
+ * resulting path is judged by `guardedWriteReason`.
+ */
+function guardedGlobReason(word: string, ctx: PolicyContext): string | undefined {
+  if (!GLOB_META.test(word)) return undefined;
+  const names = guardedNames(ctx);
+  let instances = [''];
+  for (const [k, seg] of word.split('/').entries()) {
+    const hits = GLOB_META.test(seg) ? names.filter((n) => zshGlobMatches(seg, n)) : [];
+    const options = hits.length > 0 ? hits : [seg];
+    instances = instances.flatMap((p) => options.map((o) => (k === 0 ? o : `${p}/${o}`)));
+    if (instances.length > MAX_GLOB_INSTANCES) return 'a glob that may reach guarded ground';
+  }
+  for (const p of instances) {
+    if (p === word) continue;
+    const why = guardedWriteReason(p, ctx);
+    if (why) return why;
+  }
+  return undefined;
+}
+
+/** Whether a glob segment can match `name` in zsh without GLOB_DOTS (case-folded). */
+function zshGlobMatches(seg: string, name: string): boolean {
+  if (name.startsWith('.') && !/^[.[]/.test(seg)) return false;
+  return globSegmentMatches(seg.toLowerCase(), name.toLowerCase());
+}
+
 /** A word as a path: `$HOME`/`${HOME}` read as `~`, `$PWD` as `.` (as `pathToken` does). */
 function asPathWord(word: string): string {
   return word.replace(/^\$\{?HOME\}?(?=\/|$)/, '~').replace(/^\$\{?PWD\}?(?=\/|$)/, '.');
@@ -2025,7 +2087,7 @@ function guardedTargets(
     for (const alt of expandBraces(c) ?? [c]) {
       const word = asPathWord(alt);
       if (word === '' || /[$`]/.test(word) || HARMLESS_DEVICES.has(word)) continue;
-      const reason = guardedWriteReason(word, ctx);
+      const reason = guardedWriteReason(word, ctx) ?? guardedGlobReason(word, ctx);
       if (reason) {
         out.push({ path: alt, reason });
         break;
