@@ -73,8 +73,8 @@ scanned well, because most of them are very complicated and long."
 
 ### 5.1 The switch
 
-- A project setting `waykeeperApprovals: boolean`, default `false`, shown on the project's edit
-  form and on its Waykeeper's card, next to the trust level. Cosmin's only, like the trust level
+- A project setting `waykeeperApprovals: boolean`, default `false`, shown in the project's
+  permission section, beside its "Allow similar" rules (as built; ruling R18). Cosmin's only, like the trust level
   (decision 49): a brain cannot set it, a proposal cannot preset it, and a write from a remote or
   unknown-origin client is refused unless `autoApproveRemote` (decisions 37, 51, 90). Turning it off
   is allowed from anywhere.
