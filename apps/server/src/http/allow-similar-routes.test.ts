@@ -848,6 +848,8 @@ describe('a publishing run offers no "Allow similar" (P11-12)', () => {
     expect(preview.status).toBe(200);
     expect(preview.body).toMatchObject({ allowed: false, options: [] });
     expect(preview.body['refused']).toMatch(/publishing/);
+    // A refused preview spells the call as a drafted one does.
+    expect(preview.body['call']).toBe('npm install left-pad');
 
     const made = await call('POST', `/api/questions/${q1}/allow-similar`, {
       digests: ['x'],

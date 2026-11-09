@@ -128,6 +128,7 @@ import {
 import {
   aliasesOf,
   callDigest,
+  callText,
   draftDigest,
   similarOptions,
   type RuleDraft,
@@ -1229,12 +1230,7 @@ export class Commands implements DomainCommands {
     const refuse = (refused: string, project?: Project) => ({
       ...(project ? { project } : {}),
       refused,
-      call: !call
-        ? ''
-        : call.toolName === 'Bash' &&
-            typeof (call.input as { command?: unknown })?.command === 'string'
-          ? (call.input as { command: string }).command.trim()
-          : call.toolName,
+      call: call ? callText(call, this.permissionContextOf(question).ctx) : '',
       asking: [],
       notRememberable: [],
       rows: [],

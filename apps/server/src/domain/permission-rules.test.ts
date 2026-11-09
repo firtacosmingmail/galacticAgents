@@ -244,12 +244,17 @@ describe('rule matching (P9-17)', () => {
 
   it('a folder reached through a symlink is stored as its real path', () => {
     const rule = ruleFrom(read('~/notes/today.md'), 'folder');
-    expect(rule.match).toEqual({ kind: 'folder', folder: '/data/notes', access: 'any' });
+    expect(rule).toMatchObject({
+      scope: 'folder',
+      tool: 'Read',
+      match: { kind: 'folder', folder: '/data/notes' },
+    });
+    expect(rule.match).not.toHaveProperty('access');
     expect(allows([rule], read('/data/notes/old.md'))).toBe(rule.id);
     expect(allows([rule], read('~/notes/other.md'))).toBe(rule.id);
-    // Made for a file tool's folder, it covers commands and writing there too (ruling 2).
-    expect(allows([rule], write('/data/notes/new.md'))).toBe(rule.id);
-    expect(allows([rule], bash('cat /data/notes/old.md'))).toBe(rule.id);
+    // Made from a file tool, it keeps its group and never covers a command (ruling 2).
+    expect(allows([rule], write('/data/notes/new.md'))).toBeUndefined();
+    expect(allows([rule], bash('cat /data/notes/old.md'))).toBeUndefined();
   });
 
   it('category: any tool the table asks about only in those categories', () => {
@@ -307,8 +312,8 @@ describe('rule matching (P9-17)', () => {
     const call = bash('python3 -c "print(1)"');
     const found = similarOptions({ call, ctx, policy: DEFAULT, realPath: REAL });
     expect(found.rows).toEqual([]);
-    expect(found.notRememberable.map((n) => n.reason)).toEqual([
-      expect.stringMatching(/cannot read/),
+    expect(found.notRememberable).toEqual([
+      { part: 'python3 -c "print(1)"', reason: 'inline script hides what it does' },
     ]);
     const rule = exactRule(call, 'python3 -c "print(1)"');
     expect(rule.unclassified).toBe(true);
@@ -340,11 +345,7 @@ describe('folder rules on the real file system (P9-17)', () => {
       const found = similarOptions({ call: read('~/specs/a.md'), ctx: real, policy: DEFAULT });
       const row = found.rows.find((r) => r.kind === 'folder');
       if (!row?.available) throw new Error('no folder offered');
-      expect(row.draft.match).toEqual({
-        kind: 'folder',
-        folder: join(home, 'specs'),
-        access: 'any',
-      });
+      expect(row.draft.match).toEqual({ kind: 'folder', folder: join(home, 'specs') });
       const rule: PermissionRule = {
         ...row.draft,
         id: 'r-fs',
@@ -1212,7 +1213,59 @@ describe('one tickable row per reason (P14-04)', () => {
     const row = available(found, 'folder:/private/tmp/pr83');
     expect(row.draft.match).toEqual({ kind: 'folder', folder: '/private/tmp/pr83', access: 'any' });
     expect(row.draft.label).toBe('/tmp/pr83/…');
-    expect(row.widen?.map((d) => d.label)).toEqual(['/private/tmp/…', '/private/…']);
+    // Widened along the call's spelling, each step stored as its real path: never `/private`.
+    expect(row.widen?.map((d) => [d.label, d.match])).toEqual([
+      ['/tmp/…', { kind: 'folder', folder: '/private/tmp', access: 'any' }],
+    ]);
+    const tmp = available(options('ls /tmp', [], MAC), 'folder:/private/tmp');
+    expect(tmp.draft.label).toBe('/tmp/…');
+    expect(tmp.widen).toBeUndefined();
+  });
+
+  it("someone else's home folder is never offered", () => {
+    for (const command of ['cat /Users/other/x', 'cat /home/bob/notes/a']) {
+      const folder = options(command).rows.find((r) => r.kind === 'folder');
+      expect(folder, command).toMatchObject({
+        available: false,
+        reason: "someone else's home folder",
+      });
+    }
+  });
+
+  it('a file tool keeps its group: a read folder row is for reading only (ruling 2)', () => {
+    const allowsHere = (rule: PermissionRule, call: ToolCall) =>
+      coverage([rule], { call, ctx, policy: DEFAULT, realPath: TREE }, evaluate(DEFAULT, call, ctx))
+        .allowed;
+    const readRow = available(
+      similarOptions({ call: read('/tmp/pr83/a.md'), ctx, policy: DEFAULT, realPath: TREE }),
+      'folder:/tmp/pr83',
+    );
+    expect(readRow.draft).toMatchObject({
+      scope: 'folder',
+      tool: 'Read',
+      match: { kind: 'folder', folder: '/tmp/pr83' },
+      categories: ['outside_workspace'],
+      label: '/tmp/pr83/…',
+    });
+    expect(readRow.draft.match).not.toHaveProperty('access');
+    expect(readRow.draft.preview).toMatch(/^Reading, searching and listing .* under \/tmp\/pr83/);
+    expect(readRow.widen?.map((d) => [d.tool, d.match])).toEqual([
+      ['Read', { kind: 'folder', folder: '/tmp' }],
+    ]);
+    const rule = stored(readRow.draft, 'r-read');
+    expect(allowsHere(rule, read('/tmp/pr83/b.md'))).toBe(true);
+    expect(allowsHere(rule, write('/tmp/pr83/b.md'))).toBe(false);
+    expect(allowsHere(rule, bash('cp x /tmp/pr83/b'))).toBe(false);
+
+    const writeRow = available(
+      similarOptions({ call: write('/tmp/pr83/a.md'), ctx, policy: DEFAULT, realPath: TREE }),
+      'folder:/tmp/pr83',
+    );
+    expect(writeRow.draft).toMatchObject({ scope: 'folder', tool: 'Write' });
+    expect(writeRow.draft.preview).toMatch(/^Writing and editing/);
+    const w = stored(writeRow.draft, 'r-write');
+    expect(allowsHere(w, write('/tmp/pr83/c.md'))).toBe(true);
+    expect(allowsHere(w, bash('cp x /tmp/pr83/b'))).toBe(false);
   });
 
   it("the project's rules: a covered reason gets no row and is not asked about", () => {
@@ -1225,9 +1278,20 @@ describe('one tickable row per reason (P14-04)', () => {
   it('what no rule may cover is listed without a row', () => {
     const opaque = options('bash -c "x"');
     expect(opaque.rows).toEqual([]);
+    // The part is the call's own text (the card marks it), the reason the engine's.
     expect(opaque.notRememberable).toEqual([
-      { part: 'bash -c x', reason: expect.stringMatching(/cannot read/) },
+      { part: 'bash -c "x"', reason: expect.stringMatching(/shell -c hides the command/) },
     ]);
+    expect(opaque.asking).toEqual(['bash -c "x"']);
+    for (const command of [
+      "ls; sh -c 'echo $x'",
+      'cp evil ${x:-~}',
+      'echo a && python3 -c "print(1)" | cat',
+    ]) {
+      const found = options(command);
+      expect(found.notRememberable.length, command).toBeGreaterThan(0);
+      for (const n of found.notRememberable) expect(command, command).toContain(n.part);
+    }
     const push = options('git push origin main; curl https://a.dev');
     expect(push.refused).toBeUndefined();
     expect(push.notRememberable).toEqual([

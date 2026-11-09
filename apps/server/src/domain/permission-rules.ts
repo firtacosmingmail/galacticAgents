@@ -455,8 +455,19 @@ function tildify(p: string, ctx: PolicyContext): string {
   return tildeOf(p, ctx.home ?? homedir());
 }
 
-/** The call as the chooser shows it: the command, or the tool with what it names. */
-function callText(call: ToolCall, subject: Subject, ctx: PolicyContext): string {
+/**
+ * The call as the chooser shows it: the command, or the tool with what it names. The one spelling
+ * of a request's call, for a preview refused before any row is drafted too.
+ */
+export function callText(
+  call: ToolCall,
+  ctx: PolicyContext,
+  realPath: RealPath = systemRealPath,
+): string {
+  return callTextOf(call, subjectOf(call, ctx, realPath), ctx);
+}
+
+function callTextOf(call: ToolCall, subject: Subject, ctx: PolicyContext): string {
   if (subject.kind === 'command') return subject.command;
   if (subject.kind === 'paths') {
     const shown = subject.paths.map((p) => tildify(p, ctx)).join(', ');
@@ -499,7 +510,27 @@ const TOO_BROAD = 'too broad (the root or the home folder)';
 /** The `cd`-like commands whose finding's path is the folder they enter. */
 const ENTERS = new Set(['cd', 'pushd', 'chdir']);
 
+const GROUP_TOOLS: Record<Group, string> = {
+  read: 'Reading, searching and listing (Read, Glob, Grep, LS)',
+  edit: 'Writing and editing (Write, Edit, MultiEdit, NotebookEdit)',
+};
+
+/**
+ * A folder row's rule: from a command, any access (`access: 'any'`, commands and file tools); from
+ * a file tool, its own group only, as the file-tool folder rule always was (controller ruling 2).
+ */
 function folderDraft(tool: string, folder: string, shown: string): RuleDraft {
+  const group = groupOf(tool);
+  if (group) {
+    return {
+      scope: 'folder',
+      tool,
+      match: { kind: 'folder', folder },
+      categories: ['outside_workspace'],
+      label: `${shown}/…`,
+      preview: `${GROUP_TOOLS[group]} anything under ${shown} (symlinks followed: a link that leads elsewhere is not covered).`,
+    };
+  }
   return {
     scope: 'folder',
     tool,
@@ -508,6 +539,30 @@ function folderDraft(tool: string, folder: string, shown: string): RuleDraft {
     label: `${shown}/…`,
     preview: `Any command or file tool reading or writing under ${shown} (symlinks followed) — a delete, a push, or a write to git or agent configuration there still asks.`,
   };
+}
+
+const OTHERS_HOME = "someone else's home folder";
+
+/** The home folder `/Users/<name>` or `/home/<name>` that `p` is at or under, if any. */
+function homeRootOf(p: string): string | undefined {
+  return /^\/(?:Users|home)\/[^/]+(?=\/|$)/.exec(p)?.[0];
+}
+
+/**
+ * The raw text of the call that a reason line's shown part (`words` joined, quotes removed, `$(…)`
+ * shown as `$()`) stands for, so the card can mark it; `undefined` when it cannot be found.
+ */
+function rawSpan(shown: string, call: string): string | undefined {
+  if (shown !== '' && call.includes(shown)) return shown;
+  const words = shown.split(/\s+/).filter((w) => w !== '');
+  if (words.length === 0) return undefined;
+  const quotes = `['"\\\\]*`;
+  const literal = (text: string) =>
+    [...text].map((c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join(quotes);
+  const word = (w: string) =>
+    w.split('$()').map(literal).join(`${quotes}(?:\\$\\([^)]*\\)|\`[^\`]*\`)${quotes}`);
+  const pattern = `${quotes}${words.map(word).join(`${quotes}\\s+${quotes}`)}['"]*`;
+  return new RegExp(pattern).exec(call)?.[0];
 }
 
 function siteDraft(host: string): RuleDraft {
@@ -526,19 +581,30 @@ const partsOf = (findings: readonly Finding[]) => [
   ...new Set(findings.map((f) => f.part).filter((p) => p !== '')),
 ];
 
+const LEXER_REASON = 'cannot read the command safely: ';
+
 /**
  * The reason lines of an unreadable call that no finding stands for — the parts the engine could
- * not read — as `{ part }` (the text after the line's first `: `, else the whole call).
+ * not read: each as the call's own text it names (`rawSpan`; the whole call when it cannot be
+ * found) and the engine's reason (the line before its `: `).
  */
-function opaqueParts(c: Classification, call: string): string[] {
+function opaqueParts(c: Classification, call: string): { part: string; reason: string }[] {
   if (!c.unclassified) return [];
   const known = new Set(c.findings.flatMap((f) => [f.reason, ...(f.merged ?? [])]));
   const lines = c.reasons.filter((r) => !known.has(r) && !r.startsWith('curl reads and sends'));
-  const parts = lines.map((r) => {
-    const at = r.indexOf(': ');
-    return at < 0 ? call : r.slice(at + 2);
+  const out = lines.map((line) => {
+    const lexer = line.startsWith(LEXER_REASON);
+    const text = lexer ? line.slice(LEXER_REASON.length) : line;
+    const at = text.indexOf(': ');
+    const span = at < 0 ? undefined : rawSpan(text.slice(at + 2), call);
+    return {
+      part: span ?? call,
+      reason: lexer ? `cannot read the command safely: ${text}` : at < 0 ? text : text.slice(0, at),
+    };
   });
-  return [...new Set(parts.length > 0 ? parts : [call])];
+  if (out.length === 0) out.push({ part: call, reason: NOT_REMEMBERABLE.opaque });
+  const seen = new Set<string>();
+  return out.filter((o) => (seen.has(o.part) ? false : (seen.add(o.part), true)));
 }
 
 /**
@@ -558,7 +624,7 @@ export function similarOptions(
   const { call, ctx, policy } = input;
   const realPath = input.realPath ?? systemRealPath;
   const subject = subjectOf(call, ctx, realPath);
-  const shownCall = callText(call, subject, ctx);
+  const shownCall = callTextOf(call, subject, ctx);
   const nothing = { call: shownCall, asking: [], notRememberable: [], rows: [] };
   const verdict = evaluate(policy, call, ctx);
   if (verdict.alwaysAllow) return { refused: 'this call needs no permission', ...nothing };
@@ -574,7 +640,7 @@ export function similarOptions(
   const tool = call.toolName;
   const notRememberable: { part: string; reason: string }[] = [];
   const opaque = opaqueParts(verdict, shownCall);
-  const asking = [...new Set([...partsOf(uncovered), ...opaque])];
+  const asking = [...new Set([...partsOf(uncovered), ...opaque.map((o) => o.part)])];
 
   // What can never become a rule: a push, a guarded write — and, conservatively, any path on
   // guarded ground, read or written (no folder row is offered there).
@@ -593,22 +659,39 @@ export function similarOptions(
   if (verdict.guarded && ![...unremembered].some((f) => f.action !== 'push')) {
     notRememberable.push({ part: shownCall, reason: NOT_REMEMBERABLE.guarded });
   }
-  for (const part of opaque) notRememberable.push({ part, reason: NOT_REMEMBERABLE.opaque });
+  notRememberable.push(...opaque);
   const open = uncovered.filter((f) => !unremembered.has(f));
   const inRow = new Set<Finding>();
   const rows: Row[] = [];
 
-  // Folders: each outside path's folder (its real path), merged into a drafted folder above it.
+  // Folders: each outside path's folder (stored as its real path, shown as the call spelled it),
+  // merged into a drafted folder above it.
   const home = ctx.home ?? homedir();
   const realHome = physicalPath(home, ctx, realPath) ?? home;
   const tooBroad = (f: string) => !coverableFolder(f, ctx) || within(f, realHome);
-  const folderOf = new Map<Finding, { folder: string; shown: string }>();
+  const othersHome = (f: string) => {
+    const root = homeRootOf(f);
+    return root !== undefined && root !== resolve(home) && root !== realHome;
+  };
+  /** `lexical`: the call's spelling of the folder, when it resolves to `folder` itself. */
+  const folderOf = new Map<Finding, { folder: string; lexical?: string }>();
+  const place = (folder: string, lexical: string | undefined) => ({
+    folder,
+    ...(lexical !== undefined && physicalPath(lexical, ctx, realPath) === folder
+      ? { lexical }
+      : {}),
+  });
   const outside = open.filter((f) => f.action === 'outside_workspace');
   if (subject.kind === 'paths') {
     const folder = fileToolFolder(call, subject);
-    for (const f of outside) {
-      if (folder !== undefined) folderOf.set(f, { folder, shown: tildify(folder, ctx) });
+    const listing = tool === 'Glob' || tool === 'Grep' || tool === 'LS';
+    const named = outside.flatMap((f) => (f.path !== undefined ? [f.path] : []));
+    let lexical = named.length > 0 ? (listing ? named[0]! : dirname(named[0]!)) : undefined;
+    for (const p of named.slice(1)) {
+      const f = listing ? p : dirname(p);
+      while (lexical !== undefined && !within(lexical, f)) lexical = dirname(lexical);
     }
+    for (const f of outside) if (folder !== undefined) folderOf.set(f, place(folder, lexical));
   } else if (subject.kind === 'command') {
     for (const f of outside) {
       const real = f.path !== undefined ? physicalPath(f.path, ctx, realPath) : undefined;
@@ -617,18 +700,23 @@ export function similarOptions(
       // A folder entered (`cd`), or one that exists as a folder (`p/` resolves).
       const whole =
         (name !== undefined && ENTERS.has(name)) || realPath(`${real}${sep}`) !== undefined;
-      const folder = whole ? real : dirname(real);
-      const lexical = whole ? f.path : dirname(f.path);
-      const sameFolder = physicalPath(lexical, ctx, realPath) === folder;
-      folderOf.set(f, { folder, shown: tildify(sameFolder ? lexical : folder, ctx) });
+      folderOf.set(f, place(whole ? real : dirname(real), whole ? f.path : dirname(f.path)));
     }
   }
+  const refusal = (folder: string, lexical?: string) =>
+    othersHome(folder) || (lexical !== undefined && othersHome(lexical))
+      ? OTHERS_HOME
+      : tooBroad(folder) || (lexical !== undefined && tooBroad(lexical))
+        ? `${tildify(lexical ?? folder, ctx)}: ${TOO_BROAD}`
+        : undefined;
   const candidates = [...new Set([...folderOf.values()].map((v) => v.folder))];
+  const lexicalOf = (folder: string) =>
+    [...folderOf.values()].find((v) => v.folder === folder && v.lexical !== undefined)?.lexical;
   const outermost = (folder: string) =>
-    tooBroad(folder)
+    refusal(folder, lexicalOf(folder))
       ? folder
       : candidates
-          .filter((c) => !tooBroad(c) && within(c, folder))
+          .filter((c) => !refusal(c, lexicalOf(c)) && within(c, folder))
           .reduce((a, b) => (b.length < a.length ? b : a), folder);
   const byFolder = new Map<string, Finding[]>();
   for (const [f, v] of folderOf) {
@@ -638,26 +726,28 @@ export function similarOptions(
   for (const [folder, findings] of byFolder) {
     findings.forEach((f) => inRow.add(f));
     const key = `folder:${folder}`;
-    if (tooBroad(folder)) {
-      rows.push({
-        key,
-        kind: 'folder',
-        available: false,
-        reason: `${tildify(folder, ctx)}: ${TOO_BROAD}`,
-      });
+    const lexical = lexicalOf(folder);
+    const refused = refusal(folder, lexical);
+    if (refused) {
+      rows.push({ key, kind: 'folder', available: false, reason: refused });
       continue;
     }
-    const shown =
-      [...folderOf.values()].find((v) => v.folder === folder)?.shown ?? tildify(folder, ctx);
+    // Wider folders along the call's spelling (never the real path's own parents: on macOS
+    // `/tmp` is `/private/tmp`, whose parent `/private` holds `/etc`), each stored as its real
+    // path, up to but never including the root or the home folder.
     const widen: RuleDraft[] = [];
-    for (let up = dirname(folder); !tooBroad(up); up = dirname(up)) {
-      widen.push(folderDraft(tool, up, tildify(up, ctx)));
+    if (lexical !== undefined) {
+      for (let up = dirname(lexical); !refusal(up, up); up = dirname(up)) {
+        const real = physicalPath(up, ctx, realPath);
+        if (real === undefined || refusal(real, up)) break;
+        widen.push(folderDraft(tool, real, tildify(up, ctx)));
+      }
     }
     rows.push({
       key,
       kind: 'folder',
       available: true,
-      draft: folderDraft(tool, folder, shown),
+      draft: folderDraft(tool, folder, tildify(lexical ?? folder, ctx)),
       covers: partsOf(findings),
       ...(widen.length > 0 ? { widen } : {}),
     });
@@ -808,7 +898,8 @@ function matchesScope(
       return false;
     case 'folder':
       return (
-        rule.scope === 'prefix' &&
+        (rule.scope === 'prefix' || rule.scope === 'folder') &&
+        match.access === undefined &&
         subject.kind === 'paths' &&
         groupOf(rule.tool) === subject.group &&
         !subject.unreadable &&
@@ -960,8 +1051,12 @@ function coversFinding(rule: PermissionRule, f: Finding, k: CoverageInput): bool
 
 /** A stored rule that covers the call as a whole, as before P14: an exact or a file-tool folder. */
 function coversWholeCall(rule: PermissionRule, asking: Asking, k: CoverageInput): boolean {
+  // A file tool's folder rule: the legacy `prefix` one, or a `folder` one made from a file-tool
+  // card since P14 (no `access`): same group only, file tools only (controller ruling 2).
   const legacyFolder =
-    rule.scope === 'prefix' && rule.match.kind === 'folder' && rule.match.access === undefined;
+    (rule.scope === 'prefix' || rule.scope === 'folder') &&
+    rule.match.kind === 'folder' &&
+    rule.match.access === undefined;
   if (rule.scope !== 'exact' && !legacyFolder) return false;
   if (rule.match.kind === 'folder' && !coverableFolder(rule.match.folder, k.input.ctx))
     return false;
