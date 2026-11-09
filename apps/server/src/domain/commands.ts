@@ -19,6 +19,7 @@ import {
   type RemoveStandingApprovalInput,
   type SetWaykeeperApprovalsInput,
   type StandingApproval,
+  type StandingApprovalResult,
   type StandingApprovalInput,
   SIMILAR_APPROVALS_THRESHOLD,
   needsUserQuote,
@@ -1380,7 +1381,9 @@ export class Commands implements DomainCommands {
    * standing approval, whatever the card says), a request of no project or of one that ended. A
    * remote origin is allowed: it grants the Waykeeper nothing the user has not just allowed.
    */
-  async standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApproval>> {
+  async standingApproval(
+    input: StandingApprovalInput,
+  ): Promise<CommandResult<StandingApprovalResult>> {
     const { questionId, by } = input;
     if (by.type !== 'user') {
       throw new DomainError('invalid', 'only the user makes standing approvals');
@@ -1433,7 +1436,7 @@ export class Commands implements DomainCommands {
     if (!this.agents?.hasQuestion(questionId)) {
       return this.run((ctx) => {
         answerQuestion(ctx, { ...answer, holders: holdersNow(ctx, questionId, this.questions) });
-        return addStandingApproval(ctx, project.id, draft, made);
+        return { approval: addStandingApproval(ctx, project.id, draft, made) };
       });
     }
     const answered = await this.answerQuestion({
@@ -1443,8 +1446,23 @@ export class Commands implements DomainCommands {
       ...(input.version !== undefined ? { version: input.version } : {}),
       ...(input.answerId !== undefined ? { answerId: input.answerId } : {}),
     });
-    const stored = await this.run((ctx) => addStandingApproval(ctx, project.id, draft, made));
-    return { value: stored.value, events: [...answered.events, ...stored.events] };
+    // The answer stands whatever follows (the Steward has it): a store that fails — the project
+    // ended meanwhile, or a twin press stored it first — is said, not thrown (like `ruleNotStored`).
+    try {
+      const stored = await this.run((ctx) => addStandingApproval(ctx, project.id, draft, made));
+      return {
+        value: { approval: stored.value },
+        events: [...answered.events, ...stored.events],
+      };
+    } catch (error) {
+      if (!(error instanceof DomainError)) throw error;
+      return {
+        value: {
+          notStored: `allowed once; the standing approval was not stored: ${error.message}`,
+        },
+        events: answered.events,
+      };
+    }
   }
 
   /** The user turns a project's Waykeeper approvals on or off (P13-05): on needs the Mac. */

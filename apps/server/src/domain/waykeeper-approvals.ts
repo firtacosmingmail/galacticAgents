@@ -77,6 +77,12 @@ export function addStandingApproval(
       `project ${projectId} is ${project.state}: it takes no standing approvals`,
     );
   }
+  if (made.questionId && project.standingApprovals?.some((a) => a.questionId === made.questionId)) {
+    throw new DomainError(
+      'stale',
+      `question ${made.questionId} already made a standing approval: nothing stored twice`,
+    );
+  }
   const approval: StandingApproval = {
     id: `sa-${randomUUID()}`,
     projectId,

@@ -242,7 +242,8 @@ export type StandingApprovalBody = z.infer<typeof StandingApprovalBody>;
 
 export const StandingApprovalResponse = z.object({
   ok: z.literal(true),
-  approval: StandingApproval,
+  approval: StandingApproval.optional(),
+  notStored: z.string().optional(),
 });
 export type StandingApprovalResponse = z.infer<typeof StandingApprovalResponse>;
 

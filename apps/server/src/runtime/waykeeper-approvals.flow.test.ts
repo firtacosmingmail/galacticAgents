@@ -225,6 +225,27 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     expect(seen[1]!.recentActions.join('\n')).toContain(VIEW);
   });
 
+  it('the user allowing a forwarded card of a live Steward records the approval (P13-05)', async () => {
+    const h = await hierarchy({ switchOn: true, seen: [] });
+    await until(() => h.ofType('question.opened').length === 1);
+    const q = h.log.tables.questions.all()[0]!;
+    expect(h.runtime.hasQuestion(q.id)).toBe(true);
+    await h.commands.answerQuestion({ questionId: q.id, answer: 'allow', by: USER });
+    const types = h
+      .events()
+      .map((e) => e.type)
+      .filter((t) => t === 'question.answered' || t === 'approval.recorded');
+    expect(types).toEqual(['question.answered', 'approval.recorded']);
+    expect(h.ofType('approval.recorded')[0]!.approval).toMatchObject({
+      kind: 'PR comment',
+      agentId: h.steward.id,
+      questionId: q.id,
+    });
+    expect(
+      h.log.tables.projects.get(h.project.id)!.recordedApprovals?.map((a) => a.questionId),
+    ).toEqual([q.id]);
+  });
+
   it('with the switch off, the same request opens a plain question; the judge is never called', async () => {
     const seen: RequestJudgeInput[] = [];
     const h = await hierarchy({ switchOn: false, seen });

@@ -32,7 +32,13 @@ const rec = (i: number): RecordedApproval => ({
   at: '2026-11-09T10:00:00.000Z',
 });
 
-function setup(opts: { autoApproveRemote?: boolean; session?: boolean } = {}) {
+function setup(
+  opts: {
+    autoApproveRemote?: boolean;
+    session?: boolean;
+    beforeRecord?: () => void | Promise<void>;
+  } = {},
+) {
   const w = world();
   /** A stand-in for the runtime: the adapter is told first, then the log records the answer. */
   const told: { questionId: Id; answer: string }[] = [];
@@ -40,6 +46,9 @@ function setup(opts: { autoApproveRemote?: boolean; session?: boolean } = {}) {
     hasQuestion: () => true,
     answer: async (questionId: Id, answer: string, by: Actor) => {
       told.push({ questionId, answer });
+      // The adapter takes a moment: a twin press can pass its checks meanwhile.
+      await new Promise((r) => setTimeout(r, 5));
+      await opts.beforeRecord?.();
       w.log.runCommand((ctx) =>
         answerQuestion(ctx, {
           questionId,
@@ -154,7 +163,7 @@ describe('standingApproval', () => {
       'approval.recorded',
       'standing_approval.added',
     ]);
-    expect(out.value).toMatchObject({
+    expect(out.value.approval).toMatchObject({
       projectId: s.project.id,
       kind: 'run the test suite',
       origin: 'remote',
@@ -162,7 +171,7 @@ describe('standingApproval', () => {
       examples: [...THREE.map((r) => r.summary), 'Bash {"command":"pnpm test 9"}'],
     });
     expect(s.w.tables.questions.get(q.id)).toMatchObject({ status: 'answered', answer: 'allow' });
-    expect(s.proj().standingApprovals).toEqual([out.value]);
+    expect(s.proj().standingApprovals).toEqual([out.value.approval]);
   });
 
   it('a second call is refused and leaves exactly one standing approval', async () => {
@@ -255,7 +264,54 @@ describe('with a live session waiting on the request', () => {
       'approval.recorded',
       'standing_approval.added',
     ]);
-    expect(s.proj().standingApprovals).toEqual([out.value]);
+    expect(s.proj().standingApprovals).toEqual([out.value.approval]);
+  });
+});
+
+describe('twin presses with a live session', () => {
+  const added = (s: ReturnType<typeof setup>) => s.ofType('standing_approval.added');
+
+  it('two concurrent calls with the same answerId store exactly one', async () => {
+    const s = setup({ session: true });
+    const q = await s.forwarded({ similar: THREE });
+    const input = { questionId: q.id, by: USER, answerId: 'tap-1' };
+    const results = await Promise.all([
+      s.commands.standingApproval(input),
+      s.commands.standingApproval(input),
+    ]);
+    expect(added(s)).toHaveLength(1);
+    expect(s.proj().standingApprovals).toHaveLength(1);
+    expect(results.filter((r) => r.value.approval)).toHaveLength(1);
+    expect(results.filter((r) => r.value.notStored)).toHaveLength(1);
+  });
+
+  it('two concurrent calls without an answerId store exactly one and refuse the other', async () => {
+    const s = setup({ session: true });
+    const q = await s.forwarded({ similar: THREE });
+    const settled = await Promise.allSettled([
+      s.commands.standingApproval({ questionId: q.id, by: USER }),
+      s.commands.standingApproval({ questionId: q.id, by: USER }),
+    ]);
+    expect(settled.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected']);
+    expect(added(s)).toHaveLength(1);
+    expect(s.proj().standingApprovals).toHaveLength(1);
+  });
+
+  it('keeps the answer and says so when the store fails after it', async () => {
+    const box: { s?: ReturnType<typeof setup> } = {};
+    const s = setup({
+      session: true,
+      beforeRecord: () => {
+        box.s!.cmd((ctx) => closeProject(ctx, box.s!.project.id, USER));
+      },
+    });
+    box.s = s;
+    const q = await s.forwarded({ similar: THREE });
+    const out = await s.commands.standingApproval({ questionId: q.id, by: USER });
+    expect(out.value.approval).toBeUndefined();
+    expect(out.value.notStored).toMatch(/not stored/);
+    expect(s.w.tables.questions.get(q.id)).toMatchObject({ status: 'answered', answer: 'allow' });
+    expect(added(s)).toEqual([]);
   });
 });
 
@@ -316,7 +372,8 @@ describe('removeStandingApproval', () => {
   it('removes from anywhere, only for the user, not_found when unknown', async () => {
     const s = setup();
     const q = await s.forwarded({ similar: THREE });
-    const { value } = await s.commands.standingApproval({ questionId: q.id, by: USER });
+    const value = (await s.commands.standingApproval({ questionId: q.id, by: USER })).value
+      .approval!;
     const agent = await s.refusal(
       s.commands.removeStandingApproval({
         projectId: s.project.id,

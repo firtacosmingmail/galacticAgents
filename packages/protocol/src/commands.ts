@@ -333,6 +333,15 @@ export interface StandingApprovalInput {
   answerId?: string;
 }
 
+/**
+ * `approval`: the standing approval stored. `notStored`: the request was allowed, but the standing
+ * approval could not be stored after it (the project ended meanwhile, say): said to the user.
+ */
+export interface StandingApprovalResult {
+  approval?: StandingApproval;
+  notStored?: string;
+}
+
 /** The user turns a project's Waykeeper approvals on or off; `on` needs the Mac (or `autoApproveRemote`). */
 export interface SetWaykeeperApprovalsInput {
   projectId: Id;
@@ -675,7 +684,7 @@ export interface DomainCommands {
   dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>>;
 
   /** The user's standing approval from a forwarded card (P13-05): answers "allow" and stores it. */
-  standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApproval>>;
+  standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApprovalResult>>;
   /** Turns a project's Waykeeper approvals on or off (P13-05). */
   setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>>;
   /** Removes a project's standing approval (P13-05). */

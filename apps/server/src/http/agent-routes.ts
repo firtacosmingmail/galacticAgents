@@ -755,7 +755,11 @@ export function registerAgentRoutes(
             ...(body.version !== undefined ? { version: body.version } : {}),
             ...(body.answerId !== undefined ? { answerId: body.answerId } : {}),
           });
-          return { ok: true, approval: value } satisfies StandingApprovalResponse;
+          return {
+            ok: true,
+            ...(value.approval ? { approval: value.approval } : {}),
+            ...(value.notStored ? { notStored: value.notStored } : {}),
+          } satisfies StandingApprovalResponse;
         } catch (error) {
           return refuse(req, reply, error);
         }
