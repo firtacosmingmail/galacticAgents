@@ -410,6 +410,22 @@ describe('work actions on a navigation row (P4-12)', () => {
     ).toBeNull();
     expect(document.activeElement).toBe(more);
   });
+
+  it('float over the row: a press inside keeps them, a press outside closes them (P8-27)', async () => {
+    await open('/');
+    const project = actions('Demo project 1');
+    const more = project.getByRole('button', { name: 'Actions for Demo project 1' });
+    fireEvent.click(more);
+    const group = () => project.queryByRole('group', { name: 'actions for Demo project 1' });
+    // The group sits over its row, before the nested work (the rows below do not move: CSS).
+    expect(group()?.classList.contains('pnl-row-actions')).toBe(true);
+    fireEvent.pointerDown(within(group()!).getByRole('button', { name: 'Close' }));
+    fireEvent.pointerDown(more);
+    expect(group()).toBeTruthy();
+    fireEvent.pointerDown(document.body);
+    expect(group()).toBeNull();
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+  });
 });
 
 describe('renaming from a navigation row (P8-24)', () => {

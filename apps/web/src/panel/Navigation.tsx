@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useId,
   useMemo,
   useRef,
@@ -223,6 +224,22 @@ function NavRow({
   const open = toggled ?? auto;
   const [acting, setActing] = useState(false);
   const actionsId = useId();
+  const rowRef = useRef<HTMLLIElement>(null);
+  // The actions float over the row (P8-27): a press anywhere outside the row closes them, as a
+  // menu would. Presses inside it (its "⋯", the actions, their confirmations) keep it open.
+  useEffect(() => {
+    if (!acting) return;
+    const onPointerDown = (e: PointerEvent) => {
+      const row = rowRef.current;
+      if (!row || !(e.target instanceof Node)) return;
+      const line = row.querySelector(':scope > .pnl-row-line');
+      const group = row.querySelector(':scope > .pnl-row-actions');
+      if (line?.contains(e.target) || group?.contains(e.target)) return;
+      setActing(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    return () => document.removeEventListener('pointerdown', onPointerDown);
+  }, [acting]);
   const current = item.selection !== undefined && sameSelection(item.selection, selection);
   const label = (
     <>
@@ -234,6 +251,7 @@ function NavRow({
   );
   return (
     <li
+      ref={rowRef}
       className={`pnl-row pnl-row-${item.kind}${item.blocked ? ' is-blocked' : ''}${item.closed ? ' is-closed' : ''}`}
       aria-label={`${item.kind} ${item.label}`}
     >

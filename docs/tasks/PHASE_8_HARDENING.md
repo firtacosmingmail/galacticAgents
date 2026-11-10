@@ -1,7 +1,7 @@
 # Phase 8 — Hardening, cost and polish (ongoing)
 
-**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-26 done
-**Phase status:** in progress (26/26 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
+**Current task:** — (every task done; the phase stays open as the ongoing backlog) · **Task status:** P8-27 done
+**Phase status:** in progress (27/27 done) — on branch `phase-8`, cut from `phase-7`; merged into `main` on 2026-10-07; open as the ongoing backlog — P8-18 to P8-21 merged into `main` on 2026-10-18, P8-22 on branch `p8-22-count-sets-once`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -177,6 +177,12 @@ All tasks are independent of each other; suggested priority order: P8-04 → P8-
 - Cosmin's request: "I want the title of the web app to be configurable. In settings I want to be able to set a new title to the web app. This way, when I install the app on the phone it will have a different name." Most important: the label under the icon on the phone's home screen. His approval (2026-11-07) of the description: an **App name** field on the settings page, saved in `config.json`, empty = the default "Galactic"; the server fills it into the manifest (`name`, `short_name`) and the page (`<title>`, `apple-mobile-web-app-title`) when it serves them, so no rebuild is needed; the browser tab follows; the panel header and the menu bar stay; written from this Mac only (decision 51). An installed app keeps its old label until reinstalled (iPhone) or until Chrome refreshes it (Android).
 - **Acceptance:** protocol `appName` in `Settings`/`SettingsPatch` (`null` clears); the settings service persists and applies it live; server tests for the page and the manifest with and without a name (escaped in HTML); a settings page test; SPEC decision 153; TECHNOLOGY note.
 - **Done:** protocol `AppName`, `DEFAULT_APP_NAME`, `APP_NAME_MAX`, `Settings.appName`, `SettingsPatch.appName` (nullable), `SettingName` `appName`; `config.ts` reads it; `SettingsService` saves, applies (`config.appName`) and clears it, local only; `http/app-name.ts` (`pageWithAppName`, `manifestWithAppName`, `customAppName`) and routes for `/`, `/index.html`, the fallback and the manifest in `app.ts`; the **App name** section on the settings page (`sections.tsx` `APP_NAME`, `validateAppName`). Tests: `app-name.test.ts` (3), `app-static.test.ts` (2), `settings.test.ts` (1), web `settings.test.tsx` (1). SPEC decision 153 (+ §4.6), TECHNOLOGY §2.4 note. Gates: build, typecheck, lint, format, test all green (protocol 192, desktop 79, server 2424 / 13 skipped, web 2052). Not tried on a phone yet.
+
+### P8-27 — Row actions float over the row (added 2026-11-09)
+- **Status:** done (2026-11-09) · **Depends on:** P4-12 · **Parallel with:** all
+- Cosmin's request: "The options for the asteroids and projects in the left side I want them to be opened on top of the name, not below." His choice (2026-11-09): **float** — the "⋯" actions open as a panel over the row, covering its name, instead of pushing the rows below down. The "⋯" stays visible and closes it; so do Escape and a click outside.
+- **Acceptance:** the actions group is positioned over its row (CSS) and the rows below do not move; a click outside the row closes it, a click inside does not; tests for both.
+- **Done:** `panel.css` (`.pnl-row` positioned, `.pnl-row-actions` absolute over the row, leaving the "⋯" uncovered, with a shadow); `Navigation.tsx` `NavRow` closes the actions on a `pointerdown` outside the row's line and its actions. Test: `inbox-closed.test.tsx` (1). Gates: build, typecheck, lint, format, test all green (web 2053). Not checked by eye yet.
 
 ## Exit criteria
 
