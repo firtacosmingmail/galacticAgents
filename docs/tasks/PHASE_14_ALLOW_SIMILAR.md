@@ -80,6 +80,7 @@ P14-01…08 run in order.
 - Review round 3 (2026-11-09): a command's own `env` may carry only known options (else unreadable, never throws); a bracket class may match any guarded name; a line that changes glob options is unreadable; rustc's `link-arg` values are read.
 - Review round 4 (2026-11-09): a bracket expression in a guarded glob matches exactly one character (an unterminated one anything), so a quoted bracket in code or a pattern is ordinary again.
 - Review round 5 (2026-11-09): coarse fail-closed rules — a `[`/`]` left over or a broken `[:` class makes a guarded-glob segment match anything; any `env` word followed by `-S`, a lone `-` or an unknown option is unreadable (`rg env -S src` too); a builtin given `options` as a word, a shell with `-c` among its options, and `trap` with code are unreadable.
+- Review round 6 (2026-11-10): a computed or globbed word where a rule keys on one (the command name and wrappers, `find -exec`/`fd -x` programs, shell options, `env` arguments, the words of `read`/`vared`/`trap`/`setopt`/…), `zmodload` anywhere, and `xargs`/`parallel`/`sem`/`watch` as a command make the line unreadable; under a folder rule, relative targets are resolved through symlinks and one leaving the folder is not covered.
 
 ## Exit criteria (verified 2026-11-09)
 
