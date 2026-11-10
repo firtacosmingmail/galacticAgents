@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** — · **Task status:** P14-08 done (2026-11-09)
-**Phase status:** done (2026-11-09) (8/8) — branch `agent-allow-similar-reasons`
+**Current task:** P14-09 (todo) · **Task status:** P14-01..08 done; P14-09 todo
+**Phase status:** 8/9 — feature done (2026-11-09); follow-up P14-09 todo — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -31,6 +31,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 6 | P14-06 | Docs, board, gates. |
 | 7 | P14-07 | Final review fixes. |
 | 8 | P14-08 | Residual permission holes. |
+| 9 | P14-09 | Remaining command-text gaps; sandbox design. |
 
 P14-01…08 run in order.
 
@@ -81,6 +82,16 @@ P14-01…08 run in order.
 - Review round 4 (2026-11-09): a bracket expression in a guarded glob matches exactly one character (an unterminated one anything), so a quoted bracket in code or a pattern is ordinary again.
 - Review round 5 (2026-11-09): coarse fail-closed rules — a `[`/`]` left over or a broken `[:` class makes a guarded-glob segment match anything; any `env` word followed by `-S`, a lone `-` or an unknown option is unreadable (`rg env -S src` too); a builtin given `options` as a word, a shell with `-c` among its options, and `trap` with code are unreadable.
 - Review round 6 (2026-11-10): a computed or globbed word where a rule keys on one (the command name and wrappers, `find -exec`/`fd -x` programs, shell options, `env` arguments, the words of `read`/`vared`/`trap`/`setopt`/…), `zmodload` anywhere, and `xargs`/`parallel`/`sem`/`watch` as a command make the line unreadable; under a folder rule, relative targets are resolved through symlinks and one leaving the folder is not covered.
+
+### P14-09 — Remaining command-text gaps; sandbox design (added 2026-11-10)
+- **Status:** todo · **Depends on:** P14-08 · **Parallel with:** —
+- Open after the P14-08 final review (`.superpowers/sdd/…/task-8-findings-r6.md` on this branch's worktree):
+  - `hash zz=$(which xargs); … | zz cp e` renames a program; allowed with no rules.
+  - Folder-rule symlink checks miss a dangling link (`cd F && echo hi > dl`), a `$PWD/…` word, and a glued short-option value with no `/` (`sort -oflink`).
+  - zsh `zargs` runs a command like `xargs`; computed write targets `cp e $(…)` with no rules (same class as writing a script and running it).
+  - Other command-string runners not looked into: `tmux new`, `script -c`, `su -c`, `flock -c`, `nodemon --exec`, `entr -s`, `ssh host cmd`.
+  - Parked: rustc `-Z pre-link-arg=`/`RUSTFLAGS`, comma parts in `--grep '[a,b]'`, Next.js `[[...slug]]` paths always asking, `permissions.ts` size (~2500 lines).
+- Design question for Cosmin: replace text-guessing for Bash with a sandbox (macOS sandbox profile / SDK sandbox) or a short allow-list of known-safe command shapes.
 
 ## Exit criteria (verified 2026-11-09)
 
