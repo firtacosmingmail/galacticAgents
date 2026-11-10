@@ -106,7 +106,8 @@ describe('SPEC §3.6 row 1 — read, run tests/builds, edit inside the workspace
       ['Bash', { command: 'git checkout -b feature/x' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'git checkout main' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'git restore --staged src/a.ts' }, ['run_workspace'], 'allow'],
-      ['Bash', { command: 'find . -name "*.ts" | xargs grep TODO' }, ['run_workspace'], 'allow'],
+      // `xargs` runs words the engine never sees (P14-08 round 6): `find -exec` is read instead.
+      ['Bash', { command: 'find . -name "*.ts" -exec grep TODO {} +' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'echo $PATH' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'cat $PWD/package.json' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'cd src && cd .. && pnpm test' }, ['run_workspace'], 'allow'],

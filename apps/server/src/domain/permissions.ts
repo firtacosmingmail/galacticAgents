@@ -1047,6 +1047,8 @@ export function envUnreadable(words: readonly string[]): boolean {
 function envArgumentsReadable(words: readonly string[], from: number): boolean {
   for (let k = from; k < words.length; k++) {
     const w = words[k]!;
+    // A computed option, assignment or program (`env $o …`, `env "$x" …`): round 6.
+    if (computedWord(w)) return false;
     if (w === '--') return true;
     if (w.startsWith('--')) {
       const eq = w.indexOf('=');
@@ -1547,6 +1549,126 @@ function hiddenProgram(command: SimpleCommand): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a word may become another word when the shell runs it (P14-08 review round 6): a
+ * parameter or command substitution (`$x`, `` `…` ``), a glob (`*`, `?`, `[`, zsh's `^` and `#`),
+ * a brace expansion, or a `~` past the first character (zsh's `a~b`). The lexer has removed the
+ * quotes, so a quoted `'*'` counts too (fail closed). A leading `~` is the home folder.
+ */
+export function computedWord(word: string): boolean {
+  return /[$`*?[{}^#]/.test(word) || word.indexOf('~', 1) > 0;
+}
+
+/** Programs that run a command line the engine never sees (from stdin, or as one string). */
+const RUNS_UNSEEN = new Set(['xargs', 'parallel', 'sem', 'watch']);
+/** find's options that run the words after them as a program. */
+const FIND_EXEC = /^-(?:exec|execdir|ok|okdir)$/;
+/** fd's options that run the words after them as a program. */
+const FD_EXEC = /^(?:-x|-X|--exec|--exec-batch)$/;
+/** zsh's builtins whose words name what they set or run (`read -A options`, `vared`, `trap`). */
+const KEYED_BUILTINS = new Set([
+  'read',
+  'vared',
+  'trap',
+  'setopt',
+  'unsetopt',
+  'emulate',
+  'set',
+  'shopt',
+  'getopts',
+  'zparseopts',
+  'mapfile',
+  'readarray',
+]);
+/** Builtins that declare variables: the name before an `=` must be literal. */
+const DECLARING_BUILTINS = new Set([
+  'typeset',
+  'declare',
+  'local',
+  'export',
+  'readonly',
+  'integer',
+  'float',
+  'private',
+]);
+
+/**
+ * Why a simple command runs something the engine cannot name (P14-08 review round 6), if it does.
+ * Coarse and fail closed: the engine keys its rules on literal words, so a computed or globbed
+ * word (`computedWord`) wherever a rule looks makes the line unreadable — the command name and
+ * the wrappers before it (`zs? -c`, `"$PNPM" install`), the program after `find -exec` or `fd -x`
+ * and any `$` word of it, a shell's option words (`zsh $o '…'`), an `env` word's options and
+ * program, and the words of `read`, `vared`, `trap`, `setopt`, `emulate`, … (`read -A $x`; for
+ * `typeset` and friends the name before `=`). `zmodload` anywhere loads builtins the engine does not
+ * know (`pcre_match -a options`), and `xargs`, `parallel`, `sem` and `watch` run a command line the
+ * engine never sees: unreadable too.
+ */
+export function unseenWords(words: readonly string[]): string | undefined {
+  if (words.some((w) => /zmodload/i.test(w)))
+    return 'zmodload loads builtins the engine does not know';
+  const chainOf = (from: number) => {
+    const sub = words.slice(from);
+    return sub.slice(0, Math.min(commandHead(sub) + 1, sub.length));
+  };
+  const runsChain = (chain: readonly string[]): string | undefined => {
+    for (const w of chain) {
+      if (ASSIGNMENT_WORD.test(w)) continue;
+      if (computedWord(w) && w !== '[' && w !== '[[') {
+        return 'the command name is computed at run time';
+      }
+      if (RUNS_UNSEEN.has(baseName(w)))
+        return `${baseName(w)} runs a command the engine cannot see`;
+    }
+    return undefined;
+  };
+  const head = runsChain(chainOf(0));
+  if (head) return head;
+  const h = commandHead([...words]);
+  const name = words[h] === undefined ? '' : baseName(words[h]);
+  const fd = name === 'fd' || name === 'fdfind';
+  for (let k = h + 1; k < words.length; k++) {
+    if (!FIND_EXEC.test(words[k]!) && !(fd && FD_EXEC.test(words[k]!))) continue;
+    const why = runsChain(chainOf(k + 1));
+    if (why) return why;
+    if (words.slice(k + 1).some((w) => /[$`]/.test(w))) {
+      return 'the program find or fd runs is computed at run time';
+    }
+  }
+  for (const [i, w] of words.entries()) {
+    if (SHELLS.test(baseName(w)) && shellOptionsComputed(words, i + 1)) {
+      return 'a shell option is computed at run time';
+    }
+  }
+  const args = words.slice(h + 1);
+  // `print -v`/`printf -v` set the variable they are given.
+  const keyed =
+    KEYED_BUILTINS.has(name) ||
+    ((name === 'print' || name === 'printf') && args.some((w) => /^-[A-Za-z]*v/.test(w)));
+  if (keyed && args.some(computedWord)) {
+    return `${name} is given a word computed at run time`;
+  }
+  if (DECLARING_BUILTINS.has(name) && args.some((w) => computedWord(w.split('=')[0]!))) {
+    return `${name} is given a name computed at run time`;
+  }
+  return undefined;
+}
+
+/** Whether a computed word is among a shell's options (and their values), from `from`. */
+function shellOptionsComputed(words: readonly string[], from: number): boolean {
+  let value = false;
+  for (let k = from; k < words.length; k++) {
+    const w = words[k]!;
+    if (computedWord(w)) return true;
+    if (value) {
+      value = false;
+      continue;
+    }
+    if (w === '--' || w === '-' || !/^[-+]/.test(w)) return false;
+    value = w.startsWith('--') ? !w.includes('=') : /[oO]/.test(w);
+  }
+  return false;
+}
+
 /** Commands that only read their arguments: an agent-config path among them is fine. */
 const READ_ONLY_COMMANDS = new Set([
   'cat',
@@ -1909,7 +2031,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       opaque = true;
       reasons.push(`env with options the engine does not read: ${shown}`);
     }
-    const hidden = hiddenProgram(simple);
+    const hidden = hiddenProgram(simple) ?? unseenWords(simple.words);
     if (hidden) {
       opaque = true;
       reasons.push(`${hidden}: ${shown}`);

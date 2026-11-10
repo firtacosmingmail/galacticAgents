@@ -72,14 +72,17 @@ describe('commandParts', () => {
   });
 
   it('makes the target of xargs a part of its own', () => {
+    // `xargs` itself is unreadable since P14-08 round 6: it runs words the engine never sees.
     const parts = commandParts('ls | xargs rm', ctx);
-    expect(parts.map((p) => p.text)).toEqual(['ls', 'rm']);
-    expect(parts[1]!.categories).toContain('destructive');
+    expect(parts.map((p) => p.text)).toEqual(['ls', 'xargs', 'rm']);
+    expect(parts[1]!.opaque).toBe('unreadable');
+    expect(parts[2]!.categories).toContain('destructive');
   });
 
   it('splits a shell run by xargs', () => {
     expect(texts(`find . -name '*.tmp' | xargs -0 sh -c 'rm -f "$1"' _`)).toEqual([
       "find . -name '*.tmp'",
+      'xargs -0',
       'rm -f "$1"',
     ]);
   });
@@ -321,7 +324,7 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
       expect(parts.at(-1)!.opaque, command).toBe('unreadable');
     }
     // A fixed body that does not use the replace-string is still split.
-    expect(texts(`ls | xargs -I{} sh -c 'echo hi'`)).toEqual(['ls', 'echo hi']);
+    expect(texts(`ls | xargs -I{} sh -c 'echo hi'`)).toEqual(['ls', "xargs '-I{}'", 'echo hi']);
   });
 
   it('flags a delete after a cd in a substitution or subshell, which the lexer flattens', () => {

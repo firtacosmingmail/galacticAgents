@@ -1227,3 +1227,113 @@ describe('residual holes, review round 5 (P14-08): coarse fail-closed rules', ()
     }
   });
 });
+
+describe('residual holes, review round 6 (P14-08): computed words, zmodload, xargs', () => {
+  const ALL_ALLOWED: PermissionPolicy = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'allow',
+      network: 'allow',
+      destructive: 'allow',
+      push: 'allow',
+    },
+  };
+  const call = (cmd: string): ToolCall => ({ toolName: 'Bash', input: { command: cmd } });
+  const decision = (cmd: string, policy: PermissionPolicy = { rules: {} }) =>
+    evaluate(policy, call(cmd), ctx).decision;
+  const unreadable = (cmd: string) => {
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBe(true);
+    expect(decision(cmd), cmd).toBe('ask');
+    expect(decision(cmd, ALL_ALLOWED), cmd).toBe('ask');
+  };
+  const readable = (cmd: string) =>
+    expect(classifyCommand(cmd, ctx).unclassified, cmd).toBeUndefined();
+
+  it('N5-1: a computed or globbed command name or keyed word is unreadable', () => {
+    for (const cmd of [
+      "o=-c; zsh $o 'cp e .git/hooks/pre-commit'",
+      "o=-c; zsh $o 'touch /etc/x'",
+      'o=-c; bash "$o" \'touch /etc/x\'',
+      "o=-c; zsh -o globdots $o 'cp e ?git/hooks/pre-commit'",
+      "x=env; find . -exec $x -S'touch /etc/x' {} ;",
+      "x=zsh; find . -exec $x -c 'touch /etc/x' {} ;",
+      "x=options; read -A $x <<< 'globdots on'; cp e ?git/hooks/pre-commit",
+      "touch zsh; zs? -c 'cp e .git/hooks/pre-commit'",
+      "touch env; e?v -S'touch /etc/x'",
+      'touch setopt; set?pt globdots; cp e ?git/hooks/pre-commit',
+      "touch trap; tra? 'touch /etc/x' EXIT",
+      // The same holes through other spellings.
+      'find . -exec env $o {} ;',
+      'find . -execdir nice $x {} +',
+      'fd -x $x',
+      'fd --exec-batch $x',
+      'env $o touch /etc/x',
+      'x=-S; env "$x" \'touch /etc/x\'',
+      "[z]sh -c 'touch /etc/x'",
+      "z*h -c 'touch /etc/x'",
+      "{zsh,-c} 'touch /etc/x'",
+      "`which zsh` -c 'touch /etc/x'",
+      '"$PNPM" install',
+      'vared $x; ls',
+      'typeset -A $x; ls',
+      'emulate $x; ls',
+      'trap "$x" EXIT',
+      'zsh -o $x script.zsh',
+    ]) {
+      unreadable(cmd);
+    }
+    for (const cmd of [
+      'npm test',
+      './scripts/build.sh',
+      'node ./x.js',
+      'echo $HOME',
+      'cat *.ts',
+      'export PATH=$PATH:./bin',
+      'NODE_ENV=$MODE npm test',
+      'local x=$1',
+      '[ -f x ] && ls',
+      '[[ -f x ]] && ls',
+      "find . -name '*.ts' -exec wc -l {} +",
+      'bash scripts/build.sh --coverage',
+      'read -r line < f.txt',
+      'typeset -A opts',
+      '~/bin/tool --version',
+    ]) {
+      readable(cmd);
+    }
+  });
+
+  it('N5-2: zmodload anywhere makes the line unreadable', () => {
+    unreadable(
+      'zmodload zsh/pcre; pcre_compile "(globdots) (on)"; pcre_match -a options "globdots on"; cp e ?git/hooks/pre-commit',
+    );
+    unreadable('zmodload zsh/files');
+    unreadable('builtin zmodload zsh/pcre; ls');
+  });
+
+  it('xargs, parallel and watch run programs the engine cannot see', () => {
+    for (const cmd of [
+      'echo L2V0Yy94 | base64 -d | xargs touch',
+      'echo LVN0b3VjaCAvZXRjL3g= | base64 -d | xargs env',
+      'ls | xargs -I{} cp {} .git/hooks/',
+      'xargs -0 rm < list.txt',
+      'find . -name "*.ts" | xargs grep TODO',
+      'nice xargs touch',
+      "parallel 'touch /etc/x' ::: a",
+      "parallel 'cp e .git/hooks/pre-commit' ::: a",
+      'ls | parallel touch',
+      "watch 'touch /etc/x'",
+      "watch -n 5 'cp e .git/hooks/pre-commit'",
+    ]) {
+      unreadable(cmd);
+    }
+    // find -exec … {} + is read as before: its program is visible.
+    expect(decision('find . -exec touch /etc/x {} +', ALL_ALLOWED)).toBe('allow');
+    expect(classifyCommand('find . -exec touch /etc/x {} +', ctx).findings).toContainEqual(
+      expect.objectContaining({ action: 'outside_workspace', path: '/etc/x' }),
+    );
+    expect(classifyCommand('find . -exec cp {} .git/hooks/ +', ctx).guarded).toBe(true);
+  });
+});

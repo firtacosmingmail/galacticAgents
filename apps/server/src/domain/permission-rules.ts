@@ -1063,6 +1063,8 @@ interface CoverageInput {
   folderUnsafe: () => boolean;
   /** Whether a finding belongs to a command that runs outside the workspace (`runsOutsideOf`). */
   runsOutside: (f: Finding) => boolean;
+  /** `leavesThroughLinks` for this call and `folder`. */
+  leavesThroughLinks: (folder: string) => boolean;
   subject: () => Subject;
 }
 
@@ -1080,7 +1082,8 @@ function folderCovers(folder: string, f: Finding, k: CoverageInput): boolean {
     const real = physicalPath(f.path, ctx, k.realPath);
     if (real === undefined || !within(folder, real)) return false;
     // Lexically ordinary but guarded once symlinks are followed (review B1): never.
-    return !(guardedWriteReason(real, ctx) && !guardedWriteReason(f.path, ctx));
+    if (guardedWriteReason(real, ctx) && !guardedWriteReason(f.path, ctx)) return false;
+    return !k.leavesThroughLinks(folder);
   }
   const subject = k.subject();
   return (
@@ -1184,8 +1187,64 @@ function coverageInputOf(input: RuleInput, c: Classification): CoverageInput {
     command,
     folderUnsafe: () => (unsafe ??= command === undefined || folderUnsafeLine(command)),
     runsOutside: runsOutsideOf(c, command !== undefined),
+    leavesThroughLinks: (folder) =>
+      command !== undefined && leavesThroughLinks(folder, command, c, input.ctx, realPath),
     subject: () => (subject ??= subjectOf(call, input.ctx, realPath)),
   };
+}
+
+/** The values a word may name as a path: itself, or what an option word carries (`--o=x`, `-ox`). */
+function pathCandidates(word: string): string[] {
+  if (!word.startsWith('-')) return [word];
+  const eq = word.indexOf('=');
+  if (eq > 0) return [word.slice(eq + 1)];
+  const m = /^-+([A-Za-z0-9]*)(.*)$/s.exec(word);
+  if (!m) return [];
+  const [, letters = '', rest = ''] = m;
+  const out: string[] = [];
+  for (let i = 1; i <= letters.length; i++) out.push(letters.slice(i) + rest);
+  return out.filter((v) => v.includes('/'));
+}
+
+/**
+ * Whether a command line run in `folder` may reach outside it through a symlink there (P14-08
+ * review round 6): from every place the line runs in under the folder — a `cd`'s or an `env -C`'s
+ * outside-the-workspace finding, its real path — each relative word and redirection target of
+ * that simple command and the ones after it is resolved through the real path of its deepest
+ * existing ancestor (`physicalPath`). One that lands outside the folder, or on guarded ground only
+ * once links are followed, leaves it; so does a relative glob there (fail closed: the engine
+ * cannot list what it matches).
+ */
+function leavesThroughLinks(
+  folder: string,
+  command: string,
+  c: Classification,
+  ctx: PolicyContext,
+  realPath: RealPath,
+): boolean {
+  const lexed = lexCommand(command);
+  for (const f of c.findings) {
+    if (f.action !== 'outside_workspace' || f.path === undefined || f.segment === undefined) {
+      continue;
+    }
+    const base = physicalPath(f.path, ctx, realPath);
+    if (base === undefined || !within(folder, base)) continue;
+    for (const simple of lexed.commands.slice(f.segment)) {
+      const words = simple.words.slice(commandHead(simple.words) + 1);
+      const targets = simple.redirects
+        .filter((r) => r.op !== '<<' && r.op !== '<<-' && r.op !== '<<<')
+        .map((r) => r.target);
+      for (const word of [...words.flatMap(pathCandidates), ...targets]) {
+        if (word === '' || isAbsolute(word) || word.startsWith('~') || /[$`]/.test(word)) continue;
+        if (/[*?[]/.test(word)) return true;
+        const lexical = join(base, word);
+        const real = physicalPath(lexical, ctx, realPath);
+        if (real === undefined || !within(folder, real)) return true;
+        if (guardedWriteReason(real, ctx) && !guardedWriteReason(lexical, ctx)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 /**

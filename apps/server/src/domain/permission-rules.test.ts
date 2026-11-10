@@ -365,6 +365,65 @@ describe('folder rules on the real file system (P9-17)', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('a command target through a symlink out of a folder rule is outside (P14-08 round 6)', () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-rule-fs-')));
+    try {
+      const home = join(root, 'home');
+      const ws = join(home, 'ws');
+      const folder = join(root, 'pr83');
+      mkdirSync(ws, { recursive: true });
+      mkdirSync(join(folder, 'sub'), { recursive: true });
+      mkdirSync(join(root, 'outside'));
+      symlinkSync(join(root, 'outside'), join(folder, 'out'));
+      const real: PolicyContext = { workspace: ws, cwd: ws, home };
+      const asks: PermissionPolicy = {
+        rules: { read_workspace: 'allow', edit_workspace: 'allow', run_workspace: 'allow' },
+      };
+      const rule: PermissionRule = {
+        id: 'r-pr83',
+        projectId: 'p-1',
+        scope: 'folder',
+        tool: 'Bash',
+        match: { kind: 'folder', folder, access: 'any' },
+        categories: ['outside_workspace'],
+        label: folder,
+        createdBy: { type: 'user' },
+        createdAt: '2026-11-10T10:00:00.000Z',
+        origin: 'local',
+      };
+      const covered = (command: string) => {
+        const call = bash(command);
+        const verdict = evaluate(asks, call, real);
+        expect(verdict.decision, command).toBe('ask');
+        return coverage([rule], { call, ctx: real, policy: asks }, verdict).allowed;
+      };
+      for (const command of [
+        `cd ${folder} && cp e x`,
+        `cd ${folder} && cp e sub/x`,
+        `cd ${folder} && echo hi > sub/new/x`,
+        `cp e ${folder}/sub/x`,
+      ]) {
+        expect(covered(command), command).toBe(true);
+      }
+      for (const command of [
+        `cd ${folder} && cp e out/x`,
+        `cd ${folder} && cp e out/deeper/x`,
+        `cd ${folder} && echo hi > out/x`,
+        `cd ${folder} && touch --reference=a out`,
+        `cd ${folder} && mkdir -p out/a`,
+        `cd ${folder} && cp e o?t/x`,
+        `cd ${folder} && cd out && touch x`,
+        `cd ${folder}/out && touch x`,
+        `cp e ${folder}/out/x`,
+        `env -C ${folder} cp e out/x`,
+      ]) {
+        expect(covered(command), command).toBe(false);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('the chooser (P9-17)', () => {
@@ -1756,6 +1815,21 @@ describe('final review fixes (P14-07)', () => {
         "cd /tmp/pr83 && zsh -o globdots -c 'cp e ?git/hooks/pre-commit'",
         "cd /tmp/pr83 && bash -O dotglob -c 'cp e ?git/hooks/pre-commit'",
       ]) {
+        expect(cover([pr83], bash(command)).allowed, command).toBe(false);
+      }
+    });
+
+    it('round 6: computed words, zmodload and xargs never pass a folder rule', () => {
+      for (const command of [
+        "cd /tmp/pr83 && o=-c; zsh $o 'cp e .git/hooks/pre-commit'",
+        "cd /tmp/pr83 && touch zsh; zs? -c 'touch /etc/x'",
+        "cd /tmp/pr83 && x=env; find . -exec $x -S'touch /etc/x' {} ;",
+        'cd /tmp/pr83 && zmodload zsh/pcre; ls',
+        'cd /tmp/pr83 && ls | xargs touch',
+        'cd /tmp/pr83 && xargs -I{} cp {} .git/hooks/ < list',
+        "cd /tmp/pr83 && parallel 'touch /etc/x' ::: a",
+      ]) {
+        // Unreadable: never covered (the cd's folder row may still be offered for later calls).
         expect(cover([pr83], bash(command)).allowed, command).toBe(false);
       }
     });
