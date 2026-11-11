@@ -1,7 +1,7 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-07 · **Task status:** P15-07 in progress
-**Phase status:** in progress (6/10)
+**Current task:** P15-08 · **Task status:** P15-08 in progress
+**Phase status:** in progress (7/10)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
