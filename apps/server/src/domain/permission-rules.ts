@@ -23,7 +23,6 @@ import {
   EDIT_TOOLS,
   evaluate,
   expandBraces,
-  expandHome,
   FOLDER_PREFIX_OK,
   GLOB_FIELDS,
   globLocations,
