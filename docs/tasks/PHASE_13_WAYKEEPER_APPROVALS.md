@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-07 · **Task status:** P13-07 blocked (waiting for Cosmin's real run); docs and gates done (2026-11-09)
-**Phase status:** in progress (7/8; P13-07 blocked on the real run) — branch `agent-waykeeper-approvals`
+**Current task:** — · **Task status:** all done (2026-11-11)
+**Phase status:** done (2026-11-11) (8/8) — merged into `main` (PR #12)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -62,9 +62,9 @@ P13-01…07 run in order; P13-08 runs beside P13-07.
 - Plan Task 6.
 
 ### P13-07 — Docs and real run
-- **Status:** blocked (waiting for Cosmin's real run) · **Depends on:** P13-06 · **Parallel with:** —
+- **Status:** done (2026-11-11) · **Depends on:** P13-06 · **Parallel with:** —
 - Plan Task 7.
-- Done: SPEC decision 154, TECHNOLOGY §3.10, IMPLEMENTATION_PLAN Phase 13, the design and plan wording fixes (a stopping Steward drops the held call; `StandingApprovalResult`), the task board, the full gates, and the manual procedure `docs/tasks/notes/P13-07-real-run.md`. Open: Cosmin runs that procedure on a scratch repository and records the result there; only then is the task `done (<date>)` and the phase exit verified.
+- Done: SPEC decision 154, TECHNOLOGY §3.10, IMPLEMENTATION_PLAN Phase 13, the design and plan wording fixes (a stopping Steward drops the held call; `StandingApprovalResult`), the task board, the full gates, and the manual procedure `docs/tasks/notes/P13-07-real-run.md`. Open: Cosmin runs that procedure on a scratch repository and records the result there; only then is the task `done (<date>)` and the phase exit verified. Closed 2026-11-11: Cosmin marked the real run done after using the feature on real projects (see the notes file).
 
 ### P13-08 — Steward scratch checkouts stay in the workspace (added 2026-11-09)
 - **Status:** done (2026-11-09) · **Depends on:** — · **Parallel with:** P13-07

@@ -31,4 +31,4 @@ Date, model used, and for each step: passed or what happened. Also: any approval
 
 ## Result
 
-(empty — to be filled in after the run)
+2026-11-11 — Cosmin marked the real run done after using Waykeeper approvals on real projects with the merged build (including a Steward reviewing PR #12). The step-by-step results above were not recorded individually. Found on the way and fixed: the "Allow similar" chooser did not say why its button was off (P14-10), and reads of an agent's own saved tool output always asked (P14-11).
