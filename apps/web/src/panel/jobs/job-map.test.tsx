@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyWorld, type Job, type JobRun, type Panel } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
@@ -157,6 +157,63 @@ describe('JobMap', () => {
     );
     expect(await screen.findByText('not used by the last good run')).toBeTruthy();
     expect(jobRuns).toHaveBeenCalledWith(job.id, 10);
+  });
+
+  it('Clear stored values lists the panels reading the job, says it cannot be undone, and clears once', async () => {
+    const other = { ...panel, id: 'pn-2', title: 'Churn line' } as Panel;
+    const elsewhere = {
+      ...panel,
+      id: 'pn-3',
+      title: 'Another job',
+      source: { kind: 'job', jobId: 'j-9', values: ['x'] },
+    } as Panel;
+    useAppStore.setState({
+      world: {
+        ...emptyWorld(),
+        jobs: { [job.id]: job },
+        panels: { [panel.id]: panel, [other.id]: other, [elsewhere.id]: elsewhere },
+      },
+    } as never);
+    const clearJobValues = vi.fn(async () => ({ panels: [panel.id, other.id] }));
+    const api = { jobRuns: async () => ({ runs: [] }), clearJobValues } as unknown as Api;
+    render(
+      <ApiContext.Provider value={api}>
+        <JobMap jobId={job.id} onClose={() => {}} />
+      </ApiContext.Provider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear stored values' }));
+    const confirm = screen.getByRole('group', { name: 'Clear stored values' });
+    expect(confirm.textContent).toContain('Churn tile');
+    expect(confirm.textContent).toContain('Churn line');
+    expect(confirm.textContent).not.toContain('Another job');
+    expect(confirm.textContent).toContain("can't be undone");
+    expect(clearJobValues).not.toHaveBeenCalled();
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Clear stored values' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: 'Clear stored values' })).toBeNull(),
+    );
+    expect(clearJobValues).toHaveBeenCalledTimes(1);
+    expect(clearJobValues).toHaveBeenCalledWith(job.id);
+  });
+
+  it('Clear stored values on a job no panel reads says so; Cancel clears nothing', async () => {
+    const clearJobValues = vi.fn();
+    useAppStore.setState({
+      world: { ...emptyWorld(), jobs: { [job.id]: job }, panels: {} },
+    } as never);
+    render(
+      <ApiContext.Provider
+        value={{ jobRuns: async () => ({ runs: [] }), clearJobValues } as unknown as Api}
+      >
+        <JobMap jobId={job.id} onClose={() => {}} />
+      </ApiContext.Provider>,
+    );
+    fireEvent.click(await screen.findByRole('button', { name: 'Clear stored values' }));
+    const confirm = screen.getByRole('group', { name: 'Clear stored values' });
+    expect(confirm.textContent).toContain('No panels read this job.');
+    fireEvent.click(within(confirm).getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('group', { name: 'Clear stored values' })).toBeNull();
+    expect(clearJobValues).not.toHaveBeenCalled();
   });
 
   it('highlights on focus and dims the rest', async () => {

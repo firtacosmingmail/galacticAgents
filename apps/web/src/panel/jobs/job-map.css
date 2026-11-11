@@ -33,6 +33,24 @@
   justify-content: space-between;
   gap: 12px;
 }
+.jm-head-actions {
+  display: flex;
+  gap: 8px;
+}
+.jm-confirm {
+  padding: 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  font-size: 13px;
+}
+.jm-confirm p {
+  margin: 0 0 6px;
+}
+.jm-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
 .jm-title {
   margin: 0;
   font-size: 1.05rem;

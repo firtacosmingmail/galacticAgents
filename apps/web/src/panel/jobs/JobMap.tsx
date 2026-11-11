@@ -8,7 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
-import type { Id, JobRun } from '@galactic/protocol';
+import { affectedPanels, type Id, type JobRun, type Panel } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { useApi } from '../../console/hierarchy/shared.js';
 import { useMediaQuery, COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
@@ -32,7 +32,8 @@ import './job-map.css';
  * under a run bar with the last run, the next run and the schedule. Hovering or focusing a node
  * (or tapping it, on touch) lights it and everything linked to it both ways and dims the rest.
  * A panel chip switches to the Dashboard view and scrolls to that panel. On a phone the columns
- * stack and each node lists its links as text instead of drawing connectors.
+ * stack and each node lists its links as text instead of drawing connectors. "Clear stored values"
+ * in the header deletes the job's stored values after a confirmation naming the panels reading it.
  */
 
 export const NO_MAP_TEXT = 'This job has no data map yet — ask the Waykeeper to add one';
@@ -55,6 +56,18 @@ const STATE_TEXT: Record<'unused' | 'undeclared', string> = {
   unused: 'not used by the last good run',
   undeclared: 'not declared',
 };
+
+/**
+ * What "Clear stored values" asks before it deletes the job's stored values: the panels reading the
+ * job by title (they show nothing for the runs so far), or that none does.
+ */
+export function clearValuesText(panels: Panel[]): string {
+  const reading =
+    panels.length === 0
+      ? 'No panels read this job.'
+      : `These panels will show nothing for the runs so far: ${panels.map((p) => p.title).join(', ')}.`;
+  return `Clear this job's stored values? ${reading} This can't be undone.`;
+}
 
 /** How many recent runs the map reads: enough to find the last good run behind a failed one. */
 export const MAP_RUNS = 10;
@@ -83,6 +96,22 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
     () => (job ? jobMapModel(job, runs, Object.values(panels)) : undefined),
     [job, runs, panels],
   );
+
+  const [confirming, setConfirming] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState<string>();
+  const clearValues = async () => {
+    setClearing(true);
+    setClearError(undefined);
+    try {
+      await api.clearJobValues(jobId);
+      setConfirming(false);
+    } catch (e) {
+      setClearError((e as Error).message);
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const [hover, setHover] = useState<string>();
   const [focus, setFocus] = useState<string>();
@@ -262,10 +291,43 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
       >
         <header className="jm-head">
           <h2 className="jm-title">{job.name}</h2>
-          <button ref={closeRef} type="button" className="secondary" onClick={onClose}>
-            Close
-          </button>
+          <span className="jm-head-actions">
+            <button
+              type="button"
+              className="secondary"
+              aria-expanded={confirming}
+              onClick={() => setConfirming((c) => !c)}
+            >
+              Clear stored values
+            </button>
+            <button ref={closeRef} type="button" className="secondary" onClick={onClose}>
+              Close
+            </button>
+          </span>
         </header>
+        {confirming && (
+          <div className="jm-confirm" role="group" aria-label="Clear stored values">
+            <p>{clearValuesText(affectedPanels(Object.values(panels), jobId))}</p>
+            <div className="jm-confirm-actions">
+              <button
+                type="button"
+                className="danger"
+                disabled={clearing}
+                onClick={() => void clearValues()}
+              >
+                Clear stored values
+              </button>
+              <button type="button" className="secondary" onClick={() => setConfirming(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+        {clearError && (
+          <p className="error" role="alert">
+            {clearError}
+          </p>
+        )}
         <p className="jm-bar">
           <span>
             <b>Last run</b>{' '}
