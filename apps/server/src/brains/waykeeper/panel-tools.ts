@@ -1,10 +1,12 @@
 import {
   LONG_TERM_LIMITS,
   PanelType,
+  isLongTerm,
   proposalPanelOf,
   unchangedSince,
   type Id,
   type JobDraft,
+  type JobRun,
   type Panel,
   type PanelDraft,
   type ProposalJob,
@@ -13,13 +15,15 @@ import {
 } from '@galactic/protocol';
 import { evaluateDashboard } from '../../domain/dashboard.js';
 import { DomainError } from '../../domain/errors.js';
+import { NO_DASHBOARD } from '../../domain/panels.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import { asInput, changeJobInput, createJobInput, obj, optStr, str } from './job-tools.js';
 import { projectOf } from './tools.js';
 
 /**
- * The Waykeeper's dashboard tools (P15-05; SPEC decision 156), given only to the Waykeeper of a
- * long-term project. It changes panels ONLY through cards — `propose_panel` (add or change one) and
+ * The Waykeeper's dashboard tools (P15-05; SPEC decision 156). Every Waykeeper has them — a
+ * project may become long-term while its Waykeeper runs — and each refuses for a project that is
+ * not long-term (`invalid`, "a dashboard belongs to a long-term project"). It changes panels ONLY through cards — `propose_panel` (add or change one) and
  * `propose_panel_remove` — each checked like the command its approval runs; it never arranges a
  * dashboard (only Cosmin does) and never removes a panel without his card. `list_panels` reads
  * what each panel shows now.
@@ -127,7 +131,6 @@ export const proposePanelTool: BrainTool = {
     },
     ['draft'],
   ),
-  longTermOnly: true,
   endsTurn: true,
   handler: async (raw, ctx) => {
     const input = asInput(raw);
@@ -161,7 +164,6 @@ export const proposePanelRemoveTool: BrainTool = {
     'panelId',
     'reason',
   ]),
-  longTermOnly: true,
   endsTurn: true,
   handler: async (raw, ctx) => {
     const input = asInput(raw);
@@ -195,12 +197,19 @@ export const listPanelsTool: BrainTool = {
     '(status, value, verdict), since when its value has not changed (unchangedSince), and the ' +
     'values its job collects (collects).',
   inputSchema: obj({}),
-  longTermOnly: true,
   handler: async (_raw: unknown, ctx) => {
     const project = projectOf(ctx);
+    if (!isLongTerm(project)) throw new DomainError('invalid', NO_DASHBOARD);
     const panels = ctx.queries.panels(project.id);
     const jobs = new Map(ctx.queries.jobs(project.id).map((j) => [j.id, j]));
-    const runs = (jobId: Id) => ctx.queries.jobRuns(jobId, LONG_TERM_LIMITS.runsKept);
+    // Each job's runs are read once, for its data and for since when it is unchanged.
+    const runsByJob = new Map<Id, JobRun[]>();
+    const runs = (jobId: Id): JobRun[] => {
+      let read = runsByJob.get(jobId);
+      if (!read)
+        runsByJob.set(jobId, (read = ctx.queries.jobRuns(jobId, LONG_TERM_LIMITS.runsKept)));
+      return read;
+    };
     const data = evaluateDashboard(
       panels,
       {

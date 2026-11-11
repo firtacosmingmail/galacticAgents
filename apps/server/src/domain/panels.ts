@@ -56,12 +56,13 @@ export function panelsOf(ctx: Reader, projectId: Id): Panel[] {
     .sort((a, b) => a.layout.order - b.layout.order);
 }
 
+/** Why a project that is not long-term has no dashboard. */
+export const NO_DASHBOARD = 'a dashboard belongs to a long-term project';
+
 /** A long-term project that is still open, or the refusal (`invalid`). */
 export function dashboardProject(ctx: Reader, projectId: Id): Project {
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
-  if (!isLongTerm(project)) {
-    throw new DomainError('invalid', 'a dashboard belongs to a long-term project');
-  }
+  if (!isLongTerm(project)) throw new DomainError('invalid', NO_DASHBOARD);
   if (FINISHED_WORK.has(project.state)) {
     throw new DomainError('invalid', `project ${projectId} is ${project.state}; reopen it first`);
   }

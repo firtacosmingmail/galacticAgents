@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   proposalPanelOf,
   type Id,
@@ -68,7 +68,11 @@ async function shopJob(project: Project) {
 
 /** A Waykeeper on `project` whose script calls `tool` with `input` when told "go". */
 async function waykeeperCalling(project: Project, tool: string, input: unknown) {
-  const out: { result?: ToolOutcome; error?: string; errors?: Record<string, string> } = {};
+  const out: {
+    result?: ToolOutcome;
+    results?: Record<string, ToolOutcome>;
+    errors?: Record<string, string>;
+  } = {};
   const hq = await h.startHarmonizer();
   const wk = await h.startBrain(
     waykeeperDefinition(),
@@ -80,6 +84,7 @@ async function waykeeperCalling(project: Project, tool: string, input: unknown) 
             for (const name of tool.split(',')) {
               try {
                 out.result = await t.try(name, input);
+                (out.results ??= {})[name] = out.result;
               } catch (error) {
                 (out.errors ??= {})[name] = (error as Error).message;
               }
@@ -193,23 +198,58 @@ describe('propose_panel (P15-05)', () => {
     await h.done();
   });
 
-  it('is absent from the tools of a short project’s Waykeeper', async () => {
+  it('a short project’s Waykeeper has the tools, and each refuses: no dashboard', async () => {
     const short = (await h.commands.createProject({ name: 'App', workspace: '/tmp/app' })).value;
     const { out } = await waykeeperCalling(
       short,
       'propose_panel,propose_panel_remove,list_panels',
-      {},
+      {
+        draft: {
+          type: 'status',
+          title: 'Work',
+          source: { kind: 'tasks' },
+          display: {},
+          limits: [],
+        },
+        panelId: 'pn-none',
+        reason: 'r',
+      },
     );
-    expect(Object.keys(out.errors ?? {})).toEqual([
-      'propose_panel',
-      'propose_panel_remove',
-      'list_panels',
-    ]);
-    for (const message of Object.values(out.errors ?? {})) {
-      expect(message).toContain("not one of the brain's tools");
-      expect(message.split('(')[1]).not.toContain('panel');
-      expect(message).toContain('propose_job'); // the Waykeeper's other tools are there
+    expect(out.errors).toBeUndefined();
+    for (const name of ['propose_panel', 'propose_panel_remove', 'list_panels']) {
+      expect(out.results?.[name]).toMatchObject({
+        ok: false,
+        error: 'invalid',
+        message: 'a dashboard belongs to a long-term project',
+      });
     }
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+    await h.done();
+  });
+
+  it('a project made long-term after its Waykeeper started may use them at once', async () => {
+    const project = (await h.commands.createProject({ name: 'App', workspace: '/tmp/app' })).value;
+    const hq = await h.startHarmonizer();
+    let listed: ToolOutcome | undefined;
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      {
+        script: (s) =>
+          s.once('go', async (t) => {
+            listed = await t.try('list_panels', {});
+          }),
+      },
+    );
+    await h.commands.setLongTerm({
+      projectId: project.id,
+      purpose: 'Run the app',
+      goals: [],
+      by: USER,
+    });
+    wk.tell('go');
+    await h.settle();
+    expect(listed).toMatchObject({ ok: true, value: { panels: [] } });
     await h.done();
   });
 });
@@ -249,7 +289,13 @@ describe('list_panels (P15-05)', () => {
         numbers: { sales: 12 },
       });
     }
+    const reads = vi.spyOn(h.log.tables.jobRuns, 'of');
+    h.log.runCommand((ctx) =>
+      createPanel(ctx, project.id, { ...tile(job.id, 'Sales again'), type: 'line' }, USER),
+    );
     const { out } = await waykeeperCalling(project, 'list_panels', {});
+    // Two panels on one job: its runs are read once.
+    expect(reads.mock.calls.filter(([id]) => id === job.id)).toHaveLength(1);
     const [listed] = (out.result as { value: { panels: Record<string, unknown>[] } }).value.panels;
     expect(listed).toMatchObject({
       id: panel.id,
