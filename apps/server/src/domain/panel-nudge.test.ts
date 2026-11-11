@@ -32,7 +32,7 @@ const TILE: PanelDraft = {
   limits: [],
 };
 
-function setup() {
+function setup(panelAgeDays = 30) {
   const w = world();
   const cmd = <T>(fn: (ctx: CommandContext) => T): T => w.log.runCommand(fn).value;
   const project = cmd((ctx) =>
@@ -62,6 +62,8 @@ function setup() {
       USER,
     ),
   );
+  // The panel is `panelAgeDays` old when the test starts.
+  w.clock.advance(panelAgeDays * DAY);
   let n = 0;
   /** A good run `daysAgo` days before now, reporting `sales`. */
   const run = (daysAgo: number, sales: number, outcome: JobRun['outcome'] = 'quiet') => {
@@ -86,6 +88,18 @@ function setup() {
 }
 
 describe('nudgeUnchangedPanels', () => {
+  it('a panel made 1 day ago on a value unchanged for 40 days is not nudged; made 30 days ago it is (R15)', () => {
+    const fresh = setup(1);
+    fresh.run(40, 5);
+    fresh.run(1, 5);
+    expect(fresh.nudge()).toEqual([]);
+    expect(fresh.nudges()).toHaveLength(0);
+    const old = setup(30);
+    old.run(40, 5);
+    old.run(1, 5);
+    expect(old.nudge()).toEqual([old.panel.id]);
+  });
+
   it('a panel unchanged for 29 days nudges the Waykeeper once, and not again on the next run', () => {
     const s = setup();
     s.run(29, 5);

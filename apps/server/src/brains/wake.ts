@@ -179,8 +179,8 @@ const proposal = <T extends DecisionType>(
 
 /**
  * What an approval already did, for the cards whose approval is the whole of it (P10-06): a job
- * card's job was created, changed or stopped; a panel card's panel (P15-05) was added, changed or removed; a conversion card made its project long-term. There
- * is nothing left to create or spawn.
+ * card's job was created, changed or stopped; a panel card's panel (P15-05) was added, changed or
+ * removed; a conversion card made its project long-term. There is nothing left to create or spawn.
  */
 function approvedNote(p: Proposal | undefined): string {
   const job = proposalJobOf(p);

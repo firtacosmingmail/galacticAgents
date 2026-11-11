@@ -12,13 +12,16 @@ import { jobRuns } from './job-runs.js';
 import { panelsOf, suggestPanelRemoval, updatePanel } from './panels.js';
 import { FINISHED_WORK } from './states.js';
 
+const DAY_MS = 86_400_000;
+
 /**
  * The unchanged-panel nudge (P15-05; SPEC decision 156), made after any job run of a long-term
  * project ends. For each panel reading a job:
  *
  *  - its value changed again since the last suggestion (`unchangedSince` is newer than
  *    `removalSuggestedAt`): the suggestion is cleared, so a later streak can nudge again;
- *  - unchanged for `PANEL_UNCHANGED_DAYS` days with no suggestion yet: the project's Waykeeper gets
+ *  - unchanged for `PANEL_UNCHANGED_DAYS` days (counted from the later of `unchangedSince`, the
+ *    panel's creation and its `historyFrom`) with no suggestion yet: the project's Waykeeper gets
  *    ONE system message (it wakes the brain) and `suggestPanelRemoval` marks the panel, so the
  *    next run does not repeat it. The Waykeeper suggests; only Cosmin's card removes a panel.
  *
@@ -32,7 +35,6 @@ export function nudgeUnchangedPanels(
   const project = ctx.tables.projects.get(projectId);
   if (!project || !isLongTerm(project) || FINISHED_WORK.has(project.state)) return [];
   const nudged: Id[] = [];
-  const dayMs = 86_400_000;
   for (const panel of panelsOf(ctx, projectId)) {
     if (panel.source.kind !== 'job') continue;
     const since = unchangedSince(
@@ -46,7 +48,12 @@ export function nudgeUnchangedPanels(
       suggested = undefined;
     }
     if (suggested !== undefined) continue;
-    if (Date.parse(ctx.now) - Date.parse(since) < PANEL_UNCHANGED_DAYS * dayMs) continue;
+    // A panel is counted from when it was made (and from its last "clear history"): a new panel
+    // on a job with a long steady history is not nudged at once (ruling R15).
+    const from = [since, panel.createdAt, panel.historyFrom ?? ''].reduce((a, b) =>
+      b > a ? b : a,
+    );
+    if (Date.parse(ctx.now) - Date.parse(from) < PANEL_UNCHANGED_DAYS * DAY_MS) continue;
     const waykeeper = waykeeperOf(ctx, projectId, isLiving);
     if (!waykeeper) continue;
     suggestPanelRemoval(ctx, panel.id);
