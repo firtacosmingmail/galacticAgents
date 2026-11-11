@@ -232,7 +232,9 @@ export class JobScheduler {
    * (`started: false`) — one run per job at a time. Refused (`invalid`) for an agent, a job that
    * is not active, a project that is paused or finished, and a job waiting on its usage-limit
    * question; refused (`limit`) when the caps leave no slot (no run row is written). Hard caps
-   * apply to the run's Steward as to any run's.
+   * apply to the run's Steward as to any run's. A refresh runs on the job's own provider and
+   * model: a provider switch answered on the job's usage-limit question (which a scheduled run
+   * would take) is ignored here.
    */
   async runNow(jobId: Id, by: Actor): Promise<{ runId: Id; started: boolean }> {
     const outcome = await this.enqueue<{ runId: Id; started: boolean } | DomainError>(

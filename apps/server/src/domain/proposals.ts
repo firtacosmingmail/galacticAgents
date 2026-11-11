@@ -508,7 +508,8 @@ function usableJob(ctx: Reader, projectId: Id, jobId: Id): Job {
  * long-term project's dashboard, filled by an existing job (`job.use`) or by a job the same card
  * creates or changes (`job.propose`, checked like `proposeJob`; a new job's panel reads `$new`).
  * The card keeps the panel as it was (`before`). A new card from the same Waykeeper about the same
- * panel, or with the same title, supersedes its earlier waiting card (rejected as `superseded`).
+ * panel, or a new-panel card with the same title as its earlier new-panel card, supersedes that
+ * earlier waiting card (rejected as `superseded`); a change or removal never matches by title.
  */
 export function proposePanel(ctx: CommandContext, input: ProposePanelInput): Proposal {
   const project = dashboardProject(ctx, input.projectId);
@@ -521,7 +522,11 @@ export function proposePanel(ctx: CommandContext, input: ProposePanelInput): Pro
     if (!other || !WAITING.includes(p.state) || other.waykeeperId !== waykeeper.id) continue;
     const samePanel = input.panelId !== undefined && other.panelId === input.panelId;
     const sameDraft =
-      title !== undefined && other.draft !== undefined && sameTitle(other.draft.title, title);
+      input.action === 'create' &&
+      other.action === 'create' &&
+      title !== undefined &&
+      other.draft !== undefined &&
+      sameTitle(other.draft.title, title);
     if (samePanel || sameDraft) {
       ctx.tables.proposals.upsert({ ...p, state: 'rejected', updatedAt: ctx.now });
       ctx.emit({ type: 'proposal.rejected', proposalId: p.id, reason: 'superseded' });

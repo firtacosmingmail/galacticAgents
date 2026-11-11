@@ -1007,6 +1007,59 @@ describe('panel cards (P15-03, decision 156)', () => {
     expect(f.tables.panels.get(panel.id)?.title).toBe('Sales this week');
   });
 
+  it('only a new panel card supersedes by title; a change or removal only by its panel', () => {
+    const f = dashboard();
+    const made = (title: string) =>
+      f.run((ctx) => createPanel(ctx, f.project.id, tile(f.job.id, title), USER)).value;
+    const x = made('Orders');
+    const y = made('Visits');
+    const change = (panelId: string, title: string) =>
+      f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'change',
+          panelId,
+          draft: tile(f.job.id, title),
+          job: { use: f.job.id },
+        }),
+      ).value;
+    const create = (title: string) =>
+      f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'create',
+          draft: tile(f.job.id, title),
+          job: { use: f.job.id },
+        }),
+      ).value;
+    const onX = change(x.id, 'Sales');
+    // Another panel renamed to the same title is another card.
+    const onY = change(y.id, 'Sales');
+    expect(f.card(onX.id).state).toBe('pending');
+    // A new panel with that title supersedes neither change.
+    const fresh = create('Sales');
+    expect(f.card(onX.id).state).toBe('pending');
+    expect(f.card(onY.id).state).toBe('pending');
+    // A removal of y supersedes y's change only.
+    f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'remove',
+        panelId: y.id,
+        rationale: 'unused',
+      }),
+    );
+    expect(f.card(onY.id).state).toBe('rejected');
+    expect(f.card(onX.id).state).toBe('pending');
+    // A second new panel with the same title supersedes the first.
+    create('sales');
+    expect(f.card(fresh.id).state).toBe('rejected');
+    expect(f.card(onX.id).state).toBe('pending');
+  });
+
   it('a stop card approved with removePanels removes the job’s panels; without it keeps them', () => {
     for (const removePanels of [true, undefined] as const) {
       const f = dashboard();
