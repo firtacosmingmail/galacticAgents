@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-09 (todo) · **Task status:** P14-01..08, P14-10 done; P14-09 todo
-**Phase status:** 9/10 — feature done (2026-11-09); follow-up P14-09 todo — branch `agent-allow-similar-reasons`
+**Current task:** P14-11 (in progress) · **Task status:** P14-01..08, P14-10 done; P14-11 in progress; P14-09 todo
+**Phase status:** 9/11 — feature done (2026-11-09); follow-up P14-09 todo — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,6 +33,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 8 | P14-08 | Residual permission holes. |
 | 9 | P14-09 | Remaining command-text gaps; sandbox design. |
 | 10 | P14-10 | Chooser says why its button is off. |
+| 11 | P14-11 | An agent may read its own session's saved tool output. |
 
 P14-01…08 run in order.
 
@@ -97,6 +98,10 @@ P14-01…08 run in order.
 ### P14-10 — The chooser says why its button is off (added 2026-11-11)
 - **Status:** done (2026-11-11) · **Depends on:** P14-05 · **Parallel with:** —
 - Found in Cosmin's test: a card whose only reason was guarded ground (a read of the Steward's saved tool output under `~/.claude`) opened a chooser with no rows and a greyed "Allow and remember ticked", with no word on why. Now a chooser with nothing to tick says "Nothing in this command can be remembered as a rule, so it will ask again next time. Use Allow once to let it run now." and shows only Close; with rows but none ticked it says "Tick at least one row to remember it."
+
+### P14-11 — An agent may read its own session's saved tool output (added 2026-11-11)
+- **Status:** in progress · **Depends on:** P14-10 · **Parallel with:** —
+- Claude Code saves a large tool output to `~/.claude/projects/<encoded cwd>/<sessionId>/tool-results/<id>.txt` and tells the agent to read it there; the engine treats all of `~/.claude` as agent configuration, so every such read raised a card that could never be remembered (Cosmin's test, 2026-11-11). Cosmin decided: an agent reads its own session's folder without asking. Reads only (Read/Grep/Glob, read-only shell commands); writes, `cd`, globs and every other session's folder stay as they were.
 
 ## Exit criteria (verified 2026-11-09)
 
