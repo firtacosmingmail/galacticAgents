@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, configure, fireEvent, render, screen, within } from '@testing-library/react';
 import { createElement, type ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
@@ -606,6 +606,39 @@ describe('the Dashboard tab', () => {
     await settle();
     expect(screen.getByRole('region', { name: 'jobs of Shop' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: /^dashboard of/ })).toBeNull();
+  });
+
+  it('opens the dashboard again after a steward selection sits in between (A, steward, A)', async () => {
+    await openApp('/waykeeper/a-wk-shop', snapshot());
+    await act(async () => {
+      fireEvent.click(within(toggle()).getByRole('button', { name: 'Chat' }));
+    });
+    await settle();
+    await act(async () => {
+      useAppStore.getState().select({ kind: 'steward', id: 'a-steward-1' });
+    });
+    await settle();
+    await act(async () => {
+      useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-shop' });
+    });
+    await settle();
+    expect(screen.getByRole('region', { name: 'dashboard of Shop' })).toBeTruthy();
+  });
+
+  it('the area-moon gesture from a steward view opens Jobs under StrictMode', async () => {
+    configure({ reactStrictMode: true });
+    try {
+      await openApp('/steward/a-steward-1', snapshot());
+      await act(async () => {
+        useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-shop' });
+        useDockView.getState().setView('jobs');
+      });
+      await settle();
+      expect(screen.getByRole('region', { name: 'jobs of Shop' })).toBeTruthy();
+      expect(screen.queryByRole('region', { name: /^dashboard of/ })).toBeNull();
+    } finally {
+      configure({ reactStrictMode: false });
+    }
   });
 
   it('a stored "dashboard" shows the chat for a brain without it', async () => {

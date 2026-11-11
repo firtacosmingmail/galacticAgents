@@ -105,3 +105,17 @@ export const useDockView = create<DockViewState>((set) => {
     },
   };
 });
+
+/**
+ * A view picked for a selection excuses that selection from opening the dashboard only within the
+ * gesture that selected it (an area moon's click selects, then picks Jobs). Any later change of
+ * the selection, whether or not a dock is mounted for it (a steward's view has none), ends it.
+ * Subscribed here, it runs inside `select`, before the gesture's `setView`.
+ */
+let lastSelection = selectionKey(useAppStore.getState().selection);
+useAppStore.subscribe((s) => {
+  const key = selectionKey(s.selection);
+  if (key === lastSelection) return;
+  lastSelection = key;
+  useDockView.setState({ chosenFor: undefined });
+});
