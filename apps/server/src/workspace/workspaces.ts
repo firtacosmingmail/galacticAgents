@@ -4,6 +4,7 @@ import {
   readFileSync,
   readdirSync,
   realpathSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
@@ -39,6 +40,11 @@ import { gitRunner, splitZ, type Git } from './git.js';
 
 export const GALACTIC_DIR = '.galactic';
 export const WORKTREES_DIR = join(GALACTIC_DIR, 'worktrees');
+/**
+ * A Steward's scratch folder for extra checkouts and temporary files, inside the workspace (never
+ * `/tmp`): `<workspace>/.galactic/scratch/<task-id>`, removed with the task's worktree.
+ */
+export const SCRATCH_DIR = join(GALACTIC_DIR, 'scratch');
 export const BRANCH_PREFIX = 'galactic/';
 
 /** What `prepare` found, kept in `Project.meta.workspace`. */
@@ -713,6 +719,7 @@ export class Workspaces {
         await this.beforeRemoval(taskId, root, { mergedCommit: commit });
         await this.git(repoRoot, ['worktree', 'remove', '--force', root]);
       }
+      await this.removeScratch(repoRoot, project.workspace, taskId);
       await this.git(repoRoot, ['worktree', 'prune']);
       const deleted = await this.git(repoRoot, ['branch', '-d', branch], { allowFailure: true });
       return {
@@ -777,6 +784,7 @@ export class Workspaces {
         await this.beforeRemoval(taskId, root, {});
         await this.git(repoRoot, ['worktree', 'remove', '--force', root]);
       }
+      await this.removeScratch(repoRoot, project.workspace, task.id);
       await this.git(repoRoot, ['worktree', 'prune']);
       if (opts.deleteBranch && task.branch) {
         await this.git(repoRoot, ['branch', '-D', checkBranch(task.branch)], {
@@ -804,6 +812,29 @@ export class Workspaces {
   }
 
   // -- helpers ---------------------------------------------------------------------------------
+
+  /**
+   * Removes a task's scratch folder and the git worktrees its Steward made there (their branches,
+   * if any, are left alone). Runs inside the repository's lock, before `worktree prune`.
+   */
+  private async removeScratch(repoRoot: string, workspace: string, taskId: Id): Promise<void> {
+    const dir = scratchRoot(workspace, taskId);
+    if (!existsSync(dir)) return;
+    const real = realpathSync(dir);
+    const list = await this.git(repoRoot, ['worktree', 'list', '--porcelain'], {
+      allowFailure: true,
+    });
+    for (const line of list.stdout.split('\n')) {
+      if (!line.startsWith('worktree ')) continue;
+      const path = line.slice('worktree '.length);
+      const rel = relative(real, existsSync(path) ? realpathSync(path) : path);
+      if (rel === '' || rel.startsWith('..') || isAbsolute(rel)) continue;
+      await this.git(repoRoot, ['worktree', 'remove', '--force', '--force', path], {
+        allowFailure: true,
+      });
+    }
+    rmSync(dir, { recursive: true, force: true });
+  }
 
   /**
    * The base branch's commits behind a conflict that the project did not merge itself (SPEC
@@ -947,10 +978,20 @@ export function mergeRecords(task: Pick<Task, 'meta'>): Partial<MergeRecord>[] {
 }
 
 export function worktreeRoot(workspace: string, taskId: Id): string {
+  checkTaskId(taskId);
+  return join(workspace, WORKTREES_DIR, taskId);
+}
+
+/** A task's scratch folder (`SCRATCH_DIR`): derived like its worktree. */
+export function scratchRoot(workspace: string, taskId: Id): string {
+  checkTaskId(taskId);
+  return join(workspace, SCRATCH_DIR, taskId);
+}
+
+function checkTaskId(taskId: Id): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(taskId)) {
     throw new DomainError('invalid', `task id ${JSON.stringify(taskId)} cannot name a worktree`);
   }
-  return join(workspace, WORKTREES_DIR, taskId);
 }
 
 /**

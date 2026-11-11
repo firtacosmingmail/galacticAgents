@@ -169,6 +169,49 @@ describe('StatusStore — folding', () => {
     });
   });
 
+  it('shows "Approved by <Waykeeper>: <reason>" as the Steward’s activity, state untouched (P13-06)', () => {
+    const { store } = make({
+      agentName: (id) => (id === 'a-wk' ? 'Waykeeper · CSV tool' : undefined),
+    });
+    const decided = (
+      extra: Partial<Extract<Event, { type: 'permission.decided' }>> = {},
+    ): Event => ({
+      type: 'permission.decided',
+      agentId: 'a-1',
+      toolCall: { toolName: 'Bash', input: { command: 'pnpm test' } },
+      decision: 'allow',
+      reason: 'it runs the task’s own tests',
+      decidedBy: { type: 'agent', id: 'a-wk' },
+      waykeeperApproval: true,
+      ...extra,
+    });
+    store.rebuild(
+      log([spawned, { type: 'agent.progress', agentId: 'a-1', summary: 'Editing' }, decided()]),
+    );
+    expect(store.get('a-1')).toMatchObject({
+      state: 'working',
+      currentActivity: 'Approved by Waykeeper · CSV tool: it runs the task’s own tests',
+    });
+    store.rebuild(log([spawned, decided({ quote: 'run the tests whenever you like' })]));
+    expect(store.get('a-1')?.currentActivity).toBe(
+      'Approved by Waykeeper · CSV tool: it runs the task’s own tests — you asked: "run the tests whenever you like"',
+    );
+    // The system's table decisions say nothing.
+    store.rebuild(log([spawned, decided({ decidedBy: { type: 'system' } })]));
+    expect(store.get('a-1')?.currentActivity).toBeUndefined();
+    // Nor does a scope-watch allow, also by an agent but unmarked (final review M2).
+    store.rebuild(
+      log([
+        spawned,
+        decided({
+          waykeeperApproval: undefined,
+          reason: "consistent with the Steward's approvals: the local page",
+        }),
+      ]),
+    );
+    expect(store.get('a-1')?.currentActivity).toBeUndefined();
+  });
+
   it('stays waiting_for_input while any of two open questions is unanswered (P4-11)', () => {
     const { store } = make();
     const ask = (questionId: string): Event => ({

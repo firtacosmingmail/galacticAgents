@@ -5,3 +5,4 @@ export {
 } from './claude-sdk-adapter.js';
 export type { SdkSurface } from './sdk-surface.js';
 export { createSdkScopeJudge, createDefaultSdkScopeJudge } from './scope-judge.js';
+export { createSdkRequestJudge, createDefaultSdkRequestJudge } from './request-judge.js';

@@ -137,7 +137,7 @@ describe('provider columns (P11-02)', () => {
     t.jobRuns.insert(fx.jobRun);
     const before = { questions: t.questions.all(), runs: t.jobRuns.all() };
 
-    expect(migrate(db, all).applied).toEqual([17, 18]);
+    expect(migrate(db, all).applied).toEqual([17, 18, 19]);
     const after = tables(db);
     expect(after.questions.all()).toEqual(before.questions);
     expect(after.jobRuns.all()).toEqual(before.runs);

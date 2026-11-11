@@ -171,3 +171,67 @@ describe('applyEvent', () => {
     expect(w.seq).toBe(Object.keys(ev).length);
   });
 });
+
+describe('applyEvent: Waykeeper approvals (P13)', () => {
+  const project = (w: ReturnType<typeof emptyWorld>) => w.projects['p-1']!;
+  const base = () => applyEvent(emptyWorld(), env(1, ev['project.created']));
+
+  it('turns the flag on and off without touching updatedAt', () => {
+    let w = applyEvent(base(), env(2, ev['waykeeper_approvals.set']));
+    expect(project(w).waykeeperApprovals).toBe(true);
+    expect(project(w).updatedAt).toBe(fx.project.updatedAt);
+    w = applyEvent(
+      w,
+      env(3, {
+        type: 'waykeeper_approvals.set',
+        projectId: 'p-1',
+        on: false,
+        by: { type: 'user' },
+      }),
+    );
+    expect('waykeeperApprovals' in project(w)).toBe(false);
+  });
+
+  it('adds and removes standing approvals', () => {
+    let w = applyEvent(base(), env(2, ev['standing_approval.added']));
+    expect(project(w).standingApprovals).toHaveLength(1);
+    w = applyEvent(w, env(3, ev['standing_approval.removed']));
+    expect('standingApprovals' in project(w)).toBe(false);
+  });
+
+  it('records approvals, keeping the newest 100', () => {
+    let w = base();
+    for (let i = 0; i < 101; i++) {
+      const e = ev['approval.recorded'];
+      if (e.type !== 'approval.recorded') throw new Error('fixture');
+      w = applyEvent(w, env(i + 2, { ...e, approval: { ...e.approval, summary: `s${i}` } }));
+    }
+    const list = project(w).recordedApprovals!;
+    expect(list).toHaveLength(100);
+    expect(list[0]!.summary).toBe('s1');
+    expect(list[99]!.summary).toBe('s100');
+  });
+
+  it('drops recorded approvals when the project is closed, archived or cancelled, not on failure', () => {
+    const withRecord = () => applyEvent(base(), env(2, ev['approval.recorded']));
+    const to = (state: 'completed' | 'archived' | 'failed') =>
+      env(3, { type: 'project.state_changed', projectId: 'p-1', from: 'in_progress', to: state });
+    expect(project(withRecord()).recordedApprovals).toHaveLength(1);
+    for (const state of ['completed', 'archived'] as const) {
+      expect(project(applyEvent(withRecord(), to(state))).recordedApprovals).toBeUndefined();
+    }
+    expect(project(applyEvent(withRecord(), to('failed'))).recordedApprovals).toHaveLength(1);
+    const cancel = env(3, {
+      type: 'control.cancel',
+      target: { kind: 'project', id: 'p-1' },
+      by: { type: 'user' },
+    });
+    expect(project(applyEvent(withRecord(), cancel)).recordedApprovals).toBeUndefined();
+    const taskCancel = env(3, {
+      type: 'control.cancel',
+      target: { kind: 'task', id: 't-1' },
+      by: { type: 'user' },
+    });
+    expect(project(applyEvent(withRecord(), taskCancel)).recordedApprovals).toHaveLength(1);
+  });
+});

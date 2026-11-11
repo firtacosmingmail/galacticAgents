@@ -25,6 +25,11 @@ export const HistoryEventsQuery = z.object({
    */
   membership: z.string().min(1).max(64).optional(),
   limit: z.coerce.number().int().min(1).max(2_000).default(500),
+  /**
+   * Only the events of this type (P13-06): `permission.decided`, which the replay itself never
+   * returns, for the project's list of Waykeeper approvals.
+   */
+  type: z.literal('permission.decided').optional(),
 });
 export type HistoryEventsQuery = z.input<typeof HistoryEventsQuery>;
 export type HistoryEventsParams = z.output<typeof HistoryEventsQuery>;

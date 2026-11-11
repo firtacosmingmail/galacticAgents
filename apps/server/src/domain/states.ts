@@ -2,6 +2,7 @@ import type { Actor, Id, WorkState } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { endProjectRules } from './project-rules.js';
+import { endStandingApprovals } from './waykeeper-approvals.js';
 import { withdrawLimitQuestions } from './usage-limits.js';
 
 /**
@@ -132,7 +133,11 @@ export function setProjectState(ctx: CommandContext, projectId: Id, to: WorkStat
     ...(by ? { by } : {}),
   });
   // Its "Allow similar" rules last until the project closes (P9-17, decision 138).
-  if (to === 'completed' || to === 'archived') endProjectRules(ctx, projectId, to);
+  if (to === 'completed' || to === 'archived') {
+    endProjectRules(ctx, projectId, to);
+    // So do its standing approvals (P13, decision 154).
+    endStandingApprovals(ctx, projectId, to);
+  }
   return ctx.tables.projects.get(projectId) ?? project;
 }
 

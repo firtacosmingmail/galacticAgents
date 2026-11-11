@@ -185,6 +185,41 @@ describe('GET /api/history/events (P4-07)', () => {
     expect(text).toContain('[redacted:github-token]');
   });
 
+  it("with type=permission.decided returns only that project's decisions (P13-06)", async () => {
+    const { t, log, alpha } = await scenario();
+    const decide = (agentId: string, decidedBy: Actor, decision: 'allow' | 'deny' = 'allow') =>
+      log.runCommand((ctx) =>
+        ctx.emit({
+          type: 'permission.decided',
+          agentId,
+          toolCall: { toolName: 'Bash', input: { command: 'pnpm test' } },
+          decision,
+          reason: 'it runs the task’s own tests',
+          decidedBy,
+        }),
+      );
+    decide('s-parse', { type: 'agent', id: 'w-alpha' });
+    decide('s-parse', { type: 'system' }, 'deny');
+    decide('s-other', { type: 'agent', id: 'w-alpha' });
+    const { status, body } = await get(
+      t,
+      `/api/history/events?projectId=${alpha.id}&type=permission.decided`,
+    );
+    expect(status).toBe(200);
+    const page = HistoryEventsResponse.parse(body);
+    expect(page.events.map((e) => e.event.type)).toEqual([
+      'permission.decided',
+      'permission.decided',
+    ]);
+    expect(page.events.map((e) => (e.event as { agentId: string }).agentId)).toEqual([
+      's-parse',
+      's-parse',
+    ]);
+    expect(
+      (await get(t, `/api/history/events?projectId=${alpha.id}&type=agent.spawned`)).status,
+    ).toBe(400);
+  });
+
   it('pages forward by seq: small pages and small scan windows read the same events', async () => {
     const { t, log, alpha } = await scenario();
     const whole = await readAll(t, alpha.id, 2_000);

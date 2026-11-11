@@ -556,8 +556,8 @@ describe('scope watch in the runtime (P12-06)', () => {
     await expect(
       h.commands.allowSimilar({
         questionId: q.id,
-        scope: 'exact',
-        digest: 'x',
+        digests: ['x'],
+        callDigest: 'x',
         by: USER,
         origin: 'local',
       }),

@@ -95,19 +95,19 @@ describe('replay vs snapshot conformance: "Allow similar" rules (P9-17)', () => 
     await until(() => pending() !== undefined);
     const q1 = pending()!;
 
-    // The preview's digest of a scope, sent back with "Allow and remember" (review S1).
-    const digest = (questionId: string, scope: string) =>
-      commands
-        .similarPreview(questionId, { origin: 'local' })
-        .options.find((o) => o.scope === scope)?.digest ?? 'none';
+    // The preview's digests of a row and of the call, sent back with "Allow and remember" (S1).
+    const ticked = (questionId: string, kind: string) => {
+      const preview = commands.similarPreview(questionId, { origin: 'local' });
+      const digest = preview.options.find((o) => o.kind === kind)?.digest ?? 'none';
+      return { digests: [digest], callDigest: preview.callDigest };
+    };
     const made = await commands.allowSimilar({
       questionId: q1,
-      scope: 'prefix',
-      digest: digest(q1, 'prefix'),
+      ...ticked(q1, 'prefix'),
       by: USER,
       origin: 'local',
     });
-    const madeRule = made.value.rule!;
+    const madeRule = made.value.rules![0]!;
     await until(() => pending() !== undefined && pending() !== q1);
     const q2 = pending()!;
     await commands.removePermissionRule({
@@ -118,8 +118,7 @@ describe('replay vs snapshot conformance: "Allow similar" rules (P9-17)', () => 
     });
     await commands.allowSimilar({
       questionId: q2,
-      scope: 'category',
-      digest: digest(q2, 'category'),
+      ...ticked(q2, 'category'),
       by: USER,
       origin: 'local',
     });

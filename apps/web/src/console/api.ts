@@ -13,9 +13,12 @@ import type {
   SetAnswer,
   DismissBody,
   DismissResponse,
-  PermissionRuleScope,
   RemovePermissionRuleResponse,
   SimilarPreviewResponse,
+  StandingApprovalBody,
+  StandingApprovalResponse,
+  WaykeeperApprovalsBody,
+  WaykeeperApprovalsResponse,
   ControlBody,
   ControlResponse,
   ConversationQuery,
@@ -83,7 +86,7 @@ export class ApiError extends Error {
 
 export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
   const call = async <T>(
-    method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+    method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
     path: string,
     body?: unknown,
   ): Promise<T> => {
@@ -202,21 +205,17 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         {},
       ),
     /**
-     * Answers the request "allow" and stores the rule of `scope` on its project (P9-17), bound to
-     * the preview by its `digest` (409 `stale` when the server would store another rule).
+     * Answers the request "allow" once and stores one rule per ticked row on its project (P9-17,
+     * P14), bound to the preview by the rows' `digests` and the `callDigest` (409 `stale` when
+     * the server would store other rules).
      */
-    allowSimilar: (
-      questionId: string,
-      scope: PermissionRuleScope,
-      digest: string,
-      version?: number,
-    ) =>
+    allowSimilar: (questionId: string, digests: string[], callDigest: string, version?: number) =>
       call<AllowSimilarResponse>(
         'POST',
         `/api/questions/${encodeURIComponent(questionId)}/allow-similar`,
         {
-          scope,
-          digest,
+          digests,
+          callDigest,
           ...(version !== undefined ? { version } : {}),
         } satisfies AllowSimilarBody,
       ),
@@ -225,6 +224,32 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<RemovePermissionRuleResponse>(
         'DELETE',
         `/api/projects/${encodeURIComponent(projectId)}/permission-rules/${encodeURIComponent(ruleId)}`,
+      ),
+    /**
+     * Answers a forwarded permission request "allow" and stores a standing approval of its kind
+     * (P13-06): open to the phone too (decision 154). `notStored` says why none was stored.
+     */
+    standingApproval: (questionId: string, version?: number, answerId?: string) =>
+      call<StandingApprovalResponse>(
+        'POST',
+        `/api/questions/${encodeURIComponent(questionId)}/standing-approval`,
+        {
+          ...(version !== undefined ? { version } : {}),
+          ...(answerId !== undefined ? { answerId } : {}),
+        } satisfies StandingApprovalBody,
+      ),
+    /** The project's "Waykeeper approves Stewards' requests" switch; "on" is the Mac's alone. */
+    setWaykeeperApprovals: (projectId: string, on: boolean) =>
+      call<WaykeeperApprovalsResponse>(
+        'PUT',
+        `/api/projects/${encodeURIComponent(projectId)}/waykeeper-approvals`,
+        { on } satisfies WaykeeperApprovalsBody,
+      ),
+    /** Removes a project's standing approval; applies to the next request. */
+    removeStandingApproval: (projectId: string, approvalId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'DELETE',
+        `/api/projects/${encodeURIComponent(projectId)}/standing-approvals/${encodeURIComponent(approvalId)}`,
       ),
     decide: (proposalId: string, decision: ProposalDecisionBody) =>
       call<DecideResponse>('POST', `/api/proposals/${proposalId}/decide`, decision),

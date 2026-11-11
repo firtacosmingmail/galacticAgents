@@ -102,7 +102,9 @@ export class HistoryEvents {
       const events: EventEnvelope[] = [];
       let filled: number | undefined;
       for (const row of rows) {
-        if (REPLAY_SKIPPED_EVENT_TYPES.has(row.type as EventType)) continue;
+        if (query.type !== undefined) {
+          if (row.type !== query.type) continue;
+        } else if (REPLAY_SKIPPED_EVENT_TYPES.has(row.type as EventType)) continue;
         const time = Date.parse(row.at);
         if (from !== undefined && time < from) continue;
         if (to !== undefined && time > to) continue;
@@ -291,7 +293,12 @@ export function touches(event: Event, m: Members): boolean {
     case 'permission.rule_added':
       return m.projects.has(event.rule.projectId);
     case 'permission.rule_removed':
+    case 'waykeeper_approvals.set':
+    case 'standing_approval.removed':
+    case 'approval.recorded':
       return m.projects.has(event.projectId);
+    case 'standing_approval.added':
+      return m.projects.has(event.approval.projectId);
     case 'control.stop':
     case 'control.cancel':
     case 'control.pause':

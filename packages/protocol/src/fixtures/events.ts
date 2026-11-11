@@ -165,6 +165,43 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     by: user,
     reason: 'removed by the user',
   },
+  'waykeeper_approvals.set': {
+    type: 'waykeeper_approvals.set',
+    projectId: 'p-1',
+    on: true,
+    by: user,
+  },
+  'standing_approval.added': {
+    type: 'standing_approval.added',
+    approval: {
+      id: 'sa-1',
+      projectId: 'p-1',
+      kind: 'run the test suite',
+      examples: ['pnpm test'],
+      createdBy: user,
+      createdAt: '2026-11-09T10:00:00.000Z',
+      origin: 'local',
+      questionId: 'q-perm-1',
+    },
+  },
+  'standing_approval.removed': {
+    type: 'standing_approval.removed',
+    projectId: 'p-1',
+    approvalId: 'sa-1',
+    by: user,
+    reason: 'removed by the user',
+  },
+  'approval.recorded': {
+    type: 'approval.recorded',
+    projectId: 'p-1',
+    approval: {
+      kind: 'run the test suite',
+      summary: 'pnpm test',
+      agentId: 'a-steward-1',
+      questionId: 'q-perm-1',
+      at: '2026-11-09T10:00:00.000Z',
+    },
+  },
   'question.reassigned': {
     type: 'question.reassigned',
     questionId: 'q-1',

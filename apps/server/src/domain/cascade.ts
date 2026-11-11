@@ -15,6 +15,7 @@ import type { CommandContext } from './event-log.js';
 import { endProjectAreas } from './jobs.js';
 import { archiveProject } from './projects.js';
 import { endProjectRules } from './project-rules.js';
+import { endStandingApprovals } from './waykeeper-approvals.js';
 import { FINISHED_WORK, checkTransition, setProjectState, setTaskState } from './states.js';
 import { archiveTask } from './tasks.js';
 
@@ -196,6 +197,7 @@ export function applyControlState(
         setProjectState(ctx, project.id, 'failed', by);
         // A cancelled project's "Allow similar" rules end with it (P9-17, decision 138).
         endProjectRules(ctx, project.id, 'cancelled');
+        endStandingApprovals(ctx, project.id, 'cancelled');
         // A cancelled long-term project's jobs stop and its area moons are freed, as on close.
         endProjectAreas(ctx, project.id, by, 'the project was cancelled');
       }

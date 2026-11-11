@@ -1,4 +1,5 @@
 import type { ScopeJudge, ScopeJudgeInput, ScopeVerdict } from '@galactic/protocol';
+import { dataFence, parseJsonObject, runOneShot } from './one-shot-judge.js';
 import { loadSdk, type SdkSurface } from './sdk-surface.js';
 
 export const DEFAULT_SCOPE_JUDGE_MODEL = 'claude-haiku-5-5';
@@ -28,8 +29,7 @@ function buildPrompt(input: ScopeJudgeInput): string {
     `Input: ${JSON.stringify(input.toolCall.input ?? null)}`,
   ].join('\n');
   // A fence longer than any run of tildes in the data, so the data cannot close it.
-  const longest = Math.max(0, ...(body.match(/~+/g) ?? []).map((run) => run.length));
-  const fence = '~'.repeat(Math.max(8, longest + 1));
+  const fence = dataFence(body);
   return [
     `Launch flag: ${input.flag}`,
     '',
@@ -50,19 +50,12 @@ function buildPrompt(input: ScopeJudgeInput): string {
 const offScript = (reason: string): ScopeVerdict => ({ verdict: 'off_script', reason });
 
 function parseVerdict(text: string): ScopeVerdict {
-  let body = text.trim();
-  const fenced = /^```(?:json)?\s*([\s\S]*?)\s*```$/i.exec(body);
-  if (fenced) body = fenced[1]!;
-  try {
-    const v = JSON.parse(body) as unknown;
-    if (typeof v === 'object' && v !== null && !Array.isArray(v)) {
-      const { verdict, reason } = v as Record<string, unknown>;
-      if ((verdict === 'consistent' || verdict === 'off_script') && typeof reason === 'string') {
-        return { verdict, reason };
-      }
+  const v = parseJsonObject(text);
+  if (v) {
+    const { verdict, reason } = v;
+    if ((verdict === 'consistent' || verdict === 'off_script') && typeof reason === 'string') {
+      return { verdict, reason };
     }
-  } catch {
-    // fall through
   }
   return offScript(`could not read the check: ${text.trim().slice(0, 200)}`);
 }
@@ -71,46 +64,15 @@ function parseVerdict(text: string): ScopeVerdict {
 export function createSdkScopeJudge(opts: { sdk: SdkSurface; model?: string }): ScopeJudge {
   return {
     async judge(input, signal) {
-      if (signal.aborted) return offScript('check failed: aborted');
-      const abortController = new AbortController();
-      const onAbort = () => abortController.abort();
-      signal.addEventListener('abort', onAbort, { once: true });
-      try {
-        let text = '';
-        const q = opts.sdk.query({
-          prompt: buildPrompt(input),
-          options: {
-            model: opts.model ?? DEFAULT_SCOPE_JUDGE_MODEL,
-            systemPrompt: SYSTEM_PROMPT,
-            tools: [],
-            maxTurns: 1,
-            persistSession: false,
-            settingSources: [],
-            strictMcpConfig: true,
-            abortController,
-            canUseTool: async () => ({
-              behavior: 'deny',
-              message: 'The scope check never uses tools.',
-            }),
-          },
-        });
-        for await (const m of q) {
-          if (m.type === 'assistant') {
-            for (const block of (m as { message: { content: { type: string; text?: string }[] } })
-              .message.content) {
-              if (block.type === 'text' && block.text) text += block.text;
-            }
-          } else if (m.type === 'result' && (m as { is_error?: boolean }).is_error) {
-            return offScript(`check failed: ${String((m as { subtype?: string }).subtype)}`);
-          }
-        }
-        if (signal.aborted) return offScript('check failed: aborted');
-        return parseVerdict(text);
-      } catch (error) {
-        return offScript(`check failed: ${error instanceof Error ? error.message : String(error)}`);
-      } finally {
-        signal.removeEventListener('abort', onAbort);
-      }
+      const r = await runOneShot({
+        sdk: opts.sdk,
+        model: opts.model ?? DEFAULT_SCOPE_JUDGE_MODEL,
+        systemPrompt: SYSTEM_PROMPT,
+        prompt: buildPrompt(input),
+        signal,
+        denyMessage: 'The scope check never uses tools.',
+      });
+      return r.ok ? parseVerdict(r.text) : offScript(`check failed: ${r.error}`);
     },
   };
 }

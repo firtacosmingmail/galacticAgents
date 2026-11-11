@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RELATED_SHOWN, stewardPrompt } from './steward-prompt.js';
+import { RELATED_SHOWN, stewardPrompt, workspaceOfCwd } from './steward-prompt.js';
 
 describe('Steward prompt template (P2-11)', () => {
   const task = { id: 't-1', description: 'add the CSV reader' };
@@ -79,5 +79,30 @@ describe('Steward prompt template (P2-11)', () => {
     }));
     const text = stewardPrompt({ task, project, supervisor: 'waykeeper', cwd: '/w', related });
     expect(text).toContain('… and 3 more');
+  });
+
+  it('keeps extra checkouts and temporary files in the workspace’s scratch folder, never /tmp', () => {
+    const inWorktree = stewardPrompt({
+      task,
+      project,
+      supervisor: 'waykeeper',
+      cwd: '/w/csv/.galactic/worktrees/t-1/packages/cli',
+      branch: 'galactic/t-1-csv-reader',
+    });
+    expect(inWorktree).toContain('Never put files, clones or git worktrees outside');
+    expect(inWorktree).toContain('git worktree add --detach /w/csv/.galactic/scratch/t-1/<name>');
+    const serialised = stewardPrompt({
+      task,
+      project,
+      supervisor: 'waykeeper',
+      cwd: '/w/plain',
+      serialised: true,
+    });
+    expect(serialised).toContain('/w/plain/.galactic/scratch/t-1');
+    // An asteroid's folder may be someone's working copy: no scratch folder is made there.
+    const asteroid = stewardPrompt({ task, supervisor: 'harmonizer', cwd: '/w/folder' });
+    expect(asteroid).not.toContain('.galactic/scratch');
+    expect(workspaceOfCwd('/w/csv/.galactic/worktrees/t-1')).toBe('/w/csv');
+    expect(workspaceOfCwd('/w/plain')).toBe('/w/plain');
   });
 });

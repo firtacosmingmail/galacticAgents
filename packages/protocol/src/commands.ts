@@ -7,7 +7,6 @@ import type {
   BudgetTarget,
   Host,
   PermissionPolicy,
-  PermissionRuleScope,
   Project,
   ProposedBody,
   Proposal,
@@ -16,6 +15,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
@@ -291,17 +291,17 @@ export interface DismissQuestionSetInput {
 }
 
 /**
- * The user's "Allow similar" on a permission card (P9-17, SPEC decision 138): the request is
- * answered "allow" and a rule of `scope` — drafted by the server from the request, never sent by
- * the client — is stored on the asking agent's project. Only the user makes rules (no brain tool
+ * The user's "Allow similar" on a permission card (P9-17, SPEC decision 138, amended by P14): the
+ * request is answered "allow" once and one rule per ticked row — drafted by the server from the
+ * request, never sent by the client — is stored on the asking agent's project. `digests` are the
+ * ticked rows' preview digests, `callDigest` the call's. Only the user makes rules (no brain tool
  * does); a remote or unknown `origin` needs `autoApproveRemote`. `version` and `answerId` as for
  * an answer.
  */
 export interface AllowSimilarInput {
   questionId: Id;
-  scope: PermissionRuleScope;
-  /** The preview's digest for `scope` (P9-17 review S1): a rule drafted again must match it. */
-  digest: string;
+  digests: string[];
+  callDigest: string;
   by: Actor;
   origin?: RequestOrigin;
   version?: number;
@@ -312,6 +312,47 @@ export interface AllowSimilarInput {
 export interface RemovePermissionRuleInput {
   projectId: Id;
   ruleId: Id;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/**
+ * The user's "let the Waykeeper approve these" on a forwarded permission card (P13-05, SPEC
+ * decision 154): the request is answered "allow" and a standing approval of its kind is stored on
+ * the asking agent's project, in one command. Only the user; allowed from a remote client too (it
+ * widens nothing the user has not allowed). Refused unless the card carries at least
+ * `SIMILAR_APPROVALS_THRESHOLD` similar approvals, and never for a push or an upload. `version`
+ * and `answerId` as for an answer.
+ */
+export interface StandingApprovalInput {
+  questionId: Id;
+  by: Actor;
+  origin?: RequestOrigin;
+  version?: number;
+  answerId?: string;
+}
+
+/**
+ * `approval`: the standing approval stored. `notStored`: the request was allowed, but the standing
+ * approval could not be stored after it (the project ended meanwhile, say): said to the user.
+ */
+export interface StandingApprovalResult {
+  approval?: StandingApproval;
+  notStored?: string;
+}
+
+/** The user turns a project's Waykeeper approvals on or off; `on` needs the Mac (or `autoApproveRemote`). */
+export interface SetWaykeeperApprovalsInput {
+  projectId: Id;
+  on: boolean;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/** The user removes a project's standing approval, from anywhere. */
+export interface RemoveStandingApprovalInput {
+  projectId: Id;
+  approvalId: Id;
   by: Actor;
   origin?: RequestOrigin;
 }
@@ -640,6 +681,15 @@ export interface DomainCommands {
    * denied); a stale `version` is refused like a stale answer.
    */
   dismissQuestion(input: DismissQuestionInput): Promise<CommandResult<Question>>;
+
+  /** The user's standing approval from a forwarded card (P13-05): answers "allow" and stores it. */
+  standingApproval(input: StandingApprovalInput): Promise<CommandResult<StandingApprovalResult>>;
+  /** Turns a project's Waykeeper approvals on or off (P13-05). */
+  setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>>;
+  /** Removes a project's standing approval (P13-05). */
+  removeStandingApproval(
+    input: RemoveStandingApprovalInput,
+  ): Promise<CommandResult<StandingApproval>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

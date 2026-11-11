@@ -686,7 +686,9 @@ describe('job scheduler (P10-04)', () => {
         type: 'permission.decided',
         agentId: jobSteward,
         decision: 'allow',
+        // P14-03: every covering rule, and `ruleId` is the first of them.
         ruleId,
+        ruleIds: [ruleId],
       }),
     );
     const asked = c.log.tables.questions

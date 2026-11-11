@@ -1,4 +1,6 @@
 import {
+  approvalActivity,
+  isWaykeeperApproval,
   describeTool,
   ENDED_STATES,
   type AgentCaps,
@@ -48,6 +50,11 @@ export interface StatusStoreOptions {
    * wakes the agent's supervisor and stays in the history. The store itself never writes.
    */
   onStalled?: (agentId: Id, silentForMs: number) => void;
+  /**
+   * How an approving agent is named in the activity line "Approved by <name>: <reason>" (P13-06):
+   * the Waykeeper's "Waykeeper · <project>". Default: its id.
+   */
+  agentName?: (agentId: Id) => string | undefined;
   /** Batch interval for diffs. */
   flushMs?: number;
   /** How often the wall clock of live agents is refreshed and stalls are checked. */
@@ -188,6 +195,18 @@ export class StatusStore {
           });
           if (e.beforePause === 'waiting_for_input') e.beforePause = 'working';
         }
+        if (broadcast) this.mark(e.record.agentId);
+      }
+      return;
+    }
+    // The Waykeeper approved a Steward's request (P13-06, design §5.6): the Steward's activity
+    // says so; its state is untouched.
+    if (event.type === 'permission.decided' && isWaykeeperApproval(event)) {
+      const e = this.entries.get(event.agentId);
+      if (e && !ENDED_STATES.has(e.record.state)) {
+        const approver = event.decidedBy.id;
+        const name = (approver && this.opts.agentName?.(approver)) || approver || 'an agent';
+        this.update(e, at, { currentActivity: approvalActivity(name, event.reason, event.quote) });
         if (broadcast) this.mark(e.record.agentId);
       }
       return;

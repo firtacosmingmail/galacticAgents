@@ -656,8 +656,8 @@ describe('answering a spend', () => {
       s.commands.allowSimilar({
         questionId: out.value.id,
         by: USER,
-        scope: 'category',
-        digest: 'x',
+        digests: ['x'],
+        callDigest: 'x',
         origin: 'local',
       }),
     );

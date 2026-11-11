@@ -120,6 +120,7 @@ export class EventLog {
   private uncommitted: EventEnvelope[] = [];
   private depth = 0;
   private selectLatestOf: Statement | undefined;
+  private selectLatestOfUntil: Statement | undefined;
   /** True while subscribers are being notified; commands run by a subscriber queue behind the batch. */
   private publishing = false;
   private readonly beforeCommand = new Set<BeforeCommand>();
@@ -357,18 +358,26 @@ export class EventLog {
   /**
    * The newest `limit` events of `type` about `agentId` (the payload's `agentId`), oldest first:
    * an indexed read (migration 0006), never a scan of the whole log (P2-18: the chat history).
+   * With `until`, only those logged at or before that time.
    */
-  latestOf(type: Event['type'], agentId: Id, limit: number): EventEnvelope[] {
-    this.selectLatestOf ??= this.db.prepare(
-      `SELECT id, at, payload FROM events
-        WHERE type = ? AND json_extract(payload, '$.agentId') = ?
-        ORDER BY id DESC LIMIT ?`,
-    );
-    const rows = this.selectLatestOf.all(type, agentId, limit) as {
-      id: number;
-      at: string;
-      payload: string;
-    }[];
+  latestOf(type: Event['type'], agentId: Id, limit: number, until?: string): EventEnvelope[] {
+    let rows: { id: number; at: string; payload: string }[];
+    if (until === undefined) {
+      this.selectLatestOf ??= this.db.prepare(
+        `SELECT id, at, payload FROM events
+          WHERE type = ? AND json_extract(payload, '$.agentId') = ?
+          ORDER BY id DESC LIMIT ?`,
+      );
+      rows = this.selectLatestOf.all(type, agentId, limit) as typeof rows;
+    } else {
+      // Only events logged at or before `until` (P13-04: the user's words before a proposal).
+      this.selectLatestOfUntil ??= this.db.prepare(
+        `SELECT id, at, payload FROM events
+          WHERE type = ? AND json_extract(payload, '$.agentId') = ? AND at <= ?
+          ORDER BY id DESC LIMIT ?`,
+      );
+      rows = this.selectLatestOfUntil.all(type, agentId, until, limit) as typeof rows;
+    }
     return rows
       .reverse()
       .map((r) => ({ seq: r.id, at: r.at, event: JSON.parse(r.payload) as Event }));

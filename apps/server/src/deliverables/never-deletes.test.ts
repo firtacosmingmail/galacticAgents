@@ -234,8 +234,8 @@ const ALLOWED_DELETIONS: Record<string, { count: number; why: string }> = {
   },
   'test/harness.ts': { count: 1, why: "the scene harness's temporary data folder" },
   'workspace/workspaces.ts': {
-    count: 3,
-    why: "`git worktree remove` of a task's worktree (<workspace>/.galactic/worktrees/<id>), never the main folder",
+    count: 5,
+    why: "`git worktree remove` of a task's worktree (<workspace>/.galactic/worktrees/<id>), never the main folder; and a task's scratch folder (<workspace>/.galactic/scratch/<id>, P13-08) with the worktrees in it — `.galactic/` outside the task's own worktree is never a deliverable root",
   },
 };
 

@@ -1,5 +1,6 @@
 import {
   ENDED_STATES,
+  waykeeperLabel,
   isHarnessMeta,
   wallClockCapApplies,
   type Agent,
@@ -9,6 +10,7 @@ import {
   type Id,
   type RunSettings,
   DEFAULT_RUN_SETTINGS,
+  type RequestJudge,
   type ScopeJudge,
 } from '@galactic/protocol';
 import { RunOutput } from '../deliverables/run-output.js';
@@ -71,6 +73,8 @@ export const STALL_THRESHOLDS_MS: Record<RuntimeName, number> = {
 export interface ComposeOptions {
   /** The launch-flag scope judge (P12-05), handed to the runtime. */
   scopeJudge?: ScopeJudge;
+  /** The Waykeeper's request judge (P13-03), handed to the runtime; not used yet. */
+  requestJudge?: RequestJudge;
   /** Adapters to register; default: the fake adapter only (dev mode without Claude). */
   adapters?: AgentAdapter[];
   log?: EventLogOptions;
@@ -331,6 +335,13 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
       isHarnessMeta(log.tables.agents.get(agentId)?.meta)
         ? Number.POSITIVE_INFINITY
         : stallThreshold(runtime),
+    // "Approved by Waykeeper · <project>: <reason>" names the approving Waykeeper (P13-06).
+    agentName: (id) => {
+      const agent = log.tables.agents.get(id);
+      if (agent?.role !== 'waykeeper') return undefined;
+      const project = agent.projectId ? log.tables.projects.get(agent.projectId) : undefined;
+      return waykeeperLabel(agent, project?.name);
+    },
     // A stall the ticker saw is logged (P8-04): the supervisor is woken, the history shows it.
     onStalled: (agentId, silentForMs) => runtime.noteStalled(agentId, silentForMs),
     ...(opts.flushMs !== undefined ? { flushMs: opts.flushMs } : {}),
@@ -383,6 +394,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     statuses,
     publishAllowances,
     ...(opts.scopeJudge ? { scopeJudge: opts.scopeJudge } : {}),
+    ...(opts.requestJudge ? { requestJudge: opts.requestJudge } : {}),
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),

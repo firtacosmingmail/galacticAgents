@@ -18,6 +18,9 @@ function classify(
   | 'message'
   | 'question'
   | 'permission'
+  | 'waykeeper_approvals'
+  | 'standing_approval'
+  | 'approval'
   | 'proposal'
   | 'promotion'
   | 'recovery'
@@ -64,6 +67,13 @@ function classify(
     case 'permission.rule_added':
     case 'permission.rule_removed':
       return 'permission';
+    case 'waykeeper_approvals.set':
+      return 'waykeeper_approvals';
+    case 'standing_approval.added':
+    case 'standing_approval.removed':
+      return 'standing_approval';
+    case 'approval.recorded':
+      return 'approval';
     case 'proposal.created':
     case 'proposal.approved':
     case 'proposal.edited':

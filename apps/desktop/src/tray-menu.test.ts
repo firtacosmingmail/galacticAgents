@@ -33,6 +33,34 @@ const permission = (id: string, input: unknown, over: Partial<Question> = {}): Q
 });
 
 describe('trayMenu', () => {
+  it('lists a forwarded card like any permission request, with no standing-approval action (P13-06)', () => {
+    const base = permission('q-fwd', { command: 'pnpm test && rm -rf ../cache' });
+    const forwarded: Question = {
+      ...base,
+      context: {
+        ...base.context,
+        waykeeper: {
+          reason: 'it deletes outside the worktree',
+          kind: 'delete files',
+          parts: [{ text: 'rm -rf ../cache', categories: ['destructive'], outsideCwd: true }],
+          failingPart: 0,
+          similar: [1, 2, 3].map((n) => ({
+            kind: 'delete files',
+            summary: 'rm -rf ../cache',
+            agentId: agent.id,
+            questionId: `q-old-${n}`,
+            at: '2026-09-30T10:00:00.000Z',
+          })),
+        },
+      },
+    };
+    const menu = trayMenu(world([forwarded]));
+    expect(menu.permissions.map((p) => p.id)).toEqual(['q-fwd']);
+    // The item carries what Allow once / Deny need and nothing that could mean "always".
+    expect(Object.keys(menu.permissions[0]!).sort()).toEqual(['id', 'title', 'version']);
+    expect(JSON.stringify(menu)).not.toMatch(/standing|always|similar/i);
+  });
+
   it('lists the permission requests waiting for the user, oldest first, with their versions', () => {
     const w = world([
       permission('q-2', { command: 'npm publish' }, { createdAt: '2026-09-30T10:05:00.000Z' }),

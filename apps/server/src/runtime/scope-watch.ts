@@ -7,6 +7,7 @@ import type {
   ScopeVerdict,
   ToolCall,
 } from '@galactic/protocol';
+import { HeldJudgeCalls } from './held-judge.js';
 import { redactSecrets, redactValue } from './redact.js';
 
 /** How long the scope judge may take before the call counts as off-script (P12-06). */
@@ -56,41 +57,20 @@ const offScript = (reason: string): ScopeVerdict => ({ verdict: 'off_script', re
  * callbacks do, and only while the agent is still active.
  */
 export class ScopeWatch {
-  private readonly running = new Map<Id, Set<AbortController>>();
-  /** Checks `cancel` withdrew — told apart from a timeout, which also aborts the controller. */
-  private readonly cancelled = new WeakSet<AbortController>();
-  private readonly timeoutMs: number;
+  private readonly calls: HeldJudgeCalls;
 
   constructor(private readonly deps: { judge: ScopeJudge | undefined; timeoutMs?: number }) {
-    this.timeoutMs = deps.timeoutMs ?? SCOPE_JUDGE_TIMEOUT_MS;
+    this.calls = new HeldJudgeCalls(deps.timeoutMs ?? SCOPE_JUDGE_TIMEOUT_MS);
   }
 
   /** Judge calls still waiting for their verdict. */
   get inFlight(): number {
-    let n = 0;
-    for (const set of this.running.values()) n += set.size;
-    return n;
+    return this.calls.inFlight;
   }
 
   async handle(call: ScopeWatchCall): Promise<void> {
-    const controller = new AbortController();
-    let set = this.running.get(call.agentId);
-    if (!set) this.running.set(call.agentId, (set = new Set()));
-    set.add(controller);
-    let verdict: ScopeVerdict | undefined;
-    try {
-      verdict = await this.judge(call, controller);
-    } finally {
-      set.delete(controller);
-      if (set.size === 0 && this.running.get(call.agentId) === set) {
-        this.running.delete(call.agentId);
-      }
-    }
-    // Cancelled (the agent ended, or its call was withdrawn), or the agent is stopping meanwhile.
-    // A verdict that settled just before `cancel` (the call withdrawn, the agent idle or ended)
-    // does nothing: the agent is no longer waiting on this call.
-    if (!verdict || this.cancelled.has(controller) || !call.active()) return;
-    // The judge read the (redacted) call; its reason may still quote a secret.
+    const verdict = await this.judge(call);
+    if (!verdict || !call.active()) return;
     const reason = redactSecrets(verdict.reason);
     if (verdict.verdict === 'consistent') {
       call.consistent(reason);
@@ -106,22 +86,13 @@ export class ScopeWatch {
 
   /** Aborts every judge call of `agentId`: their verdicts do nothing. */
   cancel(agentId: Id): void {
-    const set = this.running.get(agentId);
-    if (!set) return;
-    this.running.delete(agentId);
-    for (const controller of set) {
-      this.cancelled.add(controller);
-      controller.abort(new Error('the agent ended or its call was withdrawn'));
-    }
+    this.calls.cancel(agentId);
   }
 
   /** The verdict, or `undefined` when the check was cancelled. */
-  private judge(
-    call: ScopeWatchCall,
-    controller: AbortController,
-  ): Promise<ScopeVerdict | undefined> {
+  private async judge(call: ScopeWatchCall): Promise<ScopeVerdict | undefined> {
     const judge = this.deps.judge;
-    if (!judge) return Promise.resolve(offScript('no scope judge is configured'));
+    if (!judge) return offScript('no scope judge is configured');
     const input = {
       flag: call.flag,
       expectedUse: call.launch?.expectedUse ?? '',
@@ -131,36 +102,9 @@ export class ScopeWatch {
         ...(call.toolCall.input !== undefined ? { input: redactValue(call.toolCall.input) } : {}),
       },
     };
-    const seconds = Math.round(this.timeoutMs / 1000);
-    return new Promise<ScopeVerdict | undefined>((resolve) => {
-      const settle = (verdict: ScopeVerdict | undefined) => {
-        clearTimeout(timer);
-        controller.signal.removeEventListener('abort', onAbort);
-        resolve(verdict);
-      };
-      // A cancel settles at once: a judge that ignores its signal must not keep the call held.
-      const onAbort = () => settle(undefined);
-      controller.signal.addEventListener('abort', onAbort);
-      const timer = setTimeout(() => {
-        settle(offScript(`the check took longer than ${seconds} s`));
-        controller.abort(new Error('scope check timed out'));
-      }, this.timeoutMs);
-      let pending: Promise<ScopeVerdict>;
-      try {
-        pending = judge.judge(input, controller.signal);
-      } catch (error) {
-        pending = Promise.reject(error);
-      }
-      pending.then(
-        (verdict) => settle(validVerdict(verdict)),
-        (error: unknown) =>
-          settle(
-            offScript(
-              `the check failed: ${error instanceof Error ? error.message : String(error)}`,
-            ),
-          ),
-      );
-    });
+    const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
+    if (outcome === 'cancelled') return undefined;
+    return outcome.ok ? validVerdict(outcome.value) : offScript(outcome.reason);
   }
 }
 

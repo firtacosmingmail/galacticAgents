@@ -11,6 +11,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase, type Database } from '../db/database.js';
 import { EventLog } from '../domain/event-log.js';
+import { evaluate } from '../domain/permissions.js';
 import { AgentRuntime, type SpawnRequest } from './agent-runtime.js';
 import { StatusStore } from './status-store.js';
 import { TranscriptPipeline } from './transcripts.js';
@@ -41,6 +42,7 @@ function make(
     scenarios?: Record<string, FakeScenario>;
     adapterRuntime?: RuntimeName;
     onError?: (error: unknown, context: string) => void;
+    claudeConfigDir?: string;
   } = {},
 ): Rig {
   const db = openDatabase(':memory:');
@@ -71,6 +73,7 @@ function make(
     },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.onError ? { onError: opts.onError } : {}),
+    ...(opts.claudeConfigDir ? { claudeConfigDir: opts.claudeConfigDir } : {}),
   });
   const rig: Rig = {
     db,
@@ -329,6 +332,28 @@ describe('AgentRuntime — questions, pause, stop', () => {
     const agent = await spawnOk(rig, req('scenario:echo'));
     expect(seen).toEqual([agent.sessionRef]);
     expect(agent.sessionRef).toMatch(/^fake:echo:/);
+  });
+
+  it("gives each live agent its own session's tool-results folder to read (P14-11)", async () => {
+    const rig = make({ claudeConfigDir: '/home/u/.claude' });
+    const a = await spawnOk(rig, req('scenario:long'));
+    const b = await spawnOk(rig, req('scenario:long'));
+    const sid = (agent: Agent) => /^fake:long:([0-9a-f-]+):/.exec(agent.sessionRef ?? '')![1]!;
+    const [sa, sb] = [sid(a), sid(b)];
+    expect(sa).not.toBe(sb);
+    const ctxA = rig.runtime.permissionContext(a.id)!.ctx;
+    expect(ctxA.readableFolders).toEqual([`/home/u/.claude/projects/*/${sa}/tool-results`]);
+    expect(ctxA.realPath).toBeTypeOf('function');
+    expect(rig.runtime.permissionContext(b.id)!.ctx.readableFolders).toEqual([
+      `/home/u/.claude/projects/*/${sb}/tool-results`,
+    ]);
+    const readOf = (s: string) => ({
+      toolName: 'Read',
+      input: { file_path: `/home/u/.claude/projects/-tmp/${s}/tool-results/x.txt` },
+    });
+    const policy = rig.runtime.permissionContext(a.id)!.policy;
+    expect(evaluate(policy, readOf(sa), ctxA).decision).toBe('allow');
+    expect(evaluate(policy, readOf(sb), ctxA).decision).toBe('ask');
   });
 
   it('drops a straggler from an ended agent and reports an event for an unknown one', async () => {
