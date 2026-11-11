@@ -8,7 +8,7 @@ import type {
   Id,
   ToolDefinition,
 } from '@galactic/protocol';
-import { leadingSlashCommand } from '@galactic/protocol';
+import { isLongTerm, leadingSlashCommand } from '@galactic/protocol';
 import type { DeliverableService } from '../deliverables/service.js';
 import type { EventLog } from '../domain/event-log.js';
 import { originOfMessages } from '../domain/permissions.js';
@@ -716,7 +716,15 @@ export class BrainRunner {
         return 'saved';
       },
     };
-    const tools = [...this.definition.tools.filter((t) => t.name !== CARRY_SUMMARY_TOOL), carry];
+    const projectId = this.placement.projectId;
+    const project = projectId ? this.opts.queries.project(projectId) : undefined;
+    const longTerm = project !== undefined && isLongTerm(project);
+    const tools = [
+      ...this.definition.tools.filter(
+        (t) => t.name !== CARRY_SUMMARY_TOOL && (!t.longTermOnly || longTerm),
+      ),
+      carry,
+    ];
     return tools.map((tool) => ({
       name: tool.name,
       description: tool.description,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Panel } from './dashboard.js';
-import { DashboardResponse, PanelData, evaluatePanel } from './dashboard-eval.js';
+import { DashboardResponse, PanelData, evaluatePanel, unchangedSince } from './dashboard-eval.js';
 import type { Task } from './domain.js';
 import type { Job, JobRun } from './long-term.js';
 import * as d from './fixtures/domain.js';
@@ -390,5 +390,65 @@ describe('DashboardResponse', () => {
   it('parses a list of panel data', () => {
     const data = evaluatePanel(tile('churn'), job(), [run(daysAgo(0), { churn: 1 })], NOW);
     expect(DashboardResponse.parse({ panels: [data] }).panels).toHaveLength(1);
+  });
+});
+
+describe('unchangedSince (P15-05, ruling R5)', () => {
+  it('is the start of the oldest run in the newest streak of equal values', () => {
+    const runs = newestFirst(
+      run(daysAgo(40), { churn: 3 }),
+      run(daysAgo(30), { churn: 4 }),
+      run(daysAgo(20), { churn: 4 }),
+      run(daysAgo(1), { churn: 4 }),
+    );
+    expect(unchangedSince(tile('churn'), runs)).toBe(daysAgo(30));
+  });
+
+  it('a changed newest value starts a new streak', () => {
+    const runs = newestFirst(run(daysAgo(30), { churn: 4 }), run(daysAgo(1), { churn: 5 }));
+    expect(unchangedSince(tile('churn'), runs)).toBe(daysAgo(1));
+  });
+
+  it('skips bad runs and runs before historyFrom, and ignores panel.updatedAt', () => {
+    const runs = newestFirst(
+      run(daysAgo(50), { churn: 4 }),
+      run(daysAgo(30), { churn: 4 }),
+      run(daysAgo(10), undefined, { outcome: 'failed' }),
+      run(daysAgo(2), { churn: 4 }),
+    );
+    const panel = tile('churn', { historyFrom: daysAgo(40), updatedAt: daysAgo(0) });
+    expect(unchangedSince(panel, runs)).toBe(daysAgo(30));
+  });
+
+  it('compares the JSON of a snapshot dataset', () => {
+    const table = (rows: number[][]) => ({
+      tables: { t: { columns: ['a'], rows } },
+    });
+    const panel: Panel = {
+      ...d.panel,
+      type: 'table',
+      source: { kind: 'job', jobId: 'j-1', values: ['t'] },
+      display: {},
+      limits: [],
+    };
+    const same = newestFirst(
+      run(daysAgo(9), undefined, { data: table([[1]]) }),
+      run(daysAgo(1), undefined, { data: table([[1]]) }),
+    );
+    expect(unchangedSince(panel, same)).toBe(daysAgo(9));
+    const changed = newestFirst(
+      run(daysAgo(9), undefined, { data: table([[1]]) }),
+      run(daysAgo(1), undefined, { data: table([[2]]) }),
+    );
+    expect(unchangedSince(panel, changed)).toBe(daysAgo(1));
+  });
+
+  it('is undefined without a good run, and for a tasks source', () => {
+    expect(unchangedSince(tile('churn'), [])).toBeUndefined();
+    expect(
+      unchangedSince(tile('churn'), [run(daysAgo(1), undefined, { outcome: 'failed' })]),
+    ).toBeUndefined();
+    const tasks: Panel = { ...d.panel, type: 'status', source: { kind: 'tasks' }, display: {} };
+    expect(unchangedSince(tasks, [run(daysAgo(1), { churn: 1 })])).toBeUndefined();
   });
 });

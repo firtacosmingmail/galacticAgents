@@ -277,6 +277,11 @@ export const MessageSent = z.object({
    * project's Waykeeper (P10-05, SPEC decision 144): the one system message that wakes a brain.
    */
   fromFinding: Id.optional(),
+  /**
+   * The panel this system message is about (P15-05): the unchanged-panel nudge to the project's
+   * Waykeeper. Like `fromFinding`, it wakes the brain.
+   */
+  fromPanel: Id.optional(),
 });
 
 /**

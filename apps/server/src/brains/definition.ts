@@ -8,6 +8,7 @@ import type {
   Id,
   Job,
   JobRun,
+  Panel,
   Project,
   Proposal,
   Question,
@@ -62,6 +63,8 @@ export interface BrainQueries {
   areas(projectId: Id): Area[];
   /** A job's runs, newest first: `limit` of them (1–200). */
   jobRuns(jobId: Id, limit: number): JobRun[];
+  /** The project's dashboard panels, in dashboard order (P15-05). */
+  panels(projectId: Id): Panel[];
 }
 
 /** What a tool handler gets besides its input. */
@@ -122,6 +125,8 @@ export interface BrainTool {
   description: string;
   /** JSON Schema of the input. */
   inputSchema: Record<string, unknown>;
+  /** Given only to a brain whose project is long-term (P15-05: the dashboard's tools). */
+  longTermOnly?: boolean;
   /**
    * A non-blocking user-facing tool (`ask_user`, `escalate`, `propose`,
    * `request_project_closure`): it creates its object and ends the turn; the answer arrives later

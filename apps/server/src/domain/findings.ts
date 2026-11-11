@@ -343,7 +343,7 @@ function openProjectOf(ctx: Reader, job: Job) {
  * The Waykeeper "Implement it" writes to: the project's living Waykeeper when `isLiving` knows one,
  * else its latest row (an ended brain reads the message when it is resumed or respawned).
  */
-function waykeeperOf(
+export function waykeeperOf(
   ctx: Reader,
   projectId: Id,
   isLiving?: (agentId: Id) => boolean,

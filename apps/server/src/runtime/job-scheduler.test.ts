@@ -1571,3 +1571,57 @@ describe('refresh: a run now (P15-04)', () => {
     expect(runsOf(c, job.id)).toEqual([]);
   });
 });
+
+describe('the unchanged-panel nudge (P15-05)', () => {
+  it('a run that ends nudges the Waykeeper once for a panel unchanged for 29 days, and not on the next run', async () => {
+    const { c, clock, errors } = boot();
+    const { project, job, wk } = await longTermJob(c);
+    await c.commands.createPanel(
+      project.id,
+      {
+        type: 'tile',
+        title: 'Sales',
+        source: { kind: 'job', jobId: job.id, values: ['sales'] },
+        display: {},
+        limits: [],
+      },
+      USER,
+    );
+    // Two old runs that reported nothing the panel reads: its value has not changed for 29 days.
+    for (const [i, days] of [29, 15].entries()) {
+      const at = new Date(oct(30, 8).getTime() - days * 86_400_000).toISOString();
+      c.log.tables.jobRuns.insert({
+        id: `old-${i}`,
+        jobId: job.id,
+        purpose: 'scheduled',
+        dueAt: at,
+        startedAt: at,
+        endedAt: at,
+        outcome: 'quiet',
+      });
+    }
+    setTo(clock, oct(30, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the run to end');
+    const nudges = () =>
+      events(c).filter(
+        (e) => e.type === 'message.sent' && e.fromPanel !== undefined && e.agentId === wk.id,
+      );
+    await until(() => nudges().length > 0, 'the nudge');
+    expect(nudges()).toHaveLength(1);
+    expect(nudges()[0]).toMatchObject({
+      text: expect.stringMatching(/^Panel 'Sales' has not changed since 2026-10-01/),
+    });
+
+    setTo(clock, oct(31, 9));
+    await c.jobs.tick();
+    await until(
+      () => runsOf(c, job.id).filter((r) => r.startedAt >= oct(31, 0).toISOString()).length === 1,
+      'the second run',
+    );
+    await until(ended(c, job.id), 'the second run to end');
+    await c.jobs.tick(); // the queue is serial: the second run's check has been made
+    expect(nudges()).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+});

@@ -7,6 +7,7 @@ import {
   launchOf,
   proposalJobOf,
   proposalLongTermOf,
+  proposalPanelOf,
   setOf,
   SUPERSEDED_BY_MESSAGE,
 } from '@galactic/protocol';
@@ -178,7 +179,7 @@ const proposal = <T extends DecisionType>(
 
 /**
  * What an approval already did, for the cards whose approval is the whole of it (P10-06): a job
- * card's job was created, changed or stopped; a conversion card made its project long-term. There
+ * card's job was created, changed or stopped; a panel card's panel (P15-05) was added, changed or removed; a conversion card made its project long-term. There
  * is nothing left to create or spawn.
  */
 function approvedNote(p: Proposal | undefined): string {
@@ -189,6 +190,16 @@ function approvedNote(p: Proposal | undefined): string {
         ? `the recurring job ${quote(job.draft?.name ?? '')} was created`
         : `job ${job.jobId} was ${job.action === 'stop' ? 'stopped' : 'changed'}`;
     return `: ${what} with the approval`;
+  }
+  const panel = proposalPanelOf(p);
+  if (panel) {
+    const title = panel.draft?.title ?? panel.before?.title ?? '';
+    const what =
+      panel.action === 'create'
+        ? `the panel ${quote(title)} was added`
+        : `the panel ${quote(title)} was ${panel.action === 'remove' ? 'removed' : 'changed'}`;
+    const job = panel.job && 'propose' in panel.job ? ' (and its job, as the card showed)' : '';
+    return `: ${what}${job} with the approval`;
   }
   const longTerm = proposalLongTermOf(p);
   if (longTerm?.projectId) {
@@ -260,12 +271,17 @@ export const WAKE_RULES: WakeRules = {
     wakes: (e, s) =>
       e.agentId === s.brainId &&
       (e.sender.type === 'user' ||
-        (e.sender.type === 'system' && e.fromFinding !== undefined && !e.turn) ||
+        (e.sender.type === 'system' &&
+          (e.fromFinding !== undefined || e.fromPanel !== undefined) &&
+          !e.turn) ||
         (e.sender.type === 'agent' &&
           (s.supervises(e.sender.id) ||
             (s.below?.(e.sender.id) ?? false) ||
             (s.supervisedBy?.(e.sender.id) ?? false)))),
     describe: (e, s) => {
+      if (e.sender.type === 'system' && e.fromPanel !== undefined) {
+        return `the system said: ${quote(e.text)}`;
+      }
       if (e.sender.type === 'system') {
         return `the system said (the user answered finding ${e.fromFinding ?? '?'}): ${quote(e.text)}`;
       }

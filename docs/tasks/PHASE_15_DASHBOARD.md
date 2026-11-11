@@ -1,7 +1,7 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-05 · **Task status:** P15-05 in progress
-**Phase status:** in progress (4/10)
+**Current task:** P15-06 · **Task status:** P15-06 todo
+**Phase status:** in progress (5/10)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -55,7 +55,7 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 - Plan Task 4.
 
 ### P15-05 — Waykeeper tools and prompt
-- **Status:** in progress · **Depends on:** P15-04 · **Parallel with:** —
+- **Status:** done (2026-11-11) · **Depends on:** P15-04 · **Parallel with:** —
 - Plan Task 5.
 
 ### P15-06 — Dashboard view on the Mac

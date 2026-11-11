@@ -120,11 +120,13 @@ export function requeue(
         break;
       case 'message.sent':
         // The runner's turn prompts are the system's messages to the brain — except a finding's
-        // "Implement it" (P10-05), a system message the brain is woken by like a user's line.
+        // "Implement it" (P10-05) and an unchanged-panel nudge (P15-05), system messages the brain
+        // is woken by like a user's line.
         if (
           event.agentId === brainId &&
           event.sender.type === 'system' &&
-          event.fromFinding === undefined
+          event.fromFinding === undefined &&
+          event.fromPanel === undefined
         ) {
           turnMessages.set(event.messageId, seq);
         }

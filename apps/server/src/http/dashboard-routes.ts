@@ -2,17 +2,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import {
   ArrangePanelsRequest,
   LONG_TERM_LIMITS,
-  evaluatePanel,
   isLongTerm,
   type Actor,
   type ClearJobValuesResponse,
   type DashboardResponse,
-  type Id,
-  type JobRun,
   type RefreshJobResponse,
 } from '@galactic/protocol';
 import type { ServerConfig } from '../config/config.js';
 import type { Commands } from '../domain/commands.js';
+import { evaluateDashboard } from '../domain/dashboard.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { jobRuns } from '../domain/job-runs.js';
@@ -76,17 +74,15 @@ export function registerDashboardRoutes(
       }
       const now = log.clock();
       const tasks = log.tables.tasks.all().filter((t) => t.projectId === id);
-      const runsByJob = new Map<Id, JobRun[]>();
-      const runsOf = (jobId: Id): JobRun[] => {
-        let runs = runsByJob.get(jobId);
-        if (!runs) runsByJob.set(jobId, (runs = jobRuns(log, jobId, LONG_TERM_LIMITS.runsKept)));
-        return runs;
-      };
-      const panels = panelsOf(log, id).map((panel) => {
-        const jobId = panel.source.kind === 'job' ? panel.source.jobId : undefined;
-        const job = jobId ? log.tables.jobs.get(jobId) : undefined;
-        return evaluatePanel(panel, job, jobId ? runsOf(jobId) : [], now, tasks);
-      });
+      const panels = evaluateDashboard(
+        panelsOf(log, id),
+        {
+          job: (jobId) => log.tables.jobs.get(jobId),
+          runs: (jobId) => jobRuns(log, jobId, LONG_TERM_LIMITS.runsKept),
+          tasks,
+        },
+        now,
+      );
       return { panels } satisfies DashboardResponse;
     });
 

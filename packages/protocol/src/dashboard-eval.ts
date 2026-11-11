@@ -401,3 +401,28 @@ export function evaluatePanel(
     ...(verdict ? { verdict } : {}),
   };
 }
+
+/**
+ * Since when the panel's value has not changed (P15-05, ruling R5): the start of the oldest good
+ * run (`quiet` / `findings`, at or after `historyFrom`) in the newest streak whose values the panel
+ * reads equal the newest good run's. Snapshot kinds compare the JSON of the dataset read. `runs`
+ * are newest first. `undefined` without a good run, and for a panel on the project's tasks. Never
+ * `panel.updatedAt`: editing a panel's title does not change its data.
+ */
+export function unchangedSince(panel: Panel, runs: JobRun[]): Timestamp | undefined {
+  if (panel.source.kind !== 'job') return undefined;
+  const names = panel.type === 'tile' ? panel.source.values.slice(0, 1) : panel.source.values;
+  const from = panel.historyFrom ?? '';
+  const good = runs.filter((r) => isGood(r) && r.startedAt >= from);
+  const newest = good[0];
+  if (!newest) return undefined;
+  const read = (r: JobRun): string =>
+    JSON.stringify(names.map((n) => valueIn(panel.type, r, n) ?? null));
+  const key = read(newest);
+  let since = newest.startedAt;
+  for (const r of good) {
+    if (read(r) !== key) break;
+    since = r.startedAt;
+  }
+  return since;
+}

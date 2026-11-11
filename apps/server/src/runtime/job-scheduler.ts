@@ -25,6 +25,7 @@ import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { nudgeUnchangedPanels } from '../domain/panel-nudge.js';
 import { reaskInterruptedPublish } from '../domain/publish.js';
 import { FINISHED_WORK } from '../domain/states.js';
 import { storedSwitchOf, switchAppliesTo } from '../domain/usage-limits.js';
@@ -65,6 +66,9 @@ export { JOB_TICK_MS };
  * job or its project is paused (or the job stopped, or waiting on a usage limit) and when the caps
  * leave no slot (`limit`); a refresh run never moves the job's `nextRunAt` nor its catch-up window
  * (`job-runs.ts`).
+ *
+ * **The panel nudge** (P15-05): after any run ends, the project's panels are checked
+ * (`nudgeUnchangedPanels`): one unchanged for 28 days sends the Waykeeper one system message, once.
  *
  * A Steward stopped by its provider's usage limit (P11-07, decision 148) ends its run `limited`:
  * the job stays active, nothing pauses, no failure question — `limits.askForRun` opens the one
@@ -633,6 +637,23 @@ export class JobScheduler {
             const run = this.runOf(agentId);
             if (run) this.interrupt(run.id, { byUser: true });
             this.userStopped.delete(agentId);
+          },
+          () => undefined,
+        );
+        return;
+      }
+      case 'job_run.ended': {
+        // The project's panels may have gone unchanged for long (P15-05): nudge its Waykeeper.
+        const jobId = event.jobId;
+        void this.enqueue(
+          async () => {
+            const { log, runtime } = this.opts;
+            const job = log.tables.jobs.get(jobId);
+            if (!job) return;
+            const live = new Set(runtime.liveAgents().map((a) => a.id));
+            log.runCommand((ctx) => {
+              nudgeUnchangedPanels(ctx, job.projectId, (id) => live.has(id));
+            });
           },
           () => undefined,
         );

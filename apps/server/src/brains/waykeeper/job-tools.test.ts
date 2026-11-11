@@ -363,6 +363,7 @@ describe('list_jobs and read_job_runs (P10-06)', () => {
         state: 'active',
         nextRunAt: job.nextRunAt,
         lastRun: null,
+        collects: [],
         openFindings: 0,
       },
     ]);

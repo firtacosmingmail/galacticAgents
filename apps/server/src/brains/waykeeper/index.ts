@@ -4,6 +4,7 @@ import type { BrainDefinition } from '../definition.js';
 import { projectProviderNote } from '../provider-input.js';
 import { STEWARD_TOOLS } from '../steward-tools.js';
 import { WAYKEEPER_JOB_TOOLS } from './job-tools.js';
+import { WAYKEEPER_PANEL_TOOLS } from './panel-tools.js';
 import { WAYKEEPER_SYSTEM_PROMPT } from './prompt.js';
 import { WAYKEEPER_TOOLS } from './tools.js';
 
@@ -24,6 +25,7 @@ export function waykeeperDefinition(): BrainDefinition {
     tools: [
       ...WAYKEEPER_TOOLS,
       ...WAYKEEPER_JOB_TOOLS,
+      ...WAYKEEPER_PANEL_TOOLS,
       ...commonTools(),
       ...STEWARD_TOOLS,
       ...DELIVERABLE_TOOLS,
@@ -34,3 +36,4 @@ export function waykeeperDefinition(): BrainDefinition {
 export * from './prompt.js';
 export * from './tools.js';
 export * from './job-tools.js';
+export * from './panel-tools.js';

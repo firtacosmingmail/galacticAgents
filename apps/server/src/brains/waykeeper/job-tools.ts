@@ -9,6 +9,7 @@ import {
   type JobDraft,
   type JobRun,
   type Proposal,
+  type ProposeJobInput,
 } from '@galactic/protocol';
 import { DomainError } from '../../domain/errors.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
@@ -26,25 +27,25 @@ import { projectOf } from './tools.js';
 export const MAX_RUNS_READ = 50;
 const DEFAULT_RUNS_READ = 10;
 
-type Input = Record<string, unknown>;
-const asInput = (input: unknown): Input =>
+export type Input = Record<string, unknown>;
+export const asInput = (input: unknown): Input =>
   input && typeof input === 'object' ? (input as Input) : {};
 
-function str(input: Input, key: string): string {
+export function str(input: Input, key: string): string {
   const v = input[key];
   if (typeof v !== 'string' || v.trim() === '') {
     throw new DomainError('invalid', `${key} must be a non-empty string`);
   }
   return v;
 }
-function optStr(input: Input, key: string): string | undefined {
+export function optStr(input: Input, key: string): string | undefined {
   const v = input[key];
   if (v === undefined || v === null || v === '') return undefined;
   if (typeof v !== 'string') throw new DomainError('invalid', `${key} must be a string`);
   return v;
 }
 
-const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
+export const obj = (properties: Record<string, unknown>, required: string[] = []) => ({
   type: 'object',
   properties,
   required,
@@ -137,10 +138,18 @@ const DRAFT_PROPERTIES = {
     description: 'An exact model for follow-up runs; needs followUpProvider.',
   },
   unattendedRules: RULES_SCHEMA,
+  dataMap: {
+    type: 'object',
+    description:
+      'Where the job’s data comes from and what it does with it (P15-05): sources ' +
+      '[{id,label,kind,target}], collects [{name,kind (number|table|list|calendar|status|text),' +
+      'sourceIds,description}], steps [{text,uses,produces}]. A panel reads a collected value by ' +
+      'its name. At most 20 sources, 60 collected values and 30 steps.',
+  },
 };
 
 /** A job of the brain's project, or the refusal. */
-function jobOfProject(ctx: BrainToolContext, jobId: Id): Job {
+export function jobOfProject(ctx: BrainToolContext, jobId: Id): Job {
   const project = projectOf(ctx);
   const job = ctx.queries.jobs(project.id).find((j) => j.id === jobId);
   if (!job) throw new DomainError('not_found', `no job ${jobId} in your project ${project.id}`);
@@ -219,6 +228,39 @@ const rationaleOf = (input: Input) => {
 
 // -- propose_job -----------------------------------------------------------------------------------
 
+/** The `propose_job` input as the command takes it (shared with `propose_panel`'s new job). */
+export async function createJobInput(
+  input: Input,
+  ctx: BrainToolContext,
+): Promise<Extract<ProposeJobInput, { action: 'create' }>> {
+  const project = projectOf(ctx);
+  const areaText = str(input, 'area').trim();
+  const known = ctx.queries.areas(project.id).find((a: Area) => a.id === areaText);
+  const listed = await checkJobProviders(ctx, input, { provider: 'claude' });
+  const provider = providerInput(input, 'provider');
+  const model = listed.model ?? modelInput(input, 'model');
+  const followUpProvider = providerInput(input, 'followUpProvider');
+  const followUpModel = listed.followUpModel ?? modelInput(input, 'followUpModel');
+  return {
+    projectId: project.id,
+    waykeeperId: ctx.brainId,
+    action: 'create',
+    area: known ? { areaId: known.id } : { name: areaText },
+    draft: {
+      name: str(input, 'name'),
+      instructions: str(input, 'instructions'),
+      schedule: input['schedule'] as JobDraft['schedule'],
+      provider: provider ?? 'claude',
+      ...(model ? { model } : {}),
+      ...(followUpProvider ? { followUpProvider } : {}),
+      ...(followUpModel ? { followUpModel } : {}),
+      unattendedRules: (input['unattendedRules'] ?? []) as JobDraft['unattendedRules'],
+      ...(input['dataMap'] ? { dataMap: input['dataMap'] as JobDraft['dataMap'] } : {}),
+    },
+    ...rationaleOf(input),
+  };
+}
+
 export const proposeJobTool: BrainTool = {
   name: 'propose_job',
   description:
@@ -239,37 +281,31 @@ export const proposeJobTool: BrainTool = {
   ),
   endsTurn: true,
   handler: async (raw, ctx) => {
-    const input = asInput(raw);
-    const project = projectOf(ctx);
-    const areaText = str(input, 'area').trim();
-    const known = ctx.queries.areas(project.id).find((a: Area) => a.id === areaText);
-    const listed = await checkJobProviders(ctx, input, { provider: 'claude' });
-    const provider = providerInput(input, 'provider');
-    const model = listed.model ?? modelInput(input, 'model');
-    const followUpProvider = providerInput(input, 'followUpProvider');
-    const followUpModel = listed.followUpModel ?? modelInput(input, 'followUpModel');
-    const { value } = await ctx.commands.proposeJob({
-      projectId: project.id,
-      waykeeperId: ctx.brainId,
-      action: 'create',
-      area: known ? { areaId: known.id } : { name: areaText },
-      draft: {
-        name: str(input, 'name'),
-        instructions: str(input, 'instructions'),
-        schedule: input['schedule'] as JobDraft['schedule'],
-        provider: provider ?? 'claude',
-        ...(model ? { model } : {}),
-        ...(followUpProvider ? { followUpProvider } : {}),
-        ...(followUpModel ? { followUpModel } : {}),
-        unattendedRules: (input['unattendedRules'] ?? []) as JobDraft['unattendedRules'],
-      },
-      ...rationaleOf(input),
-    });
+    const { value } = await ctx.commands.proposeJob(await createJobInput(asInput(raw), ctx));
     return cardResult(value);
   },
 };
 
-// -- propose_job_change ----------------------------------------------------------------------------
+/** The `propose_job_change` input as the command takes it (shared with `propose_panel`). */
+export async function changeJobInput(
+  input: Input,
+  ctx: BrainToolContext,
+): Promise<Extract<ProposeJobInput, { action: 'change' }>> {
+  const job = jobOfProject(ctx, str(input, 'jobId'));
+  const changes = input['changes'];
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    throw new DomainError('invalid', 'changes must be an object of the fields to change');
+  }
+  const listed = await checkJobProviders(ctx, changes as Input, job);
+  return {
+    projectId: job.projectId,
+    waykeeperId: ctx.brainId,
+    action: 'change',
+    jobId: job.id,
+    changes: { ...(changes as Partial<JobDraft> & { areaId?: Id }), ...listed },
+    ...rationaleOf(input),
+  };
+}
 
 export const proposeJobChangeTool: BrainTool = {
   name: 'propose_job_change',
@@ -287,26 +323,10 @@ export const proposeJobChangeTool: BrainTool = {
   ),
   endsTurn: true,
   handler: async (raw, ctx) => {
-    const input = asInput(raw);
-    const job = jobOfProject(ctx, str(input, 'jobId'));
-    const changes = input['changes'];
-    if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
-      throw new DomainError('invalid', 'changes must be an object of the fields to change');
-    }
-    const listed = await checkJobProviders(ctx, changes as Input, job);
-    const { value } = await ctx.commands.proposeJob({
-      projectId: job.projectId,
-      waykeeperId: ctx.brainId,
-      action: 'change',
-      jobId: job.id,
-      changes: { ...(changes as Partial<JobDraft> & { areaId?: Id }), ...listed },
-      ...rationaleOf(input),
-    });
+    const { value } = await ctx.commands.proposeJob(await changeJobInput(asInput(raw), ctx));
     return cardResult(value);
   },
 };
-
-// -- propose_job_stop ------------------------------------------------------------------------------
 
 export const proposeJobStopTool: BrainTool = {
   name: 'propose_job_stop',
@@ -355,6 +375,7 @@ export const listJobsTool: BrainTool = {
         ...(job.pausedReason ? { pausedReason: job.pausedReason } : {}),
         nextRunAt: job.nextRunAt ?? null,
         lastRun: job.lastRun ?? null,
+        collects: job.dataMap?.collects.map((c) => c.name) ?? [],
         openFindings: open.filter((q) => q.context.finding?.jobId === job.id).length,
       })),
     };
