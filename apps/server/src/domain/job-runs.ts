@@ -51,19 +51,18 @@ function runOf(ctx: Reader, runId: Id): JobRun {
   return must(ctx.tables.jobRuns.get(runId), 'job run', runId);
 }
 
-/** Every run of the job, newest first (by start; the later row first on a tie). */
-function runsOf(ctx: Reader, jobId: Id): JobRun[] {
-  return ctx.tables.jobRuns
-    .all()
-    .filter((r) => r.jobId === jobId)
-    .reverse()
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+/**
+ * The job's runs, newest first (by start; the later row first on a tie): `limit` of them, or
+ * every one. One indexed query (`job_runs_job`), never a scan of every job's runs.
+ */
+function runsOf(ctx: Reader, jobId: Id, limit?: number): JobRun[] {
+  return ctx.tables.jobRuns.of(jobId, limit);
 }
 
 /** The job's runs, newest first: `limit` of them (default 20, at most 200). */
 export function jobRuns(ctx: Reader, jobId: Id, limit = DEFAULT_RUNS): JobRun[] {
   const n = Math.min(Math.max(1, Math.floor(limit)), LONG_TERM_LIMITS.runsKept);
-  return runsOf(ctx, jobId).slice(0, n);
+  return runsOf(ctx, jobId, n);
 }
 
 /**
@@ -159,7 +158,8 @@ const cut = (text: string, max: number): string => (text.length > max ? text.sli
  * (summary cut to 500 characters) with `runningRunId` cleared; then only the job's last 200 runs
  * are kept. `failed` pauses the job and opens its one failure question (`openFailure`);
  * `interrupted` (a missed run) makes the job due now, unless `keepSchedule` (the user stopped it)
- * or the run was a follow-up or a refresh. A job stopped meanwhile stays stopped.
+ * or the run was a follow-up or a refresh. A job stopped meanwhile stays stopped. The report the
+ * Steward kept on the running run (`meta.report`) is dropped: its values now live on the run once.
  */
 export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
   const current = runOf(ctx, input.runId);
@@ -170,15 +170,19 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
     );
   }
   const keptSchedule = input.outcome === 'interrupted' && input.keepSchedule === true;
+  // The report `report_run` kept on the running run is now the run itself: stored once.
+  const { report: _report, ...otherMeta } = current.meta ?? {};
+  const meta = { ...otherMeta, ...(keptSchedule ? { keptSchedule: true } : {}) };
+  const { meta: _meta, ...row } = current;
   const run = ctx.tables.jobRuns.upsert({
-    ...current,
+    ...row,
     outcome: input.outcome,
     endedAt: ctx.now,
     ...(input.summary !== undefined ? { summary: input.summary } : {}),
     ...(input.numbers !== undefined ? { numbers: input.numbers } : {}),
     ...(input.data !== undefined ? { data: input.data } : {}),
     ...(input.sources !== undefined && input.sources.length > 0 ? { sources: input.sources } : {}),
-    ...(keptSchedule ? { meta: { ...(current.meta ?? {}), keptSchedule: true } } : {}),
+    ...(Object.keys(meta).length > 0 ? { meta } : {}),
   });
   ctx.emit({
     type: 'job_run.ended',

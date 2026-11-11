@@ -250,7 +250,11 @@ describe('clearing', () => {
       data: { texts: { note: `day ${n}` } },
     });
     tables.jobRuns.insert(run(1));
-    tables.jobRuns.insert(run(2));
+    // An older run that still carries its Steward's report as `meta.report`.
+    tables.jobRuns.insert({
+      ...run(2),
+      meta: { note: 'kept', report: { outcome: 'quiet', summary: 's', numbers: { sales: 2 } } },
+    });
     // A run started after "now" (the test clock reads 2026-10-01) keeps its values.
     tables.jobRuns.insert({ ...run(3), id: 'jr-later', startedAt: '2026-12-01T09:00:00.000Z' });
     const a = cmd((ctx) => createPanel(ctx, project.id, draft('tile', job.id), USER));
@@ -276,8 +280,10 @@ describe('clearing', () => {
       const r = tables.jobRuns.get(id)!;
       expect(r.numbers).toBeUndefined();
       expect(r.data).toBeUndefined();
+      expect(r.meta?.['report']).toBeUndefined();
       expect(r.outcome).toBe('quiet');
     }
+    expect(tables.jobRuns.get('jr-2')?.meta).toEqual({ note: 'kept' });
     expect(tables.jobRuns.get('jr-later')?.numbers).toEqual({ sales: 3 });
   });
 });

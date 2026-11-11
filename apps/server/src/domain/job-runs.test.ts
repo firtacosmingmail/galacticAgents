@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   FAILURE_ACTIONS,
   LONG_TERM_LIMITS,
@@ -241,6 +241,80 @@ describe('startJobRun / endJobRun', () => {
     expect(jobRuns(s, s.job.id)).toHaveLength(20);
     expect(jobRuns(s, s.job.id)[0]!.id).toBe(ids.at(-1));
     s.conforms();
+  });
+
+  it('ending a run drops the report kept on it (`meta.report`) and keeps any other meta', () => {
+    const s = setup();
+    const run = s.start1();
+    s.cmd((ctx) =>
+      ctx.tables.jobRuns.upsert({
+        ...ctx.tables.jobRuns.get(run.id)!,
+        meta: {
+          note: 'kept',
+          report: { outcome: 'quiet', summary: 'Done.', numbers: { visits: 3 } },
+        },
+      }),
+    );
+    const ended = s.cmd((ctx) =>
+      endJobRun(ctx, {
+        runId: run.id,
+        outcome: 'quiet',
+        summary: 'Done.',
+        numbers: { visits: 3 },
+        data: { texts: { note: 'All good.' } },
+      }),
+    );
+    const row = s.tables.jobRuns.get(run.id)!;
+    expect(row.meta?.['report']).toBeUndefined();
+    expect(row.meta).toEqual({ note: 'kept' });
+    expect(row.numbers).toEqual({ visits: 3 });
+    expect(row.data).toEqual({ texts: { note: 'All good.' } });
+    expect(ended).toEqual(row);
+
+    // A run whose only meta was the report keeps no meta at all.
+    const next = s.start1('2026-10-02T09:00:00.000Z');
+    s.cmd((ctx) =>
+      ctx.tables.jobRuns.upsert({
+        ...ctx.tables.jobRuns.get(next.id)!,
+        meta: { report: { outcome: 'quiet', summary: 'x' } },
+      }),
+    );
+    s.cmd((ctx) => endJobRun(ctx, { runId: next.id, outcome: 'quiet', summary: 'x' }));
+    expect(s.tables.jobRuns.get(next.id)!.meta).toBeUndefined();
+  });
+
+  it('jobRuns reads only the job’s own runs, newest first, from the table query', () => {
+    const s = setup();
+    const { job: other } = s.cmd((ctx) =>
+      createJob(ctx, {
+        projectId: s.project.id,
+        area: { name: 'Other' },
+        draft: { ...DRAFT, name: 'Other job' },
+        by: USER,
+      }),
+    );
+    const row = (id: string, jobId: Id, startedAt: string) =>
+      s.tables.jobRuns.insert({
+        id,
+        jobId,
+        purpose: 'scheduled',
+        dueAt: startedAt,
+        startedAt,
+        endedAt: startedAt,
+        outcome: 'quiet',
+      });
+    row('jr-b', s.job.id, '2026-09-02T09:00:00.000Z');
+    row('jr-x', other.id, '2026-09-05T09:00:00.000Z');
+    row('jr-a', s.job.id, '2026-09-01T09:00:00.000Z');
+    row('jr-c', s.job.id, '2026-09-03T09:00:00.000Z');
+    // Same start: the later row first.
+    row('jr-c2', s.job.id, '2026-09-03T09:00:00.000Z');
+    const all = vi.spyOn(s.tables.jobRuns, 'all');
+    expect(jobRuns(s, s.job.id).map((r) => r.id)).toEqual(['jr-c2', 'jr-c', 'jr-b', 'jr-a']);
+    expect(jobRuns(s, s.job.id, 2).map((r) => r.id)).toEqual(['jr-c2', 'jr-c']);
+    expect(s.tables.jobRuns.of(s.job.id, 1).map((r) => r.id)).toEqual(['jr-c2']);
+    expect(s.tables.jobRuns.of(other.id).map((r) => r.id)).toEqual(['jr-x']);
+    expect(all).not.toHaveBeenCalled();
   });
 });
 

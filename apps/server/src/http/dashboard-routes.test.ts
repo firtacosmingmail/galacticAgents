@@ -191,6 +191,46 @@ describe('clearing (P15-04)', () => {
     expect(ClearJobValuesResponse.parse(await res.json())).toEqual({ panels: [churn.id] });
     expect(c.log.tables.jobRuns.get(run.id)?.numbers).toBeUndefined();
   });
+
+  it('a run ended with its report stores it once; clearing leaves no numbers, data or report', async () => {
+    const { c, job, churn, call } = await start();
+    const run = c.log.runCommand((ctx) =>
+      startJobRun(ctx, { jobId: job.id, purpose: 'refresh', dueAt: ctx.now }),
+    ).value;
+    const report = {
+      outcome: 'quiet',
+      summary: 'Counted.',
+      numbers: { churn: 5 },
+      data: { texts: { note: 'steady' } },
+    };
+    c.log.runCommand((ctx) =>
+      ctx.tables.jobRuns.upsert({ ...ctx.tables.jobRuns.get(run.id)!, meta: { report } }),
+    );
+    c.log.runCommand((ctx) =>
+      endJobRun(ctx, {
+        runId: run.id,
+        outcome: 'quiet',
+        summary: 'Counted.',
+        numbers: { churn: 5 },
+        data: { texts: { note: 'steady' } },
+      }),
+    );
+    const ended = c.log.tables.jobRuns.get(run.id)!;
+    expect(ended.numbers).toEqual({ churn: 5 });
+    expect(ended.meta?.['report']).toBeUndefined();
+
+    const res = await call('POST', `/api/jobs/${job.id}/clear-values`);
+    expect(ClearJobValuesResponse.parse(await res.json())).toEqual({ panels: [churn.id] });
+    const listed = (await (await call('GET', `/api/jobs/${job.id}/runs`)).json()) as {
+      runs: Record<string, unknown>[];
+    };
+    expect(listed.runs).toHaveLength(2);
+    for (const r of listed.runs) {
+      expect(r['numbers']).toBeUndefined();
+      expect(r['data']).toBeUndefined();
+      expect((r['meta'] as Record<string, unknown> | undefined)?.['report']).toBeUndefined();
+    }
+  });
 });
 
 describe('PUT /api/projects/:id/dashboard/layout (P15-04)', () => {

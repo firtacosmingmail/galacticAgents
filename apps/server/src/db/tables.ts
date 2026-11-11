@@ -609,7 +609,13 @@ export interface Tables {
   /** Recurring jobs of the areas (P10-01). */
   jobs: Table<Job>;
   /** Every run of a job (P10-01): the last 200 per job are kept. */
-  jobRuns: Table<JobRun>;
+  jobRuns: Table<JobRun> & {
+    /**
+     * A job's runs, newest first (by start; the later row first on a tie), through the
+     * `job_runs_job` index: `limit` of them, or every one without it.
+     */
+    of(jobId: Id, limit?: number): JobRun[];
+  };
   /** A long-term project's dashboard panels (P15-01; migration 0020). */
   panels: Table<Panel>;
   settings: {
@@ -720,6 +726,10 @@ export function tables(db: Database): Tables {
   const runsOf = lazy(
     'SELECT * FROM deliverable_runs WHERE deliverable_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?',
   );
+  const jobRunsOf = lazy(
+    'SELECT * FROM job_runs WHERE job_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?',
+  );
+  const readJobRun = (row: Row): JobRun => JobRun.parse(compact(jobRuns.fromRow(row)));
   const readDeliverable = (row: Row): Deliverable =>
     Deliverable.parse(compact(deliverables.fromRow(row)));
   const readRun = (row: Row): DeliverableRun =>
@@ -902,7 +912,7 @@ export function tables(db: Database): Tables {
       'updated_at',
       'meta',
     ]),
-    jobRuns: new Table(db, jobRuns, [
+    jobRuns: Object.assign(new Table(db, jobRuns, [
       'id',
       'job_id',
       'agent_id',
@@ -919,7 +929,11 @@ export function tables(db: Database): Tables {
       'follow_up',
       'note',
       'meta',
-    ]),
+    ]), {
+      // SQLite reads a negative LIMIT as "no limit".
+      of: (jobId: Id, limit?: number) =>
+        (jobRunsOf().all(jobId, limit ?? -1) as Row[]).map(readJobRun),
+    }),
     panels: new Table(db, dashboardPanels, [
       'id',
       'project_id',

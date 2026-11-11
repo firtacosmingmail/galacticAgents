@@ -214,8 +214,8 @@ export function clearPanelHistory(ctx: CommandContext, panelId: Id, by: Actor): 
 }
 
 /**
- * Deletes the stored values of the job's runs started up to now — their `numbers` and `data`
- * (`job.values_cleared`) — and lists the panels reading the job, which now show nothing for them.
+ * Deletes the stored values of the job's runs started up to now — their `numbers`, `data` and
+ * any Steward report still kept as `meta.report` (`job.values_cleared`) — and lists the panels reading the job, which now show nothing for them.
  * Cannot be undone.
  */
 export function clearJobValues(
@@ -225,11 +225,16 @@ export function clearJobValues(
 ): { upTo: string; panels: Id[] } {
   const job = must(ctx.tables.jobs.get(jobId), 'job', jobId);
   const upTo = ctx.now;
-  for (const run of ctx.tables.jobRuns.all()) {
-    if (run.jobId !== job.id || run.startedAt > upTo) continue;
-    if (run.numbers === undefined && run.data === undefined) continue;
-    const { numbers: _numbers, data: _data, ...rest } = run;
-    ctx.tables.jobRuns.upsert(rest);
+  for (const run of ctx.tables.jobRuns.of(job.id)) {
+    if (run.startedAt > upTo) continue;
+    // A run still going keeps its report: the scheduler ends the run with it (its outcome).
+    const keepsReport = run.outcome === 'running';
+    const report = keepsReport ? undefined : run.meta?.['report'];
+    if (run.numbers === undefined && run.data === undefined && report === undefined) continue;
+    const { numbers: _numbers, data: _data, meta, ...rest } = run;
+    const { report: _report, ...otherMeta } = meta ?? {};
+    const kept = keepsReport ? (meta ?? {}) : otherMeta;
+    ctx.tables.jobRuns.upsert({ ...rest, ...(Object.keys(kept).length > 0 ? { meta: kept } : {}) });
   }
   ctx.emit({ type: 'job.values_cleared', jobId: job.id, upTo, by });
   const panels = affectedPanels(panelsOf(ctx, job.projectId), job.id).map((p) => p.id);
