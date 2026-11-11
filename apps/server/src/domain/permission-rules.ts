@@ -32,14 +32,19 @@ import {
   lexCommand,
   lineChangesShellState,
   PATH_FIELDS,
+  physicalPath,
   READ_TOOLS,
   resolvePolicy,
   ruleFor,
   type Classification,
   type Finding,
   type PolicyContext,
+  type RealPath,
   type Redirect,
 } from './permissions.js';
+
+/** Moved to the engine (P14-11: readable folders resolve links too); still exported from here. */
+export { physicalPath, type RealPath };
 
 /**
  * "Allow similar" rules (P9-17; SPEC decision 138, TECHNOLOGY §8). Pure apart from the real-path
@@ -62,12 +67,6 @@ import {
  * nor any reason of a command that runs outside the workspace (P14-07, ruling F-1: a folder plus
  * the destructive category never add up to `rm -rf /tmp/x`).
  */
-
-/**
- * The real path of an existing file or folder (symlinks resolved), or `undefined`. A path ending
- * in a separator names a folder only: `undefined` for a file (P14: a folder row's folder).
- */
-export type RealPath = (path: string) => string | undefined;
 
 export const systemRealPath: RealPath = (p) => {
   try {
@@ -146,35 +145,6 @@ function stableJson(value: unknown): string {
     return `{${keys.map((k) => `${JSON.stringify(k)}:${stableJson(value[k])}`).join(',')}}`;
   }
   return JSON.stringify(value) ?? 'null';
-}
-
-/**
- * `p` (absolute, `~/`, or relative to `from`) as the file system would reach it: walked segment
- * by segment from the root, each existing segment replaced by its real path, so a symlink is
- * followed and a `..` after it leaves the link's target (not the link's folder) — as the kernel
- * does. Past the first segment that does not exist the rest is lexical (it cannot be a link).
- * `undefined` for `~user` (someone else's home).
- */
-export function physicalPath(
-  p: string,
-  ctx: PolicyContext,
-  realPath: RealPath,
-  from: string = cwdOf(ctx),
-): string | undefined {
-  if (/^~[^/]/.test(p)) return undefined;
-  const expanded = expandHome(p, ctx);
-  const absolute = isAbsolute(expanded) ? expanded : `${from}${sep}${expanded}`;
-  let current: string = sep;
-  for (const segment of absolute.split(sep)) {
-    if (segment === '' || segment === '.') continue;
-    if (segment === '..') {
-      current = dirname(current);
-      continue;
-    }
-    const next = join(current, segment);
-    current = realPath(next) ?? next;
-  }
-  return current;
 }
 
 /**

@@ -1,5 +1,5 @@
 import { homedir } from 'node:os';
-import { isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   DEFAULT_PERMISSION_POLICY,
   type PermissionAction,
@@ -45,7 +45,26 @@ export interface PolicyContext {
    * Absolute (or `~/`), compared lexically like everything here.
    */
   userFolders?: readonly string[];
+  /**
+   * Folders outside the workspace whose files the agent may READ as if they were in it (P14-11,
+   * SPEC decision 138): the gate fills it with the agent's own Claude Code session's
+   * `tool-results` folder, where the CLI saves a large tool output and tells the agent to read it.
+   * A segment that is exactly `*` matches any one path segment. Only a read of a file below one
+   * counts — by a read tool, or by a read-only shell command as a plain argument or `<` input —
+   * judged lexically AND through `realPath` (case-folded), never a glob, never the folder itself;
+   * a write, edit, delete, redirect, `cd` or anything else is judged as without it.
+   * Ignored without `realPath` (fail closed).
+   */
+  readableFolders?: readonly string[];
+  /** How `readableFolders` resolve symlinks: the file system's in the gate (`systemRealPath`). */
+  realPath?: RealPath;
 }
+
+/**
+ * The real path of an existing file or folder (symlinks resolved), or `undefined`. A path ending
+ * in a separator names a folder only: `undefined` for a file (P14: a folder row's folder).
+ */
+export type RealPath = (path: string) => string | undefined;
 
 /**
  * One reason the engine found, with the structure "Allow similar" needs (P14-02). Engine-internal:
@@ -413,7 +432,7 @@ function classifyPaths(
         true,
       );
       guarded = true;
-    } else if (!isInsideWorkspace(p, ctx)) {
+    } else if (!isInsideWorkspace(p, ctx) && !(!edit && isReadableFolderPath(p, ctx))) {
       note(
         `${tool} ${p}`,
         `${tool} on ${p}: outside the workspace`,
@@ -2084,9 +2103,14 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     }
     const places: PolicyContext[] = envCwd === undefined ? [here] : [here, { ...ctx, cwd: envCwd }];
     const { paths, unresolvable, clustered } = pathsOf(simple);
+    // P14-11: a read-only command's plain argument or `<` input below a readable folder.
+    const readable = readsOnly(simple)
+      ? (p: string, at: PolicyContext) =>
+          readArguments(simple).has(p) && isReadableFolderPath(p, at, at.cwd!)
+      : () => false;
     for (const at of places) {
       for (const p of paths) {
-        if (!isInsideWorkspace(p, at)) {
+        if (!isInsideWorkspace(p, at) && !readable(p, at)) {
           note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p, at)));
         }
       }
@@ -2170,6 +2194,62 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     findings,
     ...(guarded ? { guarded: true as const } : {}),
   };
+}
+
+/** `sed -n` with one script that only prints a line or a range (`1,80p`, `120p`, `$p`). */
+const SED_PRINT_RANGE = /^(?:\d+|\$)(?:,(?:\d+|\$))?p$/;
+
+/**
+ * The programs that may read a file in a readable folder (P14-11): a narrower list than
+ * `READ_ONLY_COMMANDS`, whose `tree -o`/`less -o`/`file -C` write and whose `rg --pre` and
+ * `rg --hostname-bin` run a program.
+ */
+const FOLDER_READERS = new Set([
+  'cat',
+  'head',
+  'tail',
+  'grep',
+  'egrep',
+  'fgrep',
+  'rg',
+  'wc',
+  'ls',
+  'diff',
+  'jq',
+  'md5sum',
+  'sha1sum',
+  'sha256sum',
+  'shasum',
+]);
+
+/**
+ * Whether a simple command only reads its file arguments (P14-11): a `FOLDER_READERS` program
+ * (`rg` without `--pre`/`--hostname-bin`), or `sed -n '<range>p' <files>`, run directly (no wrapper, no leading
+ * assignment), with no write redirection.
+ */
+function readsOnly(simple: SimpleCommand): boolean {
+  if (simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op))) return false;
+  if (commandHead(simple.words) !== 0) return false;
+  const name = simple.words[0];
+  if (name === undefined || name.includes('/')) return false;
+  if (name === 'rg' && simple.words.some((w) => /^--(?:pre|hostname-bin)/.test(w))) return false;
+  if (FOLDER_READERS.has(name)) return true;
+  if (name !== 'sed') return false;
+  const [, flag, script, ...files] = simple.words;
+  return (
+    flag === '-n' &&
+    script !== undefined &&
+    SED_PRINT_RANGE.test(script) &&
+    files.length > 0 &&
+    files.every((f) => !f.startsWith('-'))
+  );
+}
+
+/** A read-only command's words that may name a file it reads, and its `<` inputs (P14-11). */
+function readArguments(simple: SimpleCommand): Set<string> {
+  const out = new Set(simple.words.slice(1).filter((w) => !w.startsWith('-')));
+  for (const r of simple.redirects) if (r.op === '<') out.add(r.target);
+  return out;
 }
 
 /** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
@@ -2350,10 +2430,15 @@ function guardedTargets(
     }
   }
   const out: { path: string; reason: string }[] = [];
+  const reads = readsOnly(command);
   for (const c of candidates) {
     for (const alt of expandBraces(c) ?? [c]) {
       const word = asPathWord(alt);
       if (word === '' || /[$`]/.test(word) || HARMLESS_DEVICES.has(word)) continue;
+      // `sed -n '1,80p' <file>` reads a file of a readable folder (P14-11): not a write target.
+      if (reads && readArguments(command).has(alt) && isReadableFolderPath(word, ctx, ctx.cwd)) {
+        continue;
+      }
       const reason = guardedWriteReason(word, ctx) ?? guardedGlobReason(word, ctx);
       if (reason) {
         out.push({ path: alt, reason });
@@ -2695,6 +2780,86 @@ export function isUserFolderPath(p: string, ctx: PolicyContext): boolean {
   return ctx.userFolders.some((f) => {
     const folder = fold(resolve(expandHome(f, ctx)));
     return targets.some((t) => within(folder, fold(t)));
+  });
+}
+
+/**
+ * `p` (absolute, `~/`, or relative to `from`) as the file system would reach it: walked segment
+ * by segment from the root, each existing segment replaced by its real path, so a symlink is
+ * followed and a `..` after it leaves the link's target (not the link's folder) — as the kernel
+ * does. Past the first segment that does not exist the rest is lexical (it cannot be a link).
+ * `undefined` for `~user` (someone else's home).
+ */
+export function physicalPath(
+  p: string,
+  ctx: PolicyContext,
+  realPath: RealPath,
+  from: string = cwdOf(ctx),
+): string | undefined {
+  if (/^~[^/]/.test(p)) return undefined;
+  const expanded = expandHome(p, ctx);
+  const absolute = isAbsolute(expanded) ? expanded : `${from}${sep}${expanded}`;
+  let current: string = sep;
+  for (const segment of absolute.split(sep)) {
+    if (segment === '' || segment === '.') continue;
+    if (segment === '..') {
+      current = dirname(current);
+      continue;
+    }
+    const next = join(current, segment);
+    current = realPath(next) ?? next;
+  }
+  return current;
+}
+
+/**
+ * Whether reading `p` (absolute, `~/` or relative to `from`) is a read of a file below one of
+ * `ctx.readableFolders` (P14-11): its lexical path and its physical path (links followed) both
+ * lie strictly below the folder — the folder's literal part before a `*` resolved through links
+ * too — case-folded (APFS), and it is not a folder (a recursive read may follow a link in it).
+ * A glob, `~user`, a computed word, or a context without `realPath` never is.
+ */
+export function isReadableFolderPath(
+  p: string,
+  ctx: PolicyContext,
+  from: string = cwdOf(ctx),
+): boolean {
+  const folders = ctx.readableFolders ?? [];
+  const realPath = ctx.realPath;
+  if (folders.length === 0 || realPath === undefined) return false;
+  if (p === '' || /^~[^/]/.test(p) || /[$`*?[\]{}]/.test(p)) return false;
+  const lexical = resolve(expandHome(from, ctx), expandHome(p, ctx));
+  const physical = physicalPath(lexical, ctx, realPath);
+  if (physical === undefined) return false;
+  if (realPath(`${physical}${sep}`) !== undefined) return false;
+  const fold = (q: string) => q.normalize('NFC').toLowerCase();
+  const segs = (q: string) =>
+    fold(q)
+      .split(sep)
+      .filter((s) => s !== '');
+  return folders.some((f) => {
+    const folder = resolve(expandHome(f, ctx));
+    const parts = folder.split(sep).filter((s) => s !== '');
+    if (parts.some((s) => s === '.' || s === '..')) return false;
+    const star = parts.indexOf('*');
+    const literal = star < 0 ? parts : parts.slice(0, star);
+    const physicalLiteral = physicalPath(`${sep}${literal.join(sep)}`, ctx, realPath);
+    if (physicalLiteral === undefined) return false;
+    const below = (target: string, prefix: string[]) => {
+      const t = segs(target);
+      const pattern = [...prefix.map(fold), ...parts.slice(literal.length).map(fold)];
+      if (t.length <= pattern.length) return false;
+      return pattern.every((seg, k) =>
+        seg === '*' ? t[k] !== '.' && t[k] !== '..' && t[k] !== '' : seg === t[k],
+      );
+    };
+    return (
+      below(lexical, literal) &&
+      below(
+        physical,
+        physicalLiteral.split(sep).filter((s) => s !== ''),
+      )
+    );
   });
 }
 

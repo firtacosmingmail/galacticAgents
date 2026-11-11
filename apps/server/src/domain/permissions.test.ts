@@ -940,3 +940,133 @@ describe("the project's deliverables folder (P9-06, decisions 22 and 122)", () =
     expect(write('/w/proj/Deliverables-old/a.md')).toBe('allow');
   });
 });
+
+describe("an agent's own session tool-results folder (P14-11)", () => {
+  const SID = 'c4b773a9-dedb-4c90-96d8-eaa32504fa8c';
+  const OTHER = '0a1b2c3d-0000-4000-8000-000000000001';
+  const folder = `/home/u/.claude/projects/-w-proj/${SID}/tool-results`;
+  const file = `${folder}/bxzj3vjha.txt`;
+  const otherFile = `/home/u/.claude/projects/-w-proj/${OTHER}/tool-results/x.txt`;
+  /** Every listed folder exists (with whatever is below it); a link maps to its target. */
+  const links: Record<string, string> = { [`${folder}/link`]: '/etc' };
+  const dirs = ['/home/u', '/w', '/etc'];
+  const realPath = (p: string): string | undefined => {
+    if (links[p]) return links[p];
+    const bare = p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p;
+    if (!dirs.some((d) => bare === d || bare.startsWith(`${d}/`))) return undefined;
+    // A trailing separator names a folder: only paths without an extension are folders here.
+    if (p.endsWith('/') && /\.[a-z]+$/.test(bare)) return undefined;
+    return bare;
+  };
+  const rctx = {
+    workspace: '/w/proj',
+    cwd: '/w/proj/.galactic/worktrees/t1',
+    home: '/home/u',
+    readableFolders: [`/home/u/.claude/projects/*/${SID}/tool-results`],
+    realPath,
+  };
+  const verdict = (toolName: string, input: unknown, c: object = rctx) =>
+    evaluate(policy, { toolName, input }, c as typeof rctx);
+  const decisionOf = (toolName: string, input: unknown, c: object = rctx) =>
+    verdict(toolName, input, c).decision;
+
+  it('allows reading a file there by a read tool, without a finding', () => {
+    for (const [tool, input] of [
+      ['Read', { file_path: file }],
+      ['Read', { file_path: file, offset: 100, limit: 50 }],
+      ['Grep', { pattern: 'allow similar', path: file }],
+      ['Read', { file_path: `/HOME/U/.Claude/projects/-w-proj/${SID}/Tool-Results/x.txt` }],
+    ] as const) {
+      const v = verdict(tool, input);
+      expect({ tool, input, decision: v.decision }).toEqual({ tool, input, decision: 'allow' });
+      expect(v.actions).toEqual(['read_workspace']);
+      expect(v.reasons).toEqual([]);
+    }
+  });
+
+  it('allows a read-only shell command on a file there', () => {
+    for (const command of [
+      `grep -n -i -e 'allow similar' ${file}`,
+      `cat ${file} | head`,
+      `head -n 50 ${file}`,
+      `tail -20 ${file}`,
+      `wc -l ${file}`,
+      `rg foo ${file}`,
+      `sed -n '1,80p' ${file}`,
+      `sed -n 120p ${file}`,
+      `grep foo < ${file}`,
+      `grep -c foo ${file} && grep -n bar src/a.ts`,
+    ]) {
+      const v = verdict('Bash', { command });
+      expect({ command, decision: v.decision, reasons: v.reasons }).toEqual({
+        command,
+        decision: 'allow',
+        reasons: [],
+      });
+    }
+  });
+
+  it("still asks for another session's folder, other agent configuration, and outside reads", () => {
+    expect(decisionOf('Read', { file_path: otherFile })).toBe('ask');
+    expect(decisionOf('Bash', { command: `grep -n foo ${otherFile}` })).toBe('ask');
+    expect(decisionOf('Read', { file_path: '/home/u/.claude/settings.json' })).toBe('ask');
+    expect(decisionOf('Read', { file_path: `/home/u/.claude/projects/-w-proj/${SID}.jsonl` })).toBe(
+      'ask',
+    );
+    expect(decisionOf('Read', { file_path: `${folder}/../../x.jsonl` })).toBe('ask');
+    expect(decisionOf('Read', { file_path: `${folder}/../../../../settings.json` })).toBe('ask');
+    // The project segment is one segment: never none, never two.
+    expect(
+      decisionOf('Read', { file_path: `/home/u/.claude/projects/${SID}/tool-results/x` }),
+    ).toBe('ask');
+    expect(
+      decisionOf('Read', { file_path: `/home/u/.claude/projects/a/b/${SID}/tool-results/x` }),
+    ).toBe('ask');
+    // A read of another outside file in the same line still asks.
+    expect(decisionOf('Bash', { command: `cat ${file} /etc/hosts` })).toBe('ask');
+  });
+
+  it('still guards every write, edit, delete or redirect into it', () => {
+    for (const [tool, input] of [
+      ['Write', { file_path: file, content: 'x' }],
+      ['Edit', { file_path: file, old_string: 'a', new_string: 'b' }],
+      ['Bash', { command: `grep foo ${file} > ${folder}/y.txt` }],
+      ['Bash', { command: `echo x >> ${file}` }],
+      ['Bash', { command: `cat src/a.ts | tee ${folder}/y.txt` }],
+      ['Bash', { command: `rm ${file}` }],
+      ['Bash', { command: `cp src/a.ts ${folder}/` }],
+      ['Bash', { command: `cp ${file} ./copy.txt` }],
+      ['Bash', { command: `sed -i 's/a/b/' ${file}` }],
+      ['Bash', { command: `sed -n 'w /tmp/x' ${file}` }],
+      ['Bash', { command: `cd ${folder} && cat x.txt` }],
+      ['Bash', { command: `rg --pre=sh x ${file}` }],
+      ['Bash', { command: `rg --hostname-bin sh x ${file}` }],
+      ['Bash', { command: `tree -o ${folder}/y.txt ${folder}` }],
+      ['Bash', { command: `less -o ${folder}/y.txt ${file}` }],
+      ['Bash', { command: `env cat ${file}` }],
+      ['Bash', { command: `X=1 cat ${file}` }],
+    ] as const) {
+      const v = verdict(tool, input);
+      expect({ tool, input, decision: v.decision }).toEqual({ tool, input, decision: 'ask' });
+    }
+    expect(verdict('Write', { file_path: file, content: 'x' }).guarded).toBe(true);
+    expect(verdict('Bash', { command: `rm ${file}` }).guarded).toBe(true);
+  });
+
+  it('does not cover a symlink leaving it, a glob, the folder itself, or a context without real paths', () => {
+    // `link` → /etc: the read lands outside the folder once links are followed.
+    expect(decisionOf('Read', { file_path: `${folder}/link/passwd` })).toBe('ask');
+    expect(decisionOf('Bash', { command: `cat ${folder}/link/passwd` })).toBe('ask');
+    // A glob may match a link: the engine cannot list it (fail closed).
+    expect(decisionOf('Bash', { command: `cat ${folder}/*` })).toBe('ask');
+    expect(decisionOf('Bash', { command: `grep foo ${folder}/*.txt` })).toBe('ask');
+    expect(decisionOf('Glob', { pattern: `${folder}/*.txt` })).toBe('ask');
+    // A folder may hold links a recursive read follows.
+    expect(decisionOf('Grep', { pattern: 'x', path: folder })).toBe('ask');
+    expect(decisionOf('Bash', { command: `grep -R x ${folder}` })).toBe('ask');
+    // Without a way to resolve links the folders count for nothing.
+    const { realPath: _drop, ...lexical } = rctx;
+    expect(decisionOf('Read', { file_path: file }, lexical)).toBe('ask');
+    expect(decisionOf('Read', { file_path: file }, { ...rctx, readableFolders: [] })).toBe('ask');
+  });
+});
