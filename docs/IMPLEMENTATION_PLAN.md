@@ -270,6 +270,19 @@ Spec: `docs/superpowers/specs/2026-11-09-allow-similar-per-reason-design.md`; pl
 
 **Exit criteria (verified 2026-11-09):** every task done; the full gates are green; the card of a `cd /tmp/x; ...` command and of a `curl` to a site each offer the matching row, and a later call to the same folder or site passes without a card.
 
+## Phase 15 — Project dashboard (built 2026-11-11, waiting for Cosmin's real run)
+
+**Goal:** every long-term project gets a dashboard owned by its Waykeeper: tiles, charts, tables, lists, calendars, status boards and text fed by the runs of the project's jobs or by its tasks, with limits that mark values very bad or very good, refresh, arrange mode, a phone layout and a job map (SPEC decision 156).
+
+Spec: `docs/superpowers/specs/2026-11-11-project-dashboard-design.md`; plan: `docs/superpowers/plans/2026-11-11-project-dashboard.md`; tasks P15-01 – P15-10 in `docs/tasks/PHASE_15_DASHBOARD.md`.
+
+1. Protocol, migration 0020 and the world fold (P15-01); runs report data and record their sources (P15-02).
+2. Panel commands and the combined panel card (P15-03); dashboard data, evaluation and refresh (P15-04); Waykeeper tools (P15-05).
+3. The dashboard on the Mac, arrange mode, the phone layout and cards, the job map (P15-06 – P15-09).
+4. Docs, decision 156 and the real-run checklist (P15-10).
+
+**Status:** P15-01 – P15-09 done; P15-10 in progress until Cosmin runs `docs/tasks/notes/P15-10-real-run.md`.
+
 ---
 
 ## High-level corner cases and risks

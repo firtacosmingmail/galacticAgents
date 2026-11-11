@@ -1,6 +1,6 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-10 · **Task status:** P15-10 in progress
+**Current task:** P15-10 · **Task status:** P15-10 in progress — waiting for Cosmin's real run (`docs/tasks/notes/P15-10-real-run.md`)
 **Phase status:** in progress (9/10)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -77,3 +77,4 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 ### P15-10 — Docs and real run
 - **Status:** in progress · **Depends on:** P15-09 · **Parallel with:** —
 - Plan Task 10.
+- Docs, decision 156 and the checklist are written; waiting for Cosmin's real run (`docs/tasks/notes/P15-10-real-run.md`). The phase is not done until its Result is recorded.
