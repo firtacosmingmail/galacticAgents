@@ -1,7 +1,7 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-02 · **Task status:** P15-02 in progress
-**Phase status:** in progress (1/10)
+**Current task:** P15-03 · **Task status:** P15-03 in progress
+**Phase status:** in progress (2/10)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -43,11 +43,11 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 - Plan Task 1.
 
 ### P15-02 — Runs report data
-- **Status:** in progress · **Depends on:** P15-01 · **Parallel with:** —
+- **Status:** done (2026-11-11) · **Depends on:** P15-01 · **Parallel with:** —
 - Plan Task 2.
 
 ### P15-03 — Panel commands and card
-- **Status:** todo · **Depends on:** P15-02 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P15-02 · **Parallel with:** —
 - Plan Task 3.
 
 ### P15-04 — Dashboard data, evaluation and refresh
