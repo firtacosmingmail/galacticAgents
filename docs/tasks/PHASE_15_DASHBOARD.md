@@ -1,7 +1,7 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-06 · **Task status:** P15-06 in progress
-**Phase status:** in progress (5/10)
+**Current task:** P15-07 · **Task status:** P15-07 in progress
+**Phase status:** in progress (6/10)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -59,11 +59,11 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 - Plan Task 5.
 
 ### P15-06 — Dashboard view on the Mac
-- **Status:** in progress · **Depends on:** P15-05 · **Parallel with:** —
+- **Status:** done (2026-11-11) · **Depends on:** P15-05 · **Parallel with:** —
 - Plan Task 6.
 
 ### P15-07 — Arrange mode
-- **Status:** todo · **Depends on:** P15-06 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P15-06 · **Parallel with:** —
 - Plan Task 7.
 
 ### P15-08 — Phone layout and cards
