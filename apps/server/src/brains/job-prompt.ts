@@ -68,6 +68,17 @@ function followUpText(followUp: FollowUp): string {
   );
 }
 
+/** What a job's data map tells the run to collect (P15-02): the exact names and their kinds. */
+function dataMapLines(job: Job): string[] {
+  const collects = job.dataMap?.collects ?? [];
+  if (collects.length === 0) return [];
+  return [
+    '- The dashboard shows what you collect. Report exactly these names, each in the `report_run` field of its kind (numbers, tables, lists, calendars, statuses, texts):',
+    ...collects.map((c) => `  - ${c.name} (${c.kind}): ${c.description}`),
+    '- If a source cannot be read, report it in `sourceProblems` as {sourceId, problem}: never invent its values.',
+  ];
+}
+
 export function jobRunPrompt(brief: JobPromptBrief): string {
   const { project, job, area, run, memory, followUp, note, declares } = brief;
   const lines: string[] = [];
@@ -117,6 +128,7 @@ export function jobRunPrompt(brief: JobPromptBrief): string {
             '- Before anything that costs real money, call `request_spend` and stop: a later run does it once Cosmin approves.',
           ]),
       '- End the run with `report_run`: its outcome, a short summary, and any numbers worth keeping.',
+      ...dataMapLines(job),
     );
   } else {
     lines.push(

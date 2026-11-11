@@ -167,12 +167,17 @@ export const StatusItem = z.object({
 });
 export type StatusItem = z.infer<typeof StatusItem>;
 
-export const RunTable = z.object({
-  columns: z.array(z.string().max(L.maxCell)).max(L.maxTableColumns),
-  rows: z
-    .array(z.array(z.union([z.string().max(L.maxCell), z.number(), z.null()])))
-    .max(L.maxTableRows),
-});
+export const RunTable = z
+  .object({
+    columns: z.array(z.string().max(L.maxCell)).max(L.maxTableColumns),
+    rows: z
+      .array(z.array(z.union([z.string().max(L.maxCell), z.number(), z.null()])))
+      .max(L.maxTableRows),
+  })
+  .refine((t) => t.rows.every((row) => row.length === t.columns.length), {
+    message: 'every row needs exactly one cell per column',
+    path: ['rows'],
+  });
 export type RunTable = z.infer<typeof RunTable>;
 
 const named = <T extends z.ZodType>(value: T, max: number) =>

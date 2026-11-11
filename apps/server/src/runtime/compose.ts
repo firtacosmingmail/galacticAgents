@@ -40,6 +40,7 @@ import { JobScheduler } from './job-scheduler.js';
 import { ProviderCatalog } from './provider-catalog.js';
 import { UsageLimits } from './usage-limits.js';
 import { PublishAllowanceStore } from './publish-allowance.js';
+import { RunSourceRecorder } from './run-sources.js';
 import { stewardChooser } from './steward-choice.js';
 import { StorageMonitor } from './storage-health.js';
 import { StatusStore } from './status-store.js';
@@ -219,6 +220,8 @@ export interface ComposedRuntime {
   transcriptRetention: TranscriptRetention;
   /** The job scheduler (P10-04); its timer runs when composed with an interval or started. */
   jobs: JobScheduler;
+  /** The sources each job run's Steward used, noted by the runtime, taken when the run ends (P15-02). */
+  runSources: RunSourceRecorder;
   /** A Steward's usage limit: the one switch-or-wait question and its answer (P11-07). */
   usageLimits: UsageLimits;
   /** The one-shot allowances approved publishes arm (P11-06). */
@@ -386,8 +389,11 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   });
   // The one-shot allowances approved publishes arm (P11-06): every gate consults them.
   const publishAllowances = new PublishAllowanceStore();
+  // What each job run's Steward used (P15-02): the runtime notes it, the scheduler takes it.
+  const runSources = new RunSourceRecorder();
   const runtime: AgentRuntime = new AgentRuntime({
     log,
+    runSources,
     questions,
     adapters,
     transcripts,
@@ -551,6 +557,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     runtime,
     limits: usageLimits,
     chooseSteward,
+    runSources,
     ...(opts.jobs?.timers ? { timers: opts.jobs.timers } : {}),
     onError: (e: unknown) => opts.onError?.(e, 'job scheduler'),
   });
@@ -705,6 +712,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     archival,
     transcriptRetention,
     jobs,
+    runSources,
     usageLimits,
     publishAllowances,
     ...(processes ? { processes } : {}),

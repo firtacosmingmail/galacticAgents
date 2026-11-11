@@ -176,6 +176,8 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
     endedAt: ctx.now,
     ...(input.summary !== undefined ? { summary: input.summary } : {}),
     ...(input.numbers !== undefined ? { numbers: input.numbers } : {}),
+    ...(input.data !== undefined ? { data: input.data } : {}),
+    ...(input.sources !== undefined && input.sources.length > 0 ? { sources: input.sources } : {}),
     ...(keptSchedule ? { meta: { ...(current.meta ?? {}), keptSchedule: true } } : {}),
   });
   ctx.emit({

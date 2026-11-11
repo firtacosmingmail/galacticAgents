@@ -1337,6 +1337,69 @@ describe('job scheduler (P10-04)', () => {
   });
 });
 
+describe('what a run used (P15-02)', () => {
+  it('a run that ends holds the deduplicated sources its allowed calls used', async () => {
+    const { c, clock } = boot({
+      scenario: () => ({
+        steps: [
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/a' } },
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/b' } },
+          { kind: 'tool_call', toolName: 'Read', input: { file_path: '/w/shop/notes/a.md' } },
+          { kind: 'tool_call', toolName: 'Bash', input: { command: 'git status' } },
+          {
+            kind: 'tool_call',
+            toolName: 'report_run',
+            input: {
+              outcome: 'quiet',
+              summary: 'Done.',
+              texts: { note: 'hi' },
+              sourceProblems: [{ sourceId: 'crm', problem: 'down' }],
+            },
+          },
+          { kind: 'output', text: 'Done.' },
+        ],
+      }),
+    });
+    const { job } = await longTermJob(
+      c,
+      {},
+      { permissionPolicy: PERMISSION_POLICY_PRESETS.trusted },
+    );
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the run to end');
+    const run = runsOf(c, job.id)[0]!;
+    expect(run.outcome).toBe('quiet');
+    expect(run.data).toEqual({
+      texts: { note: 'hi' },
+      sourceProblems: [{ sourceId: 'crm', problem: 'down' }],
+    });
+    expect(run.sources).toEqual(
+      expect.arrayContaining([
+        { kind: 'site', target: 'api.posthog.com' },
+        { kind: 'files', target: '/w/shop/notes' },
+      ]),
+    );
+    expect(run.sources).toHaveLength(2);
+  });
+
+  it('a call the gate asks about is not noted', async () => {
+    const { c, clock } = boot({
+      scenario: () => ({
+        steps: [
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://asked.example.com/' } },
+        ],
+      }),
+    });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    const stewardId = runsOf(c, job.id)[0]!.agentId!;
+    await until(() => c.statuses.get(stewardId)?.state === 'waiting_for_input', 'the question');
+    expect(c.runSources.take(stewardId)).toEqual([]);
+  });
+});
+
 describe("a run's end wakes no one (P10-04)", () => {
   it("the Steward's final turn ends the run quiet with its last text; the Waykeeper hears nothing", async () => {
     const clock = tickingClock(oct(1, 8).getTime());

@@ -15,6 +15,7 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type { RunData, UsedSource } from './dashboard.js';
 import type { StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
@@ -511,6 +512,10 @@ export interface EndJobRunInput {
   outcome: Exclude<JobRunOutcome, 'running'>;
   summary?: string;
   numbers?: Record<string, number>;
+  /** The tables, lists, calendars, statuses and texts the run reported (P15-02). */
+  data?: RunData;
+  /** What the run actually used, recorded by Mission Control (P15-02). */
+  sources?: UsedSource[];
   /** For `failed`: the reason the failure question gives. */
   failureReason?: string;
   /**
@@ -539,6 +544,8 @@ export interface JobRunReport {
   outcome: 'quiet' | 'findings' | 'failed';
   summary: string;
   numbers?: Record<string, number>;
+  /** The tables, lists, calendars, statuses, texts and source problems the run reported (P15-02). */
+  data?: RunData;
   /** For `failed`: why. */
   failureReason?: string;
 }

@@ -68,6 +68,16 @@ function currentRunId(tables: Tables, agent: Pick<Agent, 'taskId'>): Id {
   return runId;
 }
 
+/** The `report_run` fields that make up a run's `data`. */
+const RUN_DATA_FIELDS = [
+  'tables',
+  'lists',
+  'calendars',
+  'statuses',
+  'texts',
+  'sourceProblems',
+] as const;
+
 /**
  * The tools of a Steward: `request_spend` for every Steward, plus `report_finding` and
  * `report_run` for a job-run Steward (its task is a job task and the job has a run going).
@@ -240,7 +250,12 @@ export function stewardJobTools(
       "Ends this run's report: the outcome (quiet: nothing worth bringing up; findings: you " +
       'reported findings with report_finding; failed: the run could not do its job, with the ' +
       'reason), a short summary the next run reads, and any numbers worth keeping (at most 30, ' +
-      'names up to 60 characters). Call it last, then end your turn. A later call replaces it.',
+      'names up to 60 characters). It also carries the data the dashboard shows: tables ' +
+      '(at most 10, 12 columns, 200 rows), lists (10 of 100 items), calendars (5 of 200 entries), ' +
+      'statuses (5 boards of 200 items) and texts (5 of 4000 characters), each under a name of ' +
+      'lowercase letters, digits and underscores, plus sourceProblems for a source you could not ' +
+      'read. All of it together stays under 256 KiB; a report over a limit is refused and you can ' +
+      'report again. Call it last, then end your turn. A later call replaces it.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -250,6 +265,48 @@ export function stewardJobTools(
           type: 'object',
           additionalProperties: { type: 'number' },
           description: 'Named numbers, e.g. {"new reviews": 4}.',
+        },
+        tables: {
+          type: 'object',
+          description:
+            'Named tables: {"experiments": {"columns": ["Test", "Result"], "rows": [["Short video", "+18%"]]}}. ' +
+            'Every row has one cell per column; a cell is text, a number or null.',
+          additionalProperties: {
+            type: 'object',
+            properties: {
+              columns: { type: 'array', items: { type: 'string' } },
+              rows: { type: 'array', items: { type: 'array' } },
+            },
+            required: ['columns', 'rows'],
+          },
+        },
+        lists: {
+          type: 'object',
+          description:
+            'Named lists of {title, detail?, tag?, at?}: {"to_reply": [{"title": "Ana asked about prices"}]}.',
+          additionalProperties: { type: 'array', items: { type: 'object' } },
+        },
+        calendars: {
+          type: 'object',
+          description:
+            'Named calendars of {date: "YYYY-MM-DD", title, detail?}: {"deadlines": [{"date": "2026-11-20", "title": "Invoice"}]}.',
+          additionalProperties: { type: 'array', items: { type: 'object' } },
+        },
+        statuses: {
+          type: 'object',
+          description:
+            'Named status boards of {column, title, detail?}: {"pipeline": [{"column": "open", "title": "Fix the cart"}]}.',
+          additionalProperties: { type: 'array', items: { type: 'object' } },
+        },
+        texts: {
+          type: 'object',
+          description: 'Named texts: {"summary": "…"}.',
+          additionalProperties: { type: 'string' },
+        },
+        sourceProblems: {
+          type: 'array',
+          description: 'Sources you could not read: [{"sourceId": "crm", "problem": "timed out"}].',
+          items: { type: 'object' },
         },
         failureReason: { type: 'string', description: 'For failed: why it failed.' },
       },
@@ -267,10 +324,18 @@ export function stewardJobTools(
         ) {
           throw new DomainError('invalid', 'numbers maps names to numbers');
         }
+        // The run data's fields sit next to `numbers` in the call and are kept together as `data`
+        // (checked against the protocol's `RunData` by `reportJobRun`).
+        const dataEntries = RUN_DATA_FIELDS.filter((f) => input[f] !== undefined).map(
+          (f) => [f, input[f]] as const,
+        );
         const report = {
           outcome: input['outcome'] as JobRunReport['outcome'],
           summary: optString(input, 'summary') ?? '',
           ...(numbers !== undefined ? { numbers: numbers as Record<string, number> } : {}),
+          ...(dataEntries.length > 0
+            ? { data: Object.fromEntries(dataEntries) as NonNullable<JobRunReport['data']> }
+            : {}),
           ...(failureReason !== undefined ? { failureReason } : {}),
         };
         const run = (

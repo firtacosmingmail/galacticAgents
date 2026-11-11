@@ -87,6 +87,7 @@ import {
   misplacedCwd,
   type RuntimeGate,
 } from './permission-gate.js';
+import type { RunSourceRecorder } from './run-sources.js';
 import { publishingPolicy, type PublishAllowanceStore } from './publish-allowance.js';
 import { precedentOf, ScopeWatch } from './scope-watch.js';
 import { redactEvent, redactSecrets, redactValue } from './redact.js';
@@ -199,6 +200,8 @@ export interface AgentRuntimeOptions {
    * by the approval watch, P13-04). Absent: every request the watch holds is forwarded.
    */
   requestJudge?: RequestJudge;
+  /** Notes the sources a job run's Steward uses, from its allowed calls (P15-02). Absent: none. */
+  runSources?: RunSourceRecorder;
   now?: () => string;
   onError?: (error: unknown, context: string) => void;
   /** Question routing (P2-03); default: the log, with liveness from `statuses`. */
@@ -2181,8 +2184,16 @@ export class AgentRuntime {
     );
   }
 
-  /** Keeps an allowed call among the agent's recent actions (P13-04), the newest 50. */
+  /**
+   * Keeps an allowed call among the agent's recent actions (P13-04), the newest 50, and notes
+   * its source for a job run (P15-02).
+   */
   private noteAllowed(live: Live, call: ToolCall): void {
+    // Every allowed call passes here, whichever path allowed it: a job run's Steward's sources
+    // are noted for its dashboard (P15-02).
+    if (this.opts.runSources && this.isJobRunSteward(live.agent.id)) {
+      this.opts.runSources.note(live.agent.id, call.toolName, call.input, live.spec.cwd);
+    }
     try {
       live.recentActions.push(precedentOf(call));
       if (live.recentActions.length > MAX_RECENT_ACTIONS) {

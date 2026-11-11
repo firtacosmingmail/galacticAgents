@@ -316,6 +316,103 @@ describe('Steward job and spend tools (P10-05)', () => {
     });
   });
 
+  it('report_run keeps tables, lists, calendars, statuses, texts and source problems as the run data', async () => {
+    const b = boot(() => ASKS);
+    const { run, tools } = await jobRun(b);
+    const out = await tool(tools, 'report_run').handler({
+      outcome: 'quiet',
+      summary: 'Tested.',
+      numbers: { visits: 3 },
+      tables: { experiments: { columns: ['Test', 'Result'], rows: [['Short video', '+18%']] } },
+      lists: { todo: [{ title: 'Reply to Ana' }] },
+      calendars: { due: [{ date: '2026-11-20', title: 'Invoice' }] },
+      statuses: { board: [{ column: 'open', title: 'Fix the cart' }] },
+      texts: { note: 'All good.' },
+      // A source id the job's data map does not have is kept as given.
+      sourceProblems: [{ sourceId: 'not_in_the_map', problem: 'timed out' }],
+    });
+    expect(out).toMatchObject({ runId: run.id, outcome: 'quiet' });
+    const report = b.c.log.tables.jobRuns.get(run.id)?.meta?.['report'] as {
+      numbers: unknown;
+      data: Record<string, unknown>;
+    };
+    expect(report.numbers).toEqual({ visits: 3 });
+    expect(report.data).toEqual({
+      tables: { experiments: { columns: ['Test', 'Result'], rows: [['Short video', '+18%']] } },
+      lists: { todo: [{ title: 'Reply to Ana' }] },
+      calendars: { due: [{ date: '2026-11-20', title: 'Invoice' }] },
+      statuses: { board: [{ column: 'open', title: 'Fix the cart' }] },
+      texts: { note: 'All good.' },
+      sourceProblems: [{ sourceId: 'not_in_the_map', problem: 'timed out' }],
+    });
+  });
+
+  it('report_run refuses data that breaks a limit, names it, and the run stays running', async () => {
+    const b = boot(() => ASKS);
+    const { run, tools } = await jobRun(b);
+    const report = tool(tools, 'report_run');
+    const thirteen = Array.from({ length: 13 }, (_, i) => `c${i}`);
+    const wide = (await report.handler({
+      outcome: 'quiet',
+      summary: 's',
+      tables: { wide: { columns: thirteen, rows: [] } },
+    })) as { error: string; message: string };
+    expect(wide.error).toBe('invalid');
+    expect(wide.message).toContain('tables');
+    expect(wide.message).toMatch(/at most 12|too_big|12/);
+
+    const texts = Object.fromEntries(
+      Array.from({ length: 5 }, (_, i) => [`t${i}`, 'x'.repeat(4000)]),
+    );
+    const lists = Object.fromEntries(
+      Array.from({ length: 10 }, (_, i) => [
+        `l${i}`,
+        Array.from({ length: 100 }, () => ({ title: 'x'.repeat(200), detail: 'y'.repeat(1000) })),
+      ]),
+    );
+    const big = (await report.handler({ outcome: 'quiet', summary: 's', texts, lists })) as {
+      error: string;
+      message: string;
+    };
+    expect(big.error).toBe('invalid');
+    expect(big.message).toContain('262144');
+
+    const ragged = (await report.handler({
+      outcome: 'quiet',
+      summary: 's',
+      tables: { t: { columns: ['a', 'b'], rows: [['only one']] } },
+    })) as { error: string; message: string };
+    expect(ragged.error).toBe('invalid');
+    expect(ragged.message).toContain('one cell per column');
+
+    const badName = (await report.handler({
+      outcome: 'quiet',
+      summary: 's',
+      texts: { 'Bad Name': 'x' },
+    })) as { error: string };
+    expect(badName.error).toBe('invalid');
+
+    expect(b.c.log.tables.jobRuns.get(run.id)).toMatchObject({ outcome: 'running' });
+    expect(b.c.log.tables.jobRuns.get(run.id)?.meta?.['report']).toBeUndefined();
+  });
+
+  it('report_run schema offers the run data fields', async () => {
+    const b = boot(() => ASKS);
+    const { tools } = await jobRun(b);
+    const props = (tool(tools, 'report_run').inputSchema as { properties: object }).properties;
+    expect(Object.keys(props)).toEqual(
+      expect.arrayContaining([
+        'numbers',
+        'tables',
+        'lists',
+        'calendars',
+        'statuses',
+        'texts',
+        'sourceProblems',
+      ]),
+    );
+  });
+
   it("report_run('failed') makes the turn-end handler record the failure and pause the job", async () => {
     const b = boot(() => ({
       steps: [

@@ -13,6 +13,7 @@ import {
   type JobChanges,
   type JobRun,
   type JobRunOutcome,
+  type RunData,
   type PermissionAction,
 } from '@galactic/protocol';
 import { jobRunPrompt } from '../brains/job-prompt.js';
@@ -26,6 +27,7 @@ import { FINISHED_WORK } from '../domain/states.js';
 import { storedSwitchOf, switchAppliesTo } from '../domain/usage-limits.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
+import type { RunSourceRecorder } from './run-sources.js';
 import { stewardChooser, type ChooseSteward } from './steward-choice.js';
 import { stewardDeclares } from './tool-runtimes.js';
 
@@ -91,6 +93,8 @@ export interface JobSchedulerOptions {
   chooseSteward?: ChooseSteward;
   /** Default: the log's clock. */
   now?: () => Date;
+  /** What each run used (P15-02), noted by the runtime; absent: runs end with no `sources`. */
+  runSources?: RunSourceRecorder;
   timers?: Timers;
   onError: (e: unknown) => void;
 }
@@ -100,6 +104,8 @@ interface RunReport {
   outcome?: unknown;
   summary?: unknown;
   numbers?: unknown;
+  /** The run's tables, lists, calendars, statuses, texts and source problems (P15-02). */
+  data?: unknown;
   failureReason?: unknown;
 }
 
@@ -593,12 +599,17 @@ export class JobScheduler {
         : undefined;
     const failureReason =
       typeof reported?.failureReason === 'string' ? reported.failureReason : undefined;
+    const data =
+      reported?.data && typeof reported.data === 'object' ? (reported.data as RunData) : undefined;
+    const sources = this.opts.runSources?.take(agentId) ?? [];
     this.opts.log.runCommand((ctx) =>
       endJobRun(ctx, {
         runId: run.id,
         outcome,
         ...(summary !== undefined ? { summary } : {}),
         ...(numbers ? { numbers } : {}),
+        ...(data ? { data } : {}),
+        ...(sources.length > 0 ? { sources } : {}),
         ...(outcome === 'failed' && failureReason ? { failureReason } : {}),
       }),
     );
@@ -619,7 +630,14 @@ export class JobScheduler {
     return undefined;
   }
 
+  /** A run that ends without a report keeps no sources: what the runtime noted is dropped. */
+  private forgetSources(runId: Id): void {
+    const agentId = this.opts.log.tables.jobRuns.get(runId)?.agentId;
+    if (agentId) this.opts.runSources?.take(agentId);
+  }
+
   private fail(runId: Id, reason: string): void {
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) =>
       endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason }),
     );
@@ -627,6 +645,7 @@ export class JobScheduler {
 
   /** Fails a publish follow-up run that could not start, putting its follow-up back on the job. */
   private failPublish(runId: Id, reason: string): void {
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       const run = endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason });
       const job = jobOf(ctx, run.jobId);
@@ -652,6 +671,7 @@ export class JobScheduler {
   ): boolean {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return false;
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       endJobRun(ctx, { runId, outcome: 'interrupted', ...(byUser ? { keepSchedule: true } : {}) });
       if (!byUser) this.carryOver(ctx, run, spawned);
@@ -667,6 +687,7 @@ export class JobScheduler {
   private limited(runId: Id): void {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return;
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       endJobRun(ctx, { runId, outcome: 'limited' });
       this.carryOver(ctx, run, true);

@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import type { ZodError } from 'zod';
 import {
   FAILURE_ACTIONS,
   FINDING_ACTIONS,
   FindingContext,
   LONG_TERM_LIMITS,
+  RunData,
   SPEND_ACTIONS,
   SpendContext,
   answerDetailOf,
@@ -235,6 +237,14 @@ function findingsOf(ctx: Reader, runId: Id): number {
   return ctx.tables.questions.all().filter((q) => q.context.finding?.runId === runId).length;
 }
 
+/** The first problems of a refused run `data`, each with where it is (`tables.wide.columns`). */
+function dataProblem(error: ZodError): string {
+  const shown = error.issues
+    .slice(0, 3)
+    .map((i) => `${i.path.map(String).join('.') || 'data'}: ${i.message}`);
+  return `the run data breaks a limit — ${shown.join('; ')}`;
+}
+
 /**
  * Keeps what the run's Steward reported (`report_run`) on its running run as `meta.report`
  * (ledger ruling R3): the scheduler's turn-end handler ends the run with it. A later report
@@ -242,7 +252,8 @@ function findingsOf(ctx: Reader, runId: Id): number {
  * `attachJobRunAgent`). Refused: a run that ended, an agent that is not its Steward, an outcome
  * `findings` with no finding reported, a blank or long summary, `numbers` beyond 30 keys or with a
  * key outside 1–60 characters or a value that is not a finite number, a failure reason on an
- * outcome other than `failed`.
+ * outcome other than `failed`, run `data` that breaks a `DASHBOARD_LIMITS` limit (P15-02; the
+ * protocol's `RunData` decides, and the message names where).
  */
 export function reportJobRun(ctx: CommandContext, input: ReportJobRunInput): JobRun {
   const run = runOf(ctx, input.runId);
@@ -304,10 +315,16 @@ export function reportJobRun(ctx: CommandContext, input: ReportJobRunInput): Job
       }
     }
   }
+  const data = input.report.data;
+  if (data !== undefined) {
+    const parsed = RunData.safeParse(data);
+    if (!parsed.success) throw new DomainError('invalid', dataProblem(parsed.error));
+  }
   const report = {
     outcome,
     summary,
     ...(numbers !== undefined ? { numbers: { ...numbers } } : {}),
+    ...(data !== undefined ? { data } : {}),
     ...(failureReason ? { failureReason } : {}),
   };
   return ctx.tables.jobRuns.upsert({ ...run, meta: { ...(run.meta ?? {}), report } });

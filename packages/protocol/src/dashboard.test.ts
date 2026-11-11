@@ -91,6 +91,14 @@ describe('RunData', () => {
     expect(RunData.safeParse({ tables: { big: { columns: ['a'], rows } } }).success).toBe(false);
   });
 
+  it('rejects a table row whose length differs from its columns', () => {
+    const bad = (rows: unknown[][]) =>
+      RunData.safeParse({ tables: { t: { columns: ['a', 'b'], rows } } });
+    expect(bad([['x', 1]]).success).toBe(true);
+    expect(bad([['x']]).success).toBe(false);
+    expect(bad([['x', 1, 2]]).success).toBe(false);
+  });
+
   it('rejects a bad name, a long cell and data over 256 KiB', () => {
     expect(RunData.safeParse({ tables: { Bad: table } }).success).toBe(false);
     expect(
