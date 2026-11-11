@@ -5,6 +5,7 @@ import { useMediaQuery, COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
 import { ArrangeMode } from './ArrangeMode.js';
 import { NeedsALook } from './NeedsALook.js';
 import { PanelGrid } from './PanelGrid.js';
+import { PhoneDashboard } from './PhoneDashboard.js';
 import { useDashboard } from './use-dashboard.js';
 import './dashboard.css';
 
@@ -65,8 +66,14 @@ export function DashboardPane({ projectId }: { projectId: Id }) {
           {panels.length === 0 && (
             <p className="muted dash-empty">Every panel is hidden. Arrange shows them again.</p>
           )}
-          <NeedsALook panels={panels} data={data} />
-          <PanelGrid panels={panels} data={loaded ? data : {}} now={now} />
+          {phone ? (
+            <PhoneDashboard panels={panels} data={loaded ? data : {}} now={now} />
+          ) : (
+            <>
+              <NeedsALook panels={panels} data={data} />
+              <PanelGrid panels={panels} data={loaded ? data : {}} now={now} />
+            </>
+          )}
         </>
       )}
     </section>

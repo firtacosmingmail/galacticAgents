@@ -406,3 +406,38 @@
 .dash-hidden .pnl-eyebrow {
   margin: 0 0 4px;
 }
+
+/* The phone (P15-08): a swipeable strip of tiles, then full-width cards, the later ones folded. */
+.dash-strip {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+}
+.dash-strip > .dash-panel {
+  flex: 0 0 min(46%, 170px);
+  scroll-snap-align: start;
+}
+.dash-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.dash-cards > .dash-panel {
+  grid-column: auto;
+}
+.dash-fold {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-surface);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}
