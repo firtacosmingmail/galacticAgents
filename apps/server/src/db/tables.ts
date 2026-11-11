@@ -912,28 +912,31 @@ export function tables(db: Database): Tables {
       'updated_at',
       'meta',
     ]),
-    jobRuns: Object.assign(new Table(db, jobRuns, [
-      'id',
-      'job_id',
-      'agent_id',
-      'purpose',
-      'due_at',
-      'covers_from',
-      'started_at',
-      'ended_at',
-      'outcome',
-      'summary',
-      'numbers',
-      'data',
-      'sources',
-      'follow_up',
-      'note',
-      'meta',
-    ]), {
-      // SQLite reads a negative LIMIT as "no limit".
-      of: (jobId: Id, limit?: number) =>
-        (jobRunsOf().all(jobId, limit ?? -1) as Row[]).map(readJobRun),
-    }),
+    jobRuns: Object.assign(
+      new Table(db, jobRuns, [
+        'id',
+        'job_id',
+        'agent_id',
+        'purpose',
+        'due_at',
+        'covers_from',
+        'started_at',
+        'ended_at',
+        'outcome',
+        'summary',
+        'numbers',
+        'data',
+        'sources',
+        'follow_up',
+        'note',
+        'meta',
+      ]),
+      {
+        // SQLite reads a negative LIMIT as "no limit".
+        of: (jobId: Id, limit?: number) =>
+          (jobRunsOf().all(jobId, limit ?? -1) as Row[]).map(readJobRun),
+      },
+    ),
     panels: new Table(db, dashboardPanels, [
       'id',
       'project_id',
