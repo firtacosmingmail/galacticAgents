@@ -1344,7 +1344,7 @@ describe('what a run used (P15-02)', () => {
         steps: [
           { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/a' } },
           { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/b' } },
-          { kind: 'tool_call', toolName: 'Read', input: { file_path: '/w/shop/notes/a.md' } },
+          { kind: 'tool_call', toolName: 'Read', input: { file_path: '/data/notes/a.md' } },
           { kind: 'tool_call', toolName: 'Bash', input: { command: 'git status' } },
           {
             kind: 'tool_call',
@@ -1377,7 +1377,7 @@ describe('what a run used (P15-02)', () => {
     expect(run.sources).toEqual(
       expect.arrayContaining([
         { kind: 'site', target: 'api.posthog.com' },
-        { kind: 'files', target: '/w/shop/notes' },
+        { kind: 'files', target: '/data/notes' },
       ]),
     );
     expect(run.sources).toHaveLength(2);

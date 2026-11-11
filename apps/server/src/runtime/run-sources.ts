@@ -67,8 +67,8 @@ function bashSource(command: string, cwd: string): UsedSource | undefined {
 /**
  * The source one allowed tool call used, or `undefined` when it is not one: an MCP server's tool
  * (`mcp__<server>__<tool>`, never Mission Control's own `galactic` server), a web fetch or search
- * or a `curl`/`wget` URL (the host), a file read or search (its folder), a Bash read command on a
- * path outside `cwd`.
+ * or a `curl`/`wget` URL (the host), a file read or search or a Bash read command on a path outside
+ * `cwd` (its folder; the run's own checkout is not a data source).
  */
 export function usedSourceOf(
   toolName: string,
@@ -87,12 +87,16 @@ export function usedSourceOf(
       return { kind: 'site', target: 'web search' };
     case 'Read': {
       const file = text(args['file_path']);
-      return file ? { kind: 'files', target: dirname(absolute(file, cwd)) } : undefined;
+      if (!file) return undefined;
+      const folder = dirname(absolute(file, cwd));
+      return inside(folder, cwd) ? undefined : { kind: 'files', target: folder };
     }
     case 'Grep':
     case 'Glob': {
-      const folder = text(args['path']);
-      return { kind: 'files', target: folder ? absolute(folder, cwd) : cwd };
+      const given = text(args['path']);
+      if (!given) return undefined;
+      const folder = absolute(given, cwd);
+      return inside(folder, cwd) ? undefined : { kind: 'files', target: folder };
     }
     case 'Bash': {
       const command = text(args['command']);
