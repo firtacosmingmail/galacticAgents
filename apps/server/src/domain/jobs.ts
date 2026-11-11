@@ -366,6 +366,7 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     ...(draft.followUpProvider ? { followUpProvider: draft.followUpProvider } : {}),
     ...(draft.followUpModel ? { followUpModel: draft.followUpModel } : {}),
     unattendedRules: storedRules(draft.unattendedRules, [], input.origin),
+    ...(draft.dataMap ? { dataMap: draft.dataMap } : {}),
     state: 'active',
     nextRunAt: nextRunAfter(draft, ctx.now),
     followUps: [],
@@ -424,6 +425,7 @@ export function draftOf(job: Job): JobDraft {
     ...(job.followUpProvider !== undefined ? { followUpProvider: job.followUpProvider } : {}),
     ...(job.followUpModel !== undefined ? { followUpModel: job.followUpModel } : {}),
     unattendedRules: job.unattendedRules,
+    ...(job.dataMap !== undefined ? { dataMap: job.dataMap } : {}),
   };
 }
 
@@ -468,6 +470,10 @@ export function planJobUpdate(
   if (!same(merged.schedule, current.schedule)) {
     changes.schedule = merged.schedule;
     if (current.state !== 'stopped') changes.nextRunAt = nextRunAfter(merged, ctx.now);
+  }
+  // A data map is replaced whole, never dropped (P15-03): a job keeps one once it has one.
+  if (merged.dataMap !== undefined && !same(merged.dataMap, current.dataMap)) {
+    changes.dataMap = merged.dataMap;
   }
   if (draftChanges.unattendedRules !== undefined) {
     const rules = storedRules(merged.unattendedRules, current.unattendedRules, input.origin);

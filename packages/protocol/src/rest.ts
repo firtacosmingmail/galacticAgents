@@ -286,7 +286,8 @@ export type AnswerRefusal = z.infer<typeof AnswerRefusal>;
  * plan card is approved or rejected only (its tasks are edited through `POST /api/control`).
  */
 export const ProposalDecisionBody = z.discriminatedUnion('decision', [
-  z.object({ decision: z.literal('approve') }),
+  /** `removePanels`: a job stop/change card also removes the panels it leaves empty (P15-03). */
+  z.object({ decision: z.literal('approve'), removePanels: z.literal(true).optional() }),
   z.object({
     decision: z.literal('edit'),
     changes: z

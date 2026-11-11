@@ -317,7 +317,7 @@ export const PanelDraft = PanelBase.pick({
 }).refine(needsJobSource, needsJobSourceMessage);
 export type PanelDraft = z.infer<typeof PanelDraft>;
 
-/** What `panel.updated` may change. */
+/** What `panel.updated` may change. A `null` `removalSuggestedAt` clears the suggestion. */
 export const PanelChanges = PanelBase.pick({
   title: true,
   source: true,
@@ -325,8 +325,9 @@ export const PanelChanges = PanelBase.pick({
   limits: true,
   layout: true,
   historyFrom: true,
-  removalSuggestedAt: true,
-}).partial();
+})
+  .extend({ removalSuggestedAt: Timestamp.nullable() })
+  .partial();
 export type PanelChanges = z.infer<typeof PanelChanges>;
 
 /** The same dataset a job reports, keyed as `collects` names (numbers) and data names. */

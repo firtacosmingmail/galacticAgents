@@ -137,5 +137,7 @@ export const DomainErrorCode = z.enum([
    * Mac unless `autoApproveRemote`. REST answers 403 `remote_control`, like the routes' own check.
    */
   'remote_control',
+  /** A cap is reached: a dashboard's 24 panels (P15-03). */
+  'limit',
 ]);
 export type DomainErrorCode = z.infer<typeof DomainErrorCode>;

@@ -4,17 +4,29 @@ import {
   PERMISSION_POLICY_PRESETS,
   proposalParking,
   type Actor,
+  proposalPanelOf,
   type CreateProposalInput,
+  type JobDraft,
+  type PanelDraft,
   type Proposal,
   type ProposalDecision,
 } from '@galactic/protocol';
 import { world } from '../test/world.js';
 import type { ProposalOptions } from './approval.js';
+import { createAgent } from './agents.js';
 import { freeBody } from './bodies.js';
 import { DomainError } from './errors.js';
 import { archiveProject, closeProject, createProject, reopenProject } from './projects.js';
 import { moveProject } from './promotion.js';
-import { createProposal, decideProposal, proposePlan } from './proposals.js';
+import { createJob, setJobState, updateJob } from './jobs.js';
+import { createPanel } from './panels.js';
+import {
+  createProposal,
+  decideProposal,
+  proposeJob,
+  proposePanel,
+  proposePlan,
+} from './proposals.js';
 import { archiveTask, closeTask, createTask } from './tasks.js';
 
 /**
@@ -767,5 +779,350 @@ describe('proposal flow (P2-09)', () => {
     f.run((ctx) => archiveProject(ctx, onMain.id, USER));
     expect(f.card(card.id).state).toBe('pending');
     expect(asked).toContain('a-wk');
+  });
+});
+
+describe('panel cards (P15-03, decision 156)', () => {
+  const JOB: JobDraft = {
+    name: 'Count the sales',
+    instructions: 'Count yesterday’s sales.',
+    schedule: { kind: 'daily', at: '09:00' },
+    provider: 'claude',
+    unattendedRules: [],
+  };
+  const GH: JobDraft['unattendedRules'][number] = {
+    scope: 'prefix',
+    tool: 'Bash',
+    match: { kind: 'words', words: ['gh', 'issue', 'list'] },
+    categories: ['run_workspace'],
+  };
+  const tile = (jobId: string, title = 'Sales'): PanelDraft => ({
+    type: 'tile',
+    title,
+    source: { kind: 'job', jobId, values: ['sales'] },
+    display: {},
+    limits: [],
+  });
+
+  function dashboard(opts: ProposalOptions = { policyWrite: { origin: 'local' } }) {
+    const f = flow(opts);
+    const project = f.run((ctx) =>
+      createProject(ctx, {
+        name: 'Shop',
+        workspace: '/w/shop',
+        bodyId: 'b-saturn',
+        longTerm: { purpose: 'Run the shop', goals: ['grow'] },
+      }),
+    ).value;
+    const wk = f.run((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        projectId: project.id,
+      }),
+    ).value.id;
+    const job = f.run((ctx) =>
+      createJob(ctx, { projectId: project.id, area: { name: 'Sales' }, draft: JOB, by: USER }),
+    ).value.job;
+    return { ...f, project, wk, job };
+  }
+
+  it('a `use` card creates only the panel; the job stays as it was', () => {
+    const f = dashboard();
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile(f.job.id),
+        job: { use: f.job.id },
+      }),
+    ).value;
+    expect(proposalPanelOf(card)?.job).toEqual({ use: f.job.id });
+    const { types } = f.decide(card, { decision: 'approve' });
+    expect(types).toEqual(['proposal.approved', 'panel.created']);
+    const [panel] = f.tables.panels.all();
+    expect(panel).toMatchObject({ title: 'Sales', source: { jobId: f.job.id } });
+    expect(f.tables.jobs.get(f.job.id)?.updatedAt).toBe(f.job.updatedAt);
+  });
+
+  it('a `propose create` card creates the job and the panel reading it', () => {
+    const f = dashboard();
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile('$new'),
+        job: {
+          propose: {
+            projectId: f.project.id,
+            waykeeperId: f.wk,
+            action: 'create',
+            area: { name: 'Marketing' },
+            draft: { ...JOB, name: 'Count the visits' },
+          },
+        },
+      }),
+    ).value;
+    f.decide(card, { decision: 'approve' });
+    const made = f.tables.jobs.all().find((j) => j.name === 'Count the visits');
+    expect(made).toBeDefined();
+    expect(f.tables.panels.all()[0]?.source).toEqual({
+      kind: 'job',
+      jobId: made!.id,
+      values: ['sales'],
+    });
+  });
+
+  it('refuses the placeholder job without a job it creates', () => {
+    const f = dashboard();
+    const refused = (() => {
+      try {
+        f.run((ctx) =>
+          proposePanel(ctx, {
+            projectId: f.project.id,
+            waykeeperId: f.wk,
+            action: 'create',
+            draft: tile('$new'),
+            job: { use: f.job.id },
+          }),
+        );
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(refused).toMatchObject({ code: 'invalid' });
+  });
+
+  it('a remote approval of a card whose job part adds an unattended rule is refused; nothing changes', () => {
+    const f = dashboard({ policyWrite: { origin: 'remote' } });
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile('$new'),
+        job: {
+          propose: {
+            projectId: f.project.id,
+            waykeeperId: f.wk,
+            action: 'create',
+            area: { areaId: f.job.areaId },
+            draft: { ...JOB, name: 'Read the issues', unattendedRules: [GH] },
+          },
+        },
+      }),
+    ).value;
+    const jobs = f.tables.jobs.all();
+    expect(() => f.decide(card, { decision: 'approve' })).toThrow(
+      expect.objectContaining({ code: 'remote_control' }),
+    );
+    expect(f.tables.panels.all()).toEqual([]);
+    expect(f.tables.jobs.all()).toEqual(jobs);
+    expect(f.card(card.id).state).toBe('pending');
+    // A job change that widens the rules is refused the same way.
+    const change = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile(f.job.id, 'Issues'),
+        job: {
+          propose: {
+            projectId: f.project.id,
+            waykeeperId: f.wk,
+            action: 'change',
+            jobId: f.job.id,
+            draft: { ...JOB, unattendedRules: [GH] },
+          },
+        },
+      }),
+    ).value;
+    expect(() => f.decide(change, { decision: 'approve' })).toThrow(
+      expect.objectContaining({ code: 'remote_control' }),
+    );
+    expect(f.tables.panels.all()).toEqual([]);
+    expect(f.tables.jobs.get(f.job.id)).toEqual(jobs.find((j) => j.id === f.job.id));
+  });
+
+  it('a remote approval of a `use` card, or of a job part granting nothing new, is allowed', () => {
+    const f = dashboard({ policyWrite: { origin: 'remote' } });
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile(f.job.id),
+        job: { use: f.job.id },
+      }),
+    ).value;
+    f.decide(card, { decision: 'approve' });
+    expect(f.tables.panels.all()).toHaveLength(1);
+  });
+
+  it('re-proposing supersedes the earlier open card', () => {
+    const f = dashboard();
+    const propose = (title: string) =>
+      f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'create',
+          draft: tile(f.job.id, title),
+          job: { use: f.job.id },
+        }),
+      ).value;
+    const first = propose('Sales');
+    const other = propose('Visits');
+    const second = propose('Sales');
+    expect(f.card(first.id).state).toBe('rejected');
+    expect(f.seen.map((e) => e.event)).toContainEqual({
+      type: 'proposal.rejected',
+      proposalId: first.id,
+      reason: 'superseded',
+    });
+    expect(f.card(other.id).state).toBe('pending');
+    expect(f.card(second.id).state).toBe('pending');
+    // A card about the same panel supersedes one too.
+    f.decide(second, { decision: 'approve' });
+    const panel = f.tables.panels.all()[0]!;
+    const change = (title: string) =>
+      f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'change',
+          panelId: panel.id,
+          draft: tile(f.job.id, title),
+          job: { use: f.job.id },
+        }),
+      ).value;
+    const c1 = change('Sales today');
+    const c2 = change('Sales this week');
+    expect(f.card(c1.id).state).toBe('rejected');
+    expect(proposalPanelOf(c2)?.before?.title).toBe('Sales');
+    f.decide(c2, { decision: 'approve' });
+    expect(f.tables.panels.get(panel.id)?.title).toBe('Sales this week');
+  });
+
+  it('a stop card approved with removePanels removes the job’s panels; without it keeps them', () => {
+    for (const removePanels of [true, undefined] as const) {
+      const f = dashboard();
+      for (const title of ['Sales', 'Sales chart']) {
+        f.run((ctx) => createPanel(ctx, f.project.id, tile(f.job.id, title), USER));
+      }
+      f.run((ctx) =>
+        createPanel(
+          ctx,
+          f.project.id,
+          { type: 'status', title: 'Tasks', source: { kind: 'tasks' }, display: {}, limits: [] },
+          USER,
+        ),
+      );
+      const stop = f.run((ctx) =>
+        proposeJob(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'stop',
+          jobId: f.job.id,
+        }),
+      ).value;
+      f.decide(stop, { decision: 'approve', ...(removePanels ? { removePanels } : {}) });
+      expect(f.tables.jobs.get(f.job.id)?.state).toBe('stopped');
+      const left = f.tables.panels.all().map((p) => p.title);
+      expect(left).toEqual(removePanels ? ['Tasks'] : ['Sales', 'Sales chart', 'Tasks']);
+      if (removePanels) {
+        expect(f.seen.filter((e) => e.event.type === 'panel.removed').map((e) => e.event)).toEqual([
+          expect.objectContaining({ reason: 'job stopped', by: USER }),
+          expect.objectContaining({ reason: 'job stopped', by: USER }),
+        ]);
+      }
+    }
+  });
+
+  it('a change card approved with removePanels removes the panels reading a value no longer collected', () => {
+    const f = dashboard();
+    const collect = (name: string) => ({
+      name,
+      kind: 'number' as const,
+      sourceIds: ['shop'],
+      description: '',
+    });
+    const map = (...names: string[]) => ({
+      sources: [{ id: 'shop', label: 'Shop', kind: 'site' as const, target: 'https://shop.test' }],
+      collects: names.map(collect),
+      steps: [],
+    });
+    f.run((ctx) =>
+      updateJob(ctx, { jobId: f.job.id, changes: { dataMap: map('sales', 'visits') }, by: USER }),
+    );
+    expect(f.tables.jobs.get(f.job.id)?.dataMap?.collects).toHaveLength(2);
+    f.run((ctx) => createPanel(ctx, f.project.id, tile(f.job.id, 'Sales'), USER));
+    const visits = f.run((ctx) =>
+      createPanel(
+        ctx,
+        f.project.id,
+        {
+          ...tile(f.job.id, 'Visits'),
+          source: { kind: 'job', jobId: f.job.id, values: ['visits'] },
+        },
+        USER,
+      ),
+    ).value;
+    const change = f.run((ctx) =>
+      proposeJob(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'change',
+        jobId: f.job.id,
+        changes: { dataMap: map('sales') },
+      }),
+    ).value;
+    f.decide(change, { decision: 'approve', removePanels: true });
+    expect(f.tables.panels.all().map((p) => p.title)).toEqual(['Sales']);
+    expect(f.seen.map((e) => e.event)).toContainEqual({
+      type: 'panel.removed',
+      panelId: visits.id,
+      projectId: f.project.id,
+      by: USER,
+      reason: 'no longer reported',
+    });
+  });
+
+  it('a `use` card whose job was stopped meanwhile is refused; nothing is written', () => {
+    const f = dashboard();
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile(f.job.id),
+        job: { use: f.job.id },
+      }),
+    ).value;
+    f.run((ctx) => setJobState(ctx, { jobId: f.job.id, state: 'stopped', by: USER }));
+    expect(() => f.decide(card, { decision: 'approve' })).toThrow(
+      expect.objectContaining({ code: 'invalid' }),
+    );
+    expect(f.card(card.id).state).toBe('pending');
+    expect(f.tables.panels.all()).toEqual([]);
+  });
+
+  it('removePanels is refused on a card that is not a job card', () => {
+    const f = dashboard();
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile(f.job.id),
+        job: { use: f.job.id },
+      }),
+    ).value;
+    expect(() => f.decide(card, { decision: 'approve', removePanels: true })).toThrow(
+      expect.objectContaining({ code: 'invalid' }),
+    );
   });
 });
