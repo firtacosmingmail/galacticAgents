@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { Panel, PanelData } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { useApi } from '../../console/hierarchy/shared.js';
@@ -62,7 +62,8 @@ function Body({ panel, data, now }: { panel: Panel; data: PanelData; now: Date }
 
 /**
  * One panel: title, body, state note, source line with the age, Refresh (or "Job paused — Fix &
- * retry") and a ⋯ menu with "Clear history". A very good result plays fireworks once per run
+ * retry"; disabled, saying why, while the project or the job is paused) and a ⋯ menu with "Clear
+ * history" (closed by Escape or a click outside it). A very good result plays fireworks once per run
  * result (or, under reduced motion, glows steadily); the verdict is always a word and an arrow.
  */
 export function PanelFrame({
@@ -110,6 +111,22 @@ export function PanelFrame({
   }, [wanted, clearFocusPanel]);
 
   const [menu, setMenu] = useState(false);
+  const menuRef = useRef<HTMLSpanElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const outside = (e: PointerEvent) => {
+      if (!menuRef.current?.contains(e.target as Node)) setMenu(false);
+    };
+    document.addEventListener('pointerdown', outside);
+    return () => document.removeEventListener('pointerdown', outside);
+  }, [menu]);
+  const escapeMenu = (e: KeyboardEvent) => {
+    if (!menu || e.key !== 'Escape') return;
+    e.stopPropagation();
+    setMenu(false);
+    menuButtonRef.current?.focus();
+  };
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<'refresh' | 'clear'>();
   const [error, setError] = useState<string>();
@@ -125,8 +142,17 @@ export function PanelFrame({
     }
   };
 
+  const projectPaused = useAppStore((s) => s.world.projects[panel.projectId]?.state === 'paused');
   const paused = data?.status === 'job_paused' || job?.state === 'paused';
   const stopped = data?.status === 'job_stopped' || job?.state === 'stopped';
+  /** Why Refresh cannot run now, if it cannot. */
+  const noRefresh = projectPaused
+    ? 'The project is paused'
+    : paused
+      ? 'The job is paused'
+      : stopped
+        ? 'The job is stopped'
+        : undefined;
   const sourceText = data
     ? [data.sourceLine, ageText(data.lastGoodAt, now)].filter(Boolean).join(' · ')
     : '';
@@ -164,8 +190,9 @@ export function PanelFrame({
             <span aria-hidden="true">{verdictArrow(verdict.arrow)}</span>
           </span>
         )}
-        <span className="dash-menu">
+        <span className="dash-menu" ref={menuRef} onKeyDown={escapeMenu}>
           <button
+            ref={menuButtonRef}
             type="button"
             className="dash-icon"
             aria-label="More actions"
@@ -244,7 +271,8 @@ export function PanelFrame({
             <button
               type="button"
               className="secondary dash-refresh"
-              disabled={paused || stopped || busy === 'refresh'}
+              disabled={noRefresh !== undefined || busy === 'refresh'}
+              title={noRefresh}
               onClick={() => void run('refresh', () => api.refreshJob(jobId))}
             >
               Refresh

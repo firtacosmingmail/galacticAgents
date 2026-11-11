@@ -10,6 +10,7 @@ import {
   type PanelData,
   type Project,
   type ServerMessage,
+  type Task,
 } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { FakeWebSocket } from '../../client/fake-socket.js';
@@ -472,6 +473,44 @@ describe('refresh, fix & retry and clear history', () => {
     expect(api.refreshJob).not.toHaveBeenCalled();
   });
 
+  it('a paused project disables Refresh and says why', async () => {
+    panels = [panel('pn-1', 'tile', { title: 'Churn' })];
+    datas = [data('pn-1', { tile: { value: 4 } })];
+    setWorld();
+    await renderPane();
+    await act(async () => {
+      useAppStore.setState((s) => ({
+        world: { ...s.world, projects: { 'p-shop': { ...shop, state: 'paused' } } },
+      }));
+    });
+    const refresh = within(screen.getByRole('article', { name: 'Churn' })).getByRole('button', {
+      name: 'Refresh',
+    }) as HTMLButtonElement;
+    expect(refresh.disabled).toBe(true);
+    expect(refresh.title).toBe('The project is paused');
+  });
+
+  it('the ⋯ menu closes on Escape and on a click outside it', async () => {
+    panels = [panel('pn-1', 'tile', { title: 'Churn' })];
+    datas = [data('pn-1', { tile: { value: 4 } })];
+    await renderPane();
+    const card = screen.getByRole('article', { name: 'Churn' });
+    const more = within(card).getByRole('button', { name: 'More actions' });
+    await act(async () => fireEvent.click(more));
+    expect(within(card).getByRole('menu')).toBeTruthy();
+    await act(async () => fireEvent.keyDown(within(card).getByRole('menuitem'), { key: 'Escape' }));
+    expect(within(card).queryByRole('menu')).toBeNull();
+    expect(document.activeElement).toBe(more);
+    await act(async () => fireEvent.click(more));
+    expect(within(card).getByRole('menu')).toBeTruthy();
+    await act(async () => fireEvent.pointerDown(document.body));
+    expect(within(card).queryByRole('menu')).toBeNull();
+    // A click inside the menu does not close it before its item acts.
+    await act(async () => fireEvent.click(more));
+    await act(async () => fireEvent.pointerDown(within(card).getByRole('menuitem')));
+    expect(within(card).getByRole('menu')).toBeTruthy();
+  });
+
   it('a tasks panel has no Refresh', async () => {
     panels = [panel('pn-1', 'status', { title: 'Features', source: { kind: 'tasks' } })];
     datas = [
@@ -536,6 +575,54 @@ describe('keeping current', () => {
     });
     await settle();
     expect(api.dashboard).toHaveBeenCalledTimes(3);
+  });
+
+  it('reads the dashboard again when one of the project’s own tasks changes state', async () => {
+    const feature: Task = { ...fx.task, id: 't-feature', projectId: 'p-shop', state: 'approved' };
+    const hidden: Task = { ...feature, id: 't-job', meta: { jobId: 'j-1' } };
+    panels = [panel('pn-1', 'status', { title: 'Features', source: { kind: 'tasks' } })];
+    datas = [data('pn-1', { statusBoard: { columns: [] } })];
+    await renderPane();
+    const setTasks = (tasks: Task[]) =>
+      act(async () => {
+        useAppStore.setState((s) => ({
+          world: { ...s.world, tasks: Object.fromEntries(tasks.map((x) => [x.id, x])) },
+        }));
+      });
+    await setTasks([feature, hidden]);
+    await settle();
+    expect(api.dashboard).toHaveBeenCalledTimes(2);
+    await setTasks([
+      { ...feature, state: 'in_progress', updatedAt: '2026-11-11T11:00:00.000Z' },
+      hidden,
+    ]);
+    await settle();
+    expect(api.dashboard).toHaveBeenCalledTimes(3);
+    // A job's hidden task is not on the board: its changes read nothing again.
+    await setTasks([
+      { ...feature, state: 'in_progress', updatedAt: '2026-11-11T11:00:00.000Z' },
+      { ...hidden, state: 'in_progress', updatedAt: '2026-11-11T11:05:00.000Z' },
+    ]);
+    await settle();
+    expect(api.dashboard).toHaveBeenCalledTimes(3);
+  });
+
+  it('a failed first read shows the error and "Try again", which reads again', async () => {
+    panels = [panel('pn-1', 'tile', { title: 'Churn' })];
+    datas = [data('pn-1', { tile: { value: 4 } })];
+    api.dashboard.mockImplementationOnce(async () => {
+      throw new Error('offline');
+    });
+    await renderPane();
+    expect(screen.getByRole('alert').textContent).toContain('offline');
+    expect(screen.queryByText('Reading…')).toBeNull();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    });
+    await settle();
+    expect(api.dashboard).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('article', { name: 'Churn' })).toBeTruthy();
   });
 });
 

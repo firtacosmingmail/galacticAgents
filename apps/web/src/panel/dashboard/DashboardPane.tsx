@@ -13,7 +13,8 @@ import './dashboard.css';
 /**
  * The Dashboard tab (P15-06; SPEC decision 156): a long-term project's panels over its jobs'
  * runs, read from `GET /api/projects/:id/dashboard`. "Needs a look" lists the panels with a
- * verdict, then the grid. Hidden panels are left out here (and on the phone).
+ * verdict, then the grid. Hidden panels are left out here (and on the phone). A failed read says
+ * so with "Try again"; a first read that failed shows nothing else (never "Reading…" for ever).
  */
 
 /** "Now" for the ages, refreshed twice a minute. */
@@ -28,7 +29,7 @@ function useNow(): Date {
 
 export function DashboardPane({ projectId }: { projectId: Id }) {
   const world = useAppStore((s) => s.world);
-  const { data, loaded, error } = useDashboard(projectId);
+  const { data, loaded, error, reload } = useDashboard(projectId);
   const now = useNow();
   const project = world.projects[projectId];
   const allPanels = useMemo(() => panelsOf(world, projectId), [world, projectId]);
@@ -46,10 +47,13 @@ export function DashboardPane({ projectId }: { projectId: Id }) {
     <section className="dash" aria-label={`dashboard of ${project.name}`}>
       {error && (
         <p className="error" role="alert">
-          Could not read the dashboard: {error}
+          Could not read the dashboard: {error}{' '}
+          <button type="button" className="secondary" onClick={reload}>
+            Try again
+          </button>
         </p>
       )}
-      {arranging && !phone ? (
+      {!loaded && error ? null : arranging && !phone ? (
         <ArrangeMode
           projectId={projectId}
           panels={allPanels}
