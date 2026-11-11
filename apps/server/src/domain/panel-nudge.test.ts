@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Actor, JobDraft, JobRun, PanelDraft } from '@galactic/protocol';
 import { world } from '../test/world.js';
 import { createAgent } from './agents.js';
@@ -154,5 +154,30 @@ describe('nudgeUnchangedPanels', () => {
     s.run(1, 5);
     expect(s.nudge()).toEqual([]);
     expect(panelOf(s.log, s.panel.id).removalSuggestedAt).toBeUndefined();
+  });
+
+  it('reads each job’s runs once, however many panels read it', () => {
+    const s = setup();
+    s.cmd((ctx) =>
+      createPanel(
+        ctx,
+        s.project.id,
+        {
+          ...TILE,
+          type: 'line',
+          title: 'Sales line',
+          source: { kind: 'job', jobId: s.job.id, values: ['sales'] },
+        },
+        USER,
+      ),
+    );
+    s.run(40, 5);
+    s.run(1, 5);
+    const reads = vi.spyOn(s.tables.jobRuns, 'of');
+    const all = vi.spyOn(s.tables.jobRuns, 'all');
+    // The new panel is too young to nudge (R15); the old one is nudged.
+    expect(s.nudge()).toEqual([s.panel.id]);
+    expect(reads.mock.calls.filter(([id]) => id === s.job.id)).toHaveLength(1);
+    expect(all).not.toHaveBeenCalled();
   });
 });

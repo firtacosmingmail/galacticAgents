@@ -5,6 +5,7 @@ import {
   isLongTerm,
   unchangedSince,
   type Id,
+  type JobRun,
 } from '@galactic/protocol';
 import type { CommandContext } from './event-log.js';
 import { waykeeperOf } from './findings.js';
@@ -35,12 +36,16 @@ export function nudgeUnchangedPanels(
   const project = ctx.tables.projects.get(projectId);
   if (!project || !isLongTerm(project) || FINISHED_WORK.has(project.state)) return [];
   const nudged: Id[] = [];
+  // Each job's runs are read once, however many panels read it.
+  const runsByJob = new Map<Id, JobRun[]>();
+  const runsOf = (jobId: Id): JobRun[] => {
+    let runs = runsByJob.get(jobId);
+    if (!runs) runsByJob.set(jobId, (runs = jobRuns(ctx, jobId, LONG_TERM_LIMITS.runsKept)));
+    return runs;
+  };
   for (const panel of panelsOf(ctx, projectId)) {
     if (panel.source.kind !== 'job') continue;
-    const since = unchangedSince(
-      panel,
-      jobRuns(ctx, panel.source.jobId, LONG_TERM_LIMITS.runsKept),
-    );
+    const since = unchangedSince(panel, runsOf(panel.source.jobId));
     if (since === undefined) continue;
     let suggested = panel.removalSuggestedAt;
     if (suggested !== undefined && since > suggested) {
