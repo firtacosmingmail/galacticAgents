@@ -101,7 +101,7 @@ export const useDockView = create<DockViewState>((set) => {
       set((s) => (s.transient === undefined ? s : { view: s.stored, transient: undefined })),
     reload: () => {
       const view = readDockView();
-      set({ view, stored: view, transient: undefined });
+      set({ view, stored: view, transient: undefined, chosenFor: undefined });
     },
   };
 });

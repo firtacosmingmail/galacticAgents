@@ -241,6 +241,8 @@ function useOpenOnDashboard(agent: Agent, longTerm: boolean): void {
     if (agent.role === 'waykeeper' && longTerm) {
       if (dock.chosenFor !== selected) dock.showTransient('dashboard');
     } else if (dock.transient === 'dashboard') dock.endTransient();
+    // The exception covers one gesture only: a later selection of this brain opens the dashboard.
+    useDockView.setState({ chosenFor: undefined });
   }, [agent.id, agent.role, longTerm, selected]);
 }
 

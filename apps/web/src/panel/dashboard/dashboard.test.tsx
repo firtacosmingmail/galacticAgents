@@ -579,6 +579,35 @@ describe('the Dashboard tab', () => {
     expect(localStorage.getItem(DOCK_VIEW_KEY)).toBe('chat');
   });
 
+  it('opens the dashboard again on every selection of a long-term Waykeeper (A, B, A)', async () => {
+    await openApp('/waykeeper/a-wk-shop', snapshot());
+    await act(async () => {
+      fireEvent.click(within(toggle()).getByRole('button', { name: 'Chat' }));
+    });
+    await settle();
+    expect(screen.queryByRole('region', { name: /^dashboard of/ })).toBeNull();
+    await act(async () => {
+      useAppStore.getState().select({ kind: 'harmonizer' });
+    });
+    await settle();
+    await act(async () => {
+      useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-shop' });
+    });
+    await settle();
+    expect(screen.getByRole('region', { name: 'dashboard of Shop' })).toBeTruthy();
+  });
+
+  it('a pick made in the same gesture as the selection still wins (area moon opens Jobs)', async () => {
+    await openApp('/', snapshot());
+    await act(async () => {
+      useAppStore.getState().select({ kind: 'waykeeper', id: 'a-wk-shop' });
+      useDockView.getState().setView('jobs');
+    });
+    await settle();
+    expect(screen.getByRole('region', { name: 'jobs of Shop' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /^dashboard of/ })).toBeNull();
+  });
+
   it('a stored "dashboard" shows the chat for a brain without it', async () => {
     localStorage.setItem(DOCK_VIEW_KEY, 'dashboard');
     useDockView.getState().reload();
