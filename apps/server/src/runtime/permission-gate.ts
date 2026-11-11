@@ -12,7 +12,7 @@ import {
   type ToolCall,
 } from '@galactic/protocol';
 import { evaluate, type Finding, type PolicyContext } from '../domain/permissions.js';
-import { aliasesOf, coverage, type RealPath } from '../domain/permission-rules.js';
+import { aliasesOf, coverage, systemRealPath, type RealPath } from '../domain/permission-rules.js';
 
 /** The workspace's other spellings: shared with the chooser's offline context (P9-17 review S8). */
 export { aliasesOf };
@@ -58,6 +58,12 @@ export interface GateOptions {
    * every check like the workspace: a write under one asks (`PolicyContext.userFolders`).
    */
   userFolders?: () => readonly string[];
+  /**
+   * Folders outside the workspace whose files the agent may read without asking (P14-11): its own
+   * Claude Code session's `tool-results` folder, read on every check (the session id is known
+   * once the adapter opened the session). Judged through `realPath` (`PolicyContext.readableFolders`).
+   */
+  readableFolders?: () => readonly string[];
   caps: CapsEnforcer;
   /**
    * The launch flags this agent was started with (P12-04), read on every check. A call to one of a
@@ -201,11 +207,15 @@ export function createPermissionGate(opts: GateOptions): RuntimeGate {
     const misplaced = misplacedCwd(workspace, opts.cwd);
     if (misplaced) return { verdict: { decision: 'ask', reasons: [misplaced] } };
     const userFolders = opts.userFolders?.() ?? [];
+    const readableFolders = opts.readableFolders?.() ?? [];
     const ctx: PolicyContext = {
       workspace,
       cwd: opts.cwd,
       aliases: aliasesOf(workspace, opts.cwd),
       ...(userFolders.length > 0 ? { userFolders } : {}),
+      ...(readableFolders.length > 0
+        ? { readableFolders, realPath: opts.realPath ?? systemRealPath }
+        : {}),
     };
     const policy = policyNow();
     const verdict = evaluate(policy, call, ctx);

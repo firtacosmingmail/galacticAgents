@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import {
   approvalActivity,
   isWaykeeperApproval,
@@ -68,6 +70,7 @@ import {
   type PolicyContext,
 } from '../domain/permissions.js';
 import { RULES_END_IN } from '../domain/project-rules.js';
+import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
@@ -211,7 +214,16 @@ export interface AgentRuntimeOptions {
    * Default 10 000 events / 64 MiB (approximate: the events' JSON size).
    */
   heldLimits?: { events?: number; bytes?: number };
+  /**
+   * Claude Code's config folder, under which it saves a session's large tool outputs (P14-11):
+   * `<dir>/projects/<encoded cwd>/<sessionId>/tool-results`. Default: `CLAUDE_CONFIG_DIR`, else
+   * `~/.claude`.
+   */
+  claudeConfigDir?: string;
 }
+
+/** A Claude Code session id: a UUID (P14-11). Anything else gets no readable folder. */
+const SESSION_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** The agent events held for the storage, as the panel's storage banner shows them (P8-09). */
 export interface StorageState {
@@ -737,6 +749,8 @@ export class AgentRuntime {
       workspace: () => this.workspaceOf(agent.id, req),
       // The project's deliverables folder is the user's (P9-06, decision 122): a write asks.
       userFolders: () => this.userFoldersOf(agent.id, req),
+      // Its own session's saved tool outputs (P14-11): read without asking, once the id is known.
+      readableFolders: () => this.readableFoldersOf(live),
       cwd: req.cwd,
       caps: this.caps,
       // The Steward's launch flags (P12-04), read from its row on every check.
@@ -1094,6 +1108,7 @@ export class AgentRuntime {
         cwd: req.cwd,
         aliases: aliasesOf(workspace, req.cwd),
         ...(userFolders.length > 0 ? { userFolders } : {}),
+        ...this.readableContext(live),
       },
     };
   }
@@ -1914,6 +1929,27 @@ export class AgentRuntime {
       .catch(() => undefined);
   }
 
+  /**
+   * The folders a live agent may read outside its workspace without asking (P14-11, SPEC decision
+   * 138): its own current session's `tool-results` folder under Claude Code's config folder, the
+   * project segment matched as any one segment (`*`: the CLI's cwd encoding truncates and hashes
+   * long paths, so it is not recomputed here). None before the session id is known, nor for an id
+   * that is not a UUID; never another agent's.
+   */
+  private readableFoldersOf(live: Live | undefined): string[] {
+    const sessionId = live?.handle?.sessionId;
+    if (sessionId === undefined || !SESSION_UUID.test(sessionId)) return [];
+    const configDir =
+      this.opts.claudeConfigDir ?? process.env['CLAUDE_CONFIG_DIR'] ?? join(homedir(), '.claude');
+    return [join(configDir, 'projects', '*', sessionId, 'tool-results')];
+  }
+
+  /** `readableFolders` with how they resolve links, for a `PolicyContext` (P14-11). */
+  private readableContext(live: Live | undefined): Partial<PolicyContext> {
+    const readableFolders = this.readableFoldersOf(live);
+    return readableFolders.length > 0 ? { readableFolders, realPath: systemRealPath } : {};
+  }
+
   private userFoldersOf(agentId: Id, req: SpawnRequest): string[] {
     const { tables } = this.opts.log;
     const agent = tables.agents.get(agentId);
@@ -2221,6 +2257,7 @@ export class AgentRuntime {
       cwd,
       aliases: aliasesOf(workspace, cwd),
       ...(userFolders.length > 0 ? { userFolders } : {}),
+      ...this.readableContext(live),
     };
     let categories: PermissionAction[];
     try {

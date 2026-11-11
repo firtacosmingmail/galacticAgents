@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, realpathSync, symlinkSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -43,6 +43,36 @@ describe('createPermissionGate', () => {
     folders = ['/w/proj/deliverables'];
     expect(gate.check(write)).toMatchObject({ decision: 'ask', action: 'outside_workspace' });
     expect(gate.check({ toolName: 'Read', input: write.input })).toEqual({ decision: 'allow' });
+  });
+
+  it("lets an agent read files of its own session's tool-results folder, read on every check (P14-11)", () => {
+    const sid = 'c4b773a9-dedb-4c90-96d8-eaa32504fa8c';
+    const home = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-home-')));
+    const folder = join(home, '.claude', 'projects', '-w-proj', sid, 'tool-results');
+    mkdirSync(folder, { recursive: true });
+    writeFileSync(join(folder, 'b1.txt'), 'x');
+    const outside = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-outside-')));
+    writeFileSync(join(outside, 'secret.txt'), 's');
+    symlinkSync(outside, join(folder, 'out'));
+    let folders: string[] = [];
+    const gate = createPermissionGate({
+      ...base,
+      policy: DEFAULT_PERMISSION_POLICY,
+      caps: caps(),
+      readableFolders: () => folders,
+    });
+    const file = join(folder, 'b1.txt');
+    const readIt = { toolName: 'Read', input: { file_path: file } };
+    const grepIt = { toolName: 'Bash', input: { command: `grep -n x ${file}` } };
+    expect(gate.check(readIt)).toMatchObject({ decision: 'ask' });
+    folders = [join(home, '.claude', 'projects', '*', sid, 'tool-results')];
+    expect(gate.check(readIt)).toEqual({ decision: 'allow' });
+    expect(gate.check(grepIt)).toEqual({ decision: 'allow' });
+    // A real symlink in the folder that leads outside it is not covered.
+    const viaLink = { toolName: 'Read', input: { file_path: join(folder, 'out', 'secret.txt') } };
+    expect(gate.check(viaLink)).toMatchObject({ decision: 'ask' });
+    const write = { toolName: 'Write', input: { file_path: file, content: 'y' } };
+    expect(gate.check(write)).toMatchObject({ decision: 'ask' });
   });
 
   it('treats the resolved and the given spelling of a symlinked workspace as one place (dev-machine run)', () => {
