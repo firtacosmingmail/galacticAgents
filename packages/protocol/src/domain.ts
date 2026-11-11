@@ -110,10 +110,12 @@ export const PermissionPolicy = z.object({
 export type PermissionPolicy = z.infer<typeof PermissionPolicy>;
 
 /**
- * The scopes of an "Allow similar" rule (P9-17, SPEC decision 138): exactly this call, its command
- * prefix (a command) or folder (a file tool), or the whole category the table asked about.
+ * The scopes of an "Allow similar" rule (P9-17, SPEC decision 138, amended by P14): `folder` (a
+ * directory a command or file tool reached) and `site` (a host the network was asked about) are
+ * made per reason from the card's chooser; `prefix` (a command prefix) and `category` (the whole
+ * category the table asked about) stay; `exact` is no longer offered but old rules keep it.
  */
-export const PermissionRuleScope = z.enum(['exact', 'prefix', 'category']);
+export const PermissionRuleScope = z.enum(['exact', 'prefix', 'category', 'folder', 'site']);
 export type PermissionRuleScope = z.infer<typeof PermissionRuleScope>;
 
 /**
@@ -123,13 +125,21 @@ export type PermissionRuleScope = z.infer<typeof PermissionRuleScope>;
  *   line, sorted), a web fetch's address, a search's query, or another tool's input as JSON;
  * - `words`: a command prefix as the shell's words (`["npm", "run"]`), matched word by word on
  *   every simple command of the line — never a string prefix;
- * - `folder`: a real path (symlinks resolved) that a file tool's paths must lie under;
+ * - `folder`: a real path (symlinks resolved) that a file tool's paths must lie under; `access:
+ *   'any'` (P14) marks one made from a command, covering its reads and writes there — absent, it
+ *   covers the file tool's group as before;
+ * - `host`: a lower-case hostname that a network call's address must have (P14);
  * - `categories`: the categories of `PermissionRule.categories`, for any tool.
  */
 export const PermissionRuleMatch = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('text'), text: z.string() }),
   z.object({ kind: z.literal('words'), words: z.array(z.string().min(1)).min(1) }),
-  z.object({ kind: z.literal('folder'), folder: z.string().min(1) }),
+  z.object({
+    kind: z.literal('folder'),
+    folder: z.string().min(1),
+    access: z.literal('any').optional(),
+  }),
+  z.object({ kind: z.literal('host'), host: z.string().min(1) }),
   z.object({ kind: z.literal('categories') }),
 ]);
 export type PermissionRuleMatch = z.infer<typeof PermissionRuleMatch>;

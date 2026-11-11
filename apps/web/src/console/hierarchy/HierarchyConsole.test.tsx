@@ -518,7 +518,7 @@ describe('question inbox (P2-18)', () => {
     expect(within(card).getByText('push:')).toBeTruthy();
     expect(within(card).getByText(/Bash .*git push origin task\/t-1/)).toBeTruthy();
     expect(within(card).queryByLabelText('answer')).toBeNull();
-    await click(within(card).getByText('Allow'));
+    await click(within(card).getByText('Allow once'));
     await click(within(card).getByText('Refuse'));
     await flush();
     expect(posts('/api/questions/q-2/answer').map((c) => c.body)).toEqual([

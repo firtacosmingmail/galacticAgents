@@ -269,7 +269,7 @@ describe('the Steward view (P25-05)', () => {
       } as Question,
     ]);
     const card = within(view()).getByRole('article', { name: /permission question/ });
-    expect(within(card).getByRole('button', { name: 'Allow' })).toBeTruthy();
+    expect(within(card).getByRole('button', { name: /^Allow( once)?$/ })).toBeTruthy();
     expect(within(card).getByRole('button', { name: 'Refuse' })).toBeTruthy();
     expect(within(view()).queryByRole('textbox')).toBeNull();
     expect(composer()).toBeNull();

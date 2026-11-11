@@ -418,6 +418,8 @@ export const PermissionDecided = z.object({
   decidedBy: Actor,
   /** The project's "Allow similar" rule that allowed it (P9-17, decision 138): "allowed by rule". */
   ruleId: Id.optional(),
+  /** P14: every rule that together covered it; `ruleId` is then `ruleIds[0]`. */
+  ruleIds: z.array(Id).min(1).optional(),
   /** The project's standing approval that approved it (P13, decision 154). */
   standingApprovalId: Id.optional(),
   /** The user's words the Waykeeper's judge leaned on to approve it (P13, decision 154). */

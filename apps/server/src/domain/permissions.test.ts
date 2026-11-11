@@ -106,7 +106,8 @@ describe('SPEC §3.6 row 1 — read, run tests/builds, edit inside the workspace
       ['Bash', { command: 'git checkout -b feature/x' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'git checkout main' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'git restore --staged src/a.ts' }, ['run_workspace'], 'allow'],
-      ['Bash', { command: 'find . -name "*.ts" | xargs grep TODO' }, ['run_workspace'], 'allow'],
+      // `xargs` runs words the engine never sees (P14-08 round 6): `find -exec` is read instead.
+      ['Bash', { command: 'find . -name "*.ts" -exec grep TODO {} +' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'echo $PATH' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'cat $PWD/package.json' }, ['run_workspace'], 'allow'],
       ['Bash', { command: 'cd src && cd .. && pnpm test' }, ['run_workspace'], 'allow'],
@@ -376,7 +377,8 @@ describe('isInsideWorkspace', () => {
 describe('command parsing', () => {
   it('splits on shell operators', () => {
     // Substitutions are commands of their own, lexed before the command that holds them.
-    expect(splitCommand('a && b || c; d | e\nf $(g) `h` (i) { j; } \\k & l')).toEqual([
+    // (`(i)` after arguments is no subshell: zsh reads it as a glob group, bash as an error.)
+    expect(splitCommand('a && b || c; d | e\nf $(g) `h`; (i) { j; } \\k & l')).toEqual([
       'a',
       'b',
       'c',

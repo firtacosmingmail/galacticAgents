@@ -13,7 +13,6 @@ import type {
   SetAnswer,
   DismissBody,
   DismissResponse,
-  PermissionRuleScope,
   RemovePermissionRuleResponse,
   SimilarPreviewResponse,
   StandingApprovalBody,
@@ -206,21 +205,17 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         {},
       ),
     /**
-     * Answers the request "allow" and stores the rule of `scope` on its project (P9-17), bound to
-     * the preview by its `digest` (409 `stale` when the server would store another rule).
+     * Answers the request "allow" once and stores one rule per ticked row on its project (P9-17,
+     * P14), bound to the preview by the rows' `digests` and the `callDigest` (409 `stale` when
+     * the server would store other rules).
      */
-    allowSimilar: (
-      questionId: string,
-      scope: PermissionRuleScope,
-      digest: string,
-      version?: number,
-    ) =>
+    allowSimilar: (questionId: string, digests: string[], callDigest: string, version?: number) =>
       call<AllowSimilarResponse>(
         'POST',
         `/api/questions/${encodeURIComponent(questionId)}/allow-similar`,
         {
-          scope,
-          digest,
+          digests,
+          callDigest,
           ...(version !== undefined ? { version } : {}),
         } satisfies AllowSimilarBody,
       ),

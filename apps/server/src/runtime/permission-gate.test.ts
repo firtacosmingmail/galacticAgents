@@ -320,6 +320,93 @@ describe('"Allow similar" rules in the gate (P9-17)', () => {
   };
   const install = { toolName: 'Bash', input: { command: 'npm install zod' } };
 
+  const asks = {
+    rules: {
+      read_workspace: 'allow',
+      edit_workspace: 'allow',
+      run_workspace: 'allow',
+      outside_workspace: 'ask',
+      network: 'ask',
+      destructive: 'ask',
+      push: 'ask',
+    },
+  } as const;
+  const rule = (
+    id: string,
+    r: Pick<PermissionRule, 'scope' | 'tool' | 'match' | 'categories' | 'label'>,
+  ): PermissionRule => ({
+    ...r,
+    id,
+    projectId: 'p-1',
+    createdBy: { type: 'user' },
+    createdAt: '2026-11-09T10:00:00.000Z',
+    origin: 'local',
+  });
+  const folderRule = rule('r-folder', {
+    scope: 'folder',
+    tool: 'Bash',
+    match: { kind: 'folder', folder: '/tmp/pr83', access: 'any' },
+    categories: ['outside_workspace'],
+    label: '/tmp/pr83/…',
+  });
+  const siteRule = rule('r-site', {
+    scope: 'site',
+    tool: '*',
+    match: { kind: 'host', host: 'github.com' },
+    categories: ['network'],
+    label: 'github.com',
+  });
+  const identity = (p: string) => p;
+  const both = { toolName: 'Bash', input: { command: 'cd /tmp/pr83; gh pr view 83' } };
+
+  it('allows a call only when every asked reason is covered, naming every rule (P14-03)', () => {
+    const allowed: [readonly string[], string | undefined][] = [];
+    const gate = createPermissionGate({
+      ...base,
+      policy: asks,
+      caps: caps(),
+      realPath: identity,
+      rules: () => [folderRule, siteRule],
+      onRuleAllow: (_call, ruleIds, action) => allowed.push([ruleIds, action]),
+    });
+    expect(gate.check(both)).toEqual({ decision: 'allow' });
+    expect(allowed).toEqual([[['r-folder', 'r-site'], 'outside_workspace']]);
+    expect(gate.decide(both)).toMatchObject({
+      verdict: { decision: 'allow' },
+      ruleIds: ['r-folder', 'r-site'],
+    });
+  });
+
+  it('asks about the uncovered reasons only, and says what is already allowed (P14-03)', () => {
+    const allowed: unknown[] = [];
+    const gate = createPermissionGate({
+      ...base,
+      policy: asks,
+      caps: caps(),
+      realPath: identity,
+      rules: () => [folderRule],
+      onRuleAllow: (...args) => allowed.push(args),
+    });
+    expect(gate.check(both)).toEqual({
+      decision: 'ask',
+      action: 'network',
+      reasons: ['gh talks to GitHub: gh pr view 83', 'already allowed by: /tmp/pr83/…'],
+    });
+    expect(allowed).toEqual([]);
+    expect(gate.decide(both).ruleIds).toBeUndefined();
+    // Nothing covered: the verdict is the table's, untouched.
+    const none = createPermissionGate({ ...base, policy: asks, caps: caps(), rules: () => [] });
+    expect(none.check(both)).toMatchObject({
+      decision: 'ask',
+      action: 'outside_workspace',
+      reasons: [
+        '/tmp/pr83: outside the workspace',
+        'cd /tmp/pr83: leaves the workspace',
+        'gh talks to GitHub: gh pr view 83',
+      ],
+    });
+  });
+
   it('allows what a rule matches, read on every check, and tells the runtime which rule', () => {
     let rules: PermissionRule[] = [];
     const allowed: [string, string | undefined][] = [];
@@ -328,13 +415,16 @@ describe('"Allow similar" rules in the gate (P9-17)', () => {
       policy: DEFAULT_PERMISSION_POLICY,
       caps: caps(),
       rules: () => rules,
-      onRuleAllow: (_call, ruleId, action) => allowed.push([ruleId, action]),
+      onRuleAllow: (_call, ruleIds, action) => allowed.push([ruleIds.join(','), action]),
     });
     expect(gate.check(install)).toMatchObject({ decision: 'ask', action: 'network' });
     rules = [npmRule];
     expect(gate.check(install)).toEqual({ decision: 'allow' });
     expect(allowed).toEqual([['r-npm', 'network']]);
-    expect(gate.decide(install)).toMatchObject({ verdict: { decision: 'allow' }, ruleId: 'r-npm' });
+    expect(gate.decide(install)).toMatchObject({
+      verdict: { decision: 'allow' },
+      ruleIds: ['r-npm'],
+    });
     expect(allowed).toHaveLength(1); // `decide` callers log it themselves
     // Never a push, never a compound line.
     expect(gate.check(push)).toMatchObject({ decision: 'ask' });
@@ -493,7 +583,7 @@ describe('createPermissionGate launch flags (P12-04)', () => {
         onceAsked++;
         return true;
       },
-      onRuleAllow: (_c, id) => allowed.push(id),
+      onRuleAllow: (_c, ids) => allowed.push(...ids),
     });
     expect(gate.check(navigate)).toMatchObject({ decision: 'ask' });
     expect(onceAsked).toBe(0);

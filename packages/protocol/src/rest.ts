@@ -12,7 +12,6 @@ import {
   PermissionPolicy,
   type PermissionPolicyPreset,
   PermissionRule,
-  PermissionRuleScope,
   TrustLevel,
   WORK_NAME_MAX,
 } from './domain.js';
@@ -171,23 +170,34 @@ export const DismissResponse = z.object({ ok: z.literal(true) });
 export type DismissResponse = z.infer<typeof DismissResponse>;
 
 /**
- * `POST /api/questions/:id/similar-preview` (P9-17, SPEC decision 138): what the card's "Allow
- * similar" chooser offers for an open permission request — one option per scope, each with a
- * label and a preview of exactly what the rule would match, or why it is not offered — computed
- * by the server from the request. `refused` says why no rule can be made at all (a push, a request
- * outside any project, a call the table no longer asks about). `allowed`: whether this client may
- * make one (the Mac, or any client with `autoApproveRemote`).
+ * `POST /api/questions/:id/similar-preview` (P9-17, SPEC decision 138, amended by P14): what the
+ * card's "Allow similar" chooser offers for an open permission request — the call and the parts
+ * of it that asked (`call`, `asking`), then one row per reason, each already generalised with a
+ * label and a preview of exactly what its rule would cover, or why it is not offered. `refused`
+ * says why no rule can be made at all (a request outside any project, a call the table no longer
+ * asks about, …). `notRememberable`: parts that ask but cannot become a rule (a push, guarded
+ * ground, an unreadable part, a path the engine cannot tell): allowed once only. `callDigest`
+ * binds the preview to the call (empty when the request names none). `allowed`: whether this
+ * client may make rules (the Mac, or any client with `autoApproveRemote`).
  */
 export const SimilarOption = z.object({
-  scope: PermissionRuleScope,
+  /** Stable row key: `folder:/private/tmp/pr83`, `site:github.com`, `prefix`, `category`. */
+  key: z.string(),
+  kind: z.enum(['folder', 'site', 'prefix', 'category']),
   available: z.boolean(),
   label: z.string().optional(),
   preview: z.string().optional(),
   /**
    * What binds this preview to the rule stored (P9-17 review S1): sent back with
-   * `allow-similar`, which refuses (409 `stale`) when the rule it drafts again differs.
+   * `allow-similar`, which refuses (409 `stale`) when no row it drafts again has it.
    */
   digest: z.string().optional(),
+  /** The shown parts of the call this row would cover. */
+  covers: z.array(z.string()).optional(),
+  /** A folder row's wider choices, narrowest to widest (each sent back by its own digest). */
+  widen: z
+    .array(z.object({ label: z.string(), preview: z.string(), digest: z.string() }))
+    .optional(),
   reason: z.string().optional(),
 });
 export type SimilarOption = z.infer<typeof SimilarOption>;
@@ -197,31 +207,38 @@ export const SimilarPreviewResponse = z.object({
   projectId: Id.optional(),
   projectName: z.string().optional(),
   refused: z.string().optional(),
+  /** The command, or `<tool> <subject>` for another tool (P14). */
+  call: z.string(),
+  /** The shown parts of the reasons no rule of the project covers yet (P14). */
+  asking: z.array(z.string()),
+  notRememberable: z.array(z.object({ part: z.string(), reason: z.string() })),
+  callDigest: z.string(),
   options: z.array(SimilarOption),
   allowed: z.boolean(),
 });
 export type SimilarPreviewResponse = z.infer<typeof SimilarPreviewResponse>;
 
 /**
- * `POST /api/questions/:id/allow-similar` (P9-17): answers the request "allow" and stores the rule
- * of `scope` the preview showed — `digest` is the preview's for that scope, and a rule drafted
+ * `POST /api/questions/:id/allow-similar` (P9-17, amended by P14): answers the request "allow"
+ * once and stores one rule per ticked row — `digests` are the previews' for those rows (or a
+ * folder row's wider step), `callDigest` the preview's for the call; a call or a row drafted
  * again that differs is refused (409 `stale`). `version` and `answerId` as for an answer.
  */
 export const AllowSimilarBody = z.object({
-  scope: PermissionRuleScope,
-  digest: z.string().min(1).max(128),
+  digests: z.array(z.string().min(1).max(128)).min(1).max(20),
+  callDigest: z.string().min(1).max(128),
   version: z.number().int().nonnegative().optional(),
   answerId: z.string().min(1).max(100).optional(),
 });
 export type AllowSimilarBody = z.infer<typeof AllowSimilarBody>;
 
 /**
- * `rule`: the rule stored. `ruleNotStored`: the request was allowed once, but the rule could not
- * be stored after it (the project closed meanwhile, say) — said to the user (P9-17 review S6).
+ * `rules`: the rules stored. `ruleNotStored`: the request was allowed once, but the rules could
+ * not be stored after it (the project closed meanwhile, say) — said to the user (P9-17 review S6).
  */
 export const AllowSimilarResponse = z.object({
   ok: z.literal(true),
-  rule: PermissionRule.optional(),
+  rules: z.array(PermissionRule).optional(),
   ruleNotStored: z.string().optional(),
 });
 export type AllowSimilarResponse = z.infer<typeof AllowSimilarResponse>;

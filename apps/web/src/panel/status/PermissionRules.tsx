@@ -15,7 +15,19 @@ const SCOPE: Record<PermissionRuleScope, string> = {
   exact: 'exactly',
   prefix: 'prefix / folder',
   category: 'category',
+  folder: 'folder',
+  site: 'site',
 };
+
+const READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'LS']);
+const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/** A file-tool folder rule says which kind of access its tool gives. */
+function fileToolAccess(tool: string): string {
+  if (READ_TOOLS.has(tool)) return ' · reading';
+  if (WRITE_TOOLS.has(tool)) return ' · writing';
+  return ' · by file tools';
+}
 
 function when(at: string): string {
   const d = new Date(at);
@@ -38,7 +50,14 @@ export function PermissionRules({ project }: { project: Project }) {
         <ul className="permission-rules" aria-label="allowed similar actions">
           {rules.map((r) => (
             <li key={r.id}>
-              <span className="pill">{SCOPE[r.scope]}</span>
+              <span className="pill">
+                {SCOPE[r.scope]}
+                {r.scope === 'folder' && r.match.kind === 'folder'
+                  ? r.match.access === 'any'
+                    ? ' · reading and writing'
+                    : fileToolAccess(r.tool)
+                  : ''}
+              </span>
               <code>{r.label}</code>
               <span className="muted">
                 {r.tool !== '*' ? `${r.tool} · ` : ''}added {when(r.createdAt)}

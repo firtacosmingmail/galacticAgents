@@ -72,14 +72,17 @@ describe('commandParts', () => {
   });
 
   it('makes the target of xargs a part of its own', () => {
+    // `xargs` itself is unreadable since P14-08 round 6: it runs words the engine never sees.
     const parts = commandParts('ls | xargs rm', ctx);
-    expect(parts.map((p) => p.text)).toEqual(['ls', 'rm']);
-    expect(parts[1]!.categories).toContain('destructive');
+    expect(parts.map((p) => p.text)).toEqual(['ls', 'xargs', 'rm']);
+    expect(parts[1]!.opaque).toBe('unreadable');
+    expect(parts[2]!.categories).toContain('destructive');
   });
 
   it('splits a shell run by xargs', () => {
     expect(texts(`find . -name '*.tmp' | xargs -0 sh -c 'rm -f "$1"' _`)).toEqual([
       "find . -name '*.tmp'",
+      'xargs -0',
       'rm -f "$1"',
     ]);
   });
@@ -183,6 +186,43 @@ describe('lexCommand heredoc bodies', () => {
   });
 });
 
+describe('lexCommand braces and carriage returns (as bash reads them)', () => {
+  const words = (line: string) => lexCommand(line).commands.map((c) => c.words);
+  it('treats { and } as group delimiters only in command position', () => {
+    expect(words('curl https://ok.com } -x evil.com:80')).toEqual([
+      ['curl', 'https://ok.com', '}', '-x', 'evil.com:80'],
+    ]);
+    expect(words('curl https://ok.com { --proxy evil.com:80')).toEqual([
+      ['curl', 'https://ok.com', '{', '--proxy', 'evil.com:80'],
+    ]);
+    expect(words('{ echo a; ls; }; pwd')).toEqual([['echo', 'a'], ['ls'], ['pwd']]);
+    expect(words('true && { echo b; }')).toEqual([['true'], ['echo', 'b']]);
+  });
+  it('a { after a reserved word in command position opens a group', () => {
+    expect(words('time { cd; } && cat notes.txt')).toEqual([
+      ['time'],
+      ['cd'],
+      ['cat', 'notes.txt'],
+    ]);
+    expect(words('! { cd; }')).toEqual([['!'], ['cd']]);
+    expect(words('if true; then { cd; }; fi')).toEqual([['if', 'true'], ['then'], ['cd'], ['fi']]);
+    expect(words('while false; do { cd; }; done')).toEqual([
+      ['while', 'false'],
+      ['do'],
+      ['cd'],
+      ['done'],
+    ]);
+  });
+  it('a { after a redirection is a word, as in bash', () => {
+    expect(words('>f { echo')).toEqual([['{', 'echo']]);
+  });
+  it('a carriage return is a word character', () => {
+    expect(words('curl -H\r -xevil.com:80 https://ok.com')).toEqual([
+      ['curl', '-H\r', '-xevil.com:80', 'https://ok.com'],
+    ]);
+  });
+});
+
 describe('partsOfCall', () => {
   it('splits a Bash call', () => {
     const parts = partsOfCall(
@@ -256,6 +296,9 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
       `GIT_DIR=/etc bash -c 'git status'`,
       `env 'X=a b' bash -c ls`,
       'PYTHONSTARTUP=x.py python3 -m http',
+      // zsh's `NAME+=value` is an assignment too (P14-08 review C-1).
+      'BASH_ENV+=./evil.sh bash -c ls',
+      `PAGER+='rm -rf ~' bash -c 'git log'`,
     ]) {
       const parts = commandParts(command, ctx);
       expect(parts.length, command).toBe(2);
@@ -263,6 +306,7 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
     }
     expect(texts(`PAGER='rm -rf ~' bash -c 'git log'`)[0]).toBe(`PAGER='rm -rf ~'`);
     expect(texts(`env 'X=a b' bash -c ls`)[0]).toBe(`env X='a b'`);
+    expect(texts(`X+='a b' bash -c ls`)[0]).toBe(`X+='a b'`);
   });
 
   it('makes a shell run by xargs unreadable when it takes its code from the input', () => {
@@ -280,7 +324,7 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
       expect(parts.at(-1)!.opaque, command).toBe('unreadable');
     }
     // A fixed body that does not use the replace-string is still split.
-    expect(texts(`ls | xargs -I{} sh -c 'echo hi'`)).toEqual(['ls', 'echo hi']);
+    expect(texts(`ls | xargs -I{} sh -c 'echo hi'`)).toEqual(['ls', "xargs '-I{}'", 'echo hi']);
   });
 
   it('flags a delete after a cd in a substitution or subshell, which the lexer flattens', () => {

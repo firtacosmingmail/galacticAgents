@@ -8,6 +8,7 @@ import {
   type RequestOrigin,
   type ToolCall,
 } from '@galactic/protocol';
+import { hostOfUrl, hostsOfCommand } from './hosts.js';
 
 /**
  * The permission policy engine (SPEC §3.6, decision 7; P1-10).
@@ -46,10 +47,41 @@ export interface PolicyContext {
   userFolders?: readonly string[];
 }
 
+/**
+ * One reason the engine found, with the structure "Allow similar" needs (P14-02). Engine-internal:
+ * not a wire type. Every action in `Classification.actions` has at least one finding; a finding
+ * for a plain run or workspace read/edit has an empty `reason`/`part` (nothing to show).
+ */
+export interface Finding {
+  action: PermissionAction;
+  /** The shown part (the simple command's text, or `<tool> <path>`), as in today's reason lines. */
+  part: string;
+  /** The reason line, exactly as pushed to `reasons`. */
+  reason: string;
+  /** Index of the simple command in the line (commands only). */
+  segment?: number;
+  /** outside_workspace: the resolved path it reaches (absent when it cannot be told). */
+  path?: string;
+  /** network: the hosts visible in this part; absent or [] = not host-coverable. */
+  hosts?: string[];
+  /** The simple command's words and whether it redirects to a file (commands only). */
+  words?: string[];
+  redirects?: boolean;
+  /** A write to guarded ground (`guardedWriteReason`): no rule ever covers it (P14). */
+  guarded?: true;
+  /**
+   * Other reason lines of `reasons` this finding stands for: a second rule that reported the same
+   * part and subject (`cd X` outside and leaving the workspace) adds no finding of its own.
+   */
+  merged?: string[];
+}
+
 export interface Classification {
   actions: PermissionAction[];
   /** One human-readable line per finding, for the permission card. */
   reasons: string[];
+  /** The structured form of `reasons` (and of actions without a reason line). */
+  findings: Finding[];
   /** Set for tools that only touch the agent's own bookkeeping: allowed whatever the policy. */
   alwaysAllow?: true;
   /**
@@ -292,9 +324,19 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
   const input = isRecord(call.input) ? call.input : {};
   const name = call.toolName;
 
-  if (HARMLESS_TOOLS.has(name)) return { actions: [], reasons: [], alwaysAllow: true };
+  if (HARMLESS_TOOLS.has(name))
+    return { actions: [], reasons: [], findings: [], alwaysAllow: true };
   if (NETWORK_TOOLS.has(name)) {
-    return { actions: ['network'], reasons: [`${name} reaches the network`] };
+    const reason = `${name} reaches the network`;
+    const host =
+      name === 'WebFetch' && typeof input['url'] === 'string' ? hostOfUrl(input['url']) : undefined;
+    return {
+      actions: ['network'],
+      reasons: [reason],
+      findings: [
+        { action: 'network', part: name, reason, ...(host !== undefined ? { hosts: [host] } : {}) },
+      ],
+    };
   }
   if (READ_TOOLS.has(name)) return classifyPaths(name, input, 'read_workspace', ctx);
   if (EDIT_TOOLS.has(name)) return classifyPaths(name, input, 'edit_workspace', ctx);
@@ -308,7 +350,12 @@ export function classifyToolCall(call: ToolCall, ctx: PolicyContext): Classifica
   const reasons = [`unknown tool ${name}`];
   const pushes = mentionsPush(inputText(input));
   reasons.push(...pushes);
-  return { actions: pushes.length ? ['push'] : [], reasons, unclassified: true };
+  const findings: Finding[] = pushes.map((reason) => ({
+    action: 'push' as const,
+    part: name,
+    reason,
+  }));
+  return { actions: pushes.length ? ['push'] : [], reasons, findings, unclassified: true };
 }
 
 /** An unknown tool's input as text for `mentionsPush` (never throws). */
@@ -334,18 +381,45 @@ function classifyPaths(
   const edit = inside === 'edit_workspace';
   // An edit tool that names no file cannot be placed: ask.
   if (edit && paths.length === 0) {
-    return { actions: [], reasons: [`${tool} names no file path`], unclassified: true };
+    return {
+      actions: [],
+      reasons: [`${tool} names no file path`],
+      findings: [],
+      unclassified: true,
+    };
   }
 
   const reasons: string[] = [];
+  const findings: Finding[] = [];
+  const note = (part: string, reason: string, path?: string, guarded?: true) => {
+    reasons.push(reason);
+    findings.push({
+      action: 'outside_workspace',
+      part,
+      reason,
+      ...(path !== undefined ? { path } : {}),
+      ...(guarded ? { guarded } : {}),
+    });
+  };
   let guarded = false;
   for (const p of paths) {
     // Guarded wherever the path is — inside the workspace or not (P9-17 review B1).
     const guard = edit ? guardedWriteReason(p, ctx) : undefined;
     if (guard) {
-      reasons.push(`${tool} on ${p}: ${guard}`);
+      note(
+        `${tool} ${p}`,
+        `${tool} on ${p}: ${guard}`,
+        unalias(resolvePath(p, ctx, cwdOf(ctx)), ctx),
+        true,
+      );
       guarded = true;
-    } else if (!isInsideWorkspace(p, ctx)) reasons.push(`${tool} on ${p}: outside the workspace`);
+    } else if (!isInsideWorkspace(p, ctx)) {
+      note(
+        `${tool} ${p}`,
+        `${tool} on ${p}: outside the workspace`,
+        unalias(resolvePath(p, ctx, cwdOf(ctx)), ctx),
+      );
+    }
   }
   const base = typeof input['path'] === 'string' ? input['path'] : undefined;
   const from = base !== undefined ? resolvePath(base, ctx, cwdOf(ctx)) : cwdOf(ctx);
@@ -354,15 +428,22 @@ function classifyPaths(
     if (typeof g !== 'string') continue;
     const locations = globLocations(g);
     if (locations === null) {
-      reasons.push(`${tool} on ${g}: cannot tell where the pattern points`);
+      note(`${tool} ${g}`, `${tool} on ${g}: cannot tell where the pattern points`);
       continue;
     }
     if (locations.some((l) => !isInsideWorkspace(l, { ...ctx, cwd: from }))) {
-      reasons.push(`${tool} on ${g}: outside the workspace`);
+      note(`${tool} ${g}`, `${tool} on ${g}: outside the workspace`);
     }
   }
-  if (reasons.length === 0) return { actions: [inside], reasons: [] };
-  return { actions: ['outside_workspace'], reasons, ...(guarded ? { guarded: true } : {}) };
+  if (reasons.length === 0) {
+    return { actions: [inside], reasons: [], findings: [{ action: inside, part: '', reason: '' }] };
+  }
+  return {
+    actions: ['outside_workspace'],
+    reasons,
+    findings,
+    ...(guarded ? { guarded: true } : {}),
+  };
 }
 
 function looksLikeLocation(p: string): boolean {
@@ -444,19 +525,45 @@ export function globLocations(pattern: string): string[] | null {
   });
 }
 
+/**
+ * Where the well-formed bracket expression opening at `seg[open]` ends (the index of its closing
+ * `]`): an optional `!` or `^`, a `]` taken as a member when it comes first, `[:name:]` units.
+ * `-1` when it never closes or holds a `[:` that is not a complete `[:name:]` class.
+ */
+function bracketEnd(seg: string, open: number): number {
+  let k = open + 1;
+  if (seg[k] === '!' || seg[k] === '^') k++;
+  if (seg[k] === ']') k++;
+  while (k < seg.length) {
+    if (seg[k] === ']') return k;
+    if (seg[k] === '[' && seg[k + 1] === ':') {
+      const cls = /^\[:[A-Za-z]+:\]/.exec(seg.slice(k));
+      if (!cls) return -1;
+      k += cls[0].length;
+    } else k++;
+  }
+  return -1;
+}
+
+/**
+ * Whether a glob segment can match `name`. Each well-formed bracket expression matches exactly
+ * one character, whatever its members. Quoting is gone once the words are lexed (`.gi[t\]]` and
+ * `.gi[t"]"]` both arrive as `.gi[t]]`, which zsh reads as `.git`), so the segment matches
+ * anything — fail closed — when a bracket never closes, holds a broken `[:` class, or a `[` or
+ * `]` is left over (P14-08 review round 5).
+ */
 function globSegmentMatches(seg: string, name: string): boolean {
   let rx = '';
   for (let k = 0; k < seg.length; k++) {
     const c = seg[k]!;
     if (c === '*') rx += '.*';
     else if (c === '?') rx += '.';
+    else if (c === ']') return true;
     else if (c === '[') {
-      const close = seg.indexOf(']', k + 2);
-      if (close < 0) rx += '\\[';
-      else {
-        rx += '.'; // any class may match the character: conservative
-        k = close;
-      }
+      const close = bracketEnd(seg, k);
+      if (close < 0) return true;
+      rx += '.';
+      k = close;
     } else rx += c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
   return new RegExp(`^${rx}$`).test(name);
@@ -535,8 +642,14 @@ class ShellLexer {
     let pendingOp: string | null = null;
     let depth = 0;
     let i = start;
+    // Where an unquoted `)` operator ended: zsh reads a `(` right after it as glob qualifiers (R-m).
+    let closedAt = -1;
+    // Where the current word starts in the raw text, and where this loop step started.
+    let wordStart = -1;
+    let stepStart = start;
 
     const append = (text: string) => {
+      if (word === null) wordStart = stepStart;
       word = (word ?? '') + text;
     };
     const flushWord = () => {
@@ -578,7 +691,9 @@ class ShellLexer {
     while (i < src.length) {
       const c = src[i]!;
       const next = src[i + 1];
-      if (c === ' ' || c === '\t' || c === '\r') {
+      stepStart = i;
+      // Only space and tab separate words: bash reads a carriage return as a word character.
+      if (c === ' ' || c === '\t') {
         flushWord();
         i++;
       } else if (c === '\n') {
@@ -615,6 +730,12 @@ class ShellLexer {
           if (end < 0) return this.fail('unterminated ${');
           const body = src.slice(i, end + 1);
           if (/`|\$\(/.test(body)) return this.fail('command substitution inside ${…}');
+          // A `~` (tilde expansion) or an `=` (zsh's =command) in the word part is unreadable;
+          // only the assigning operator itself (`${x:=…}`, `${x=…}`) may hold an `=`.
+          const inner = body.slice(2, -1);
+          const operator = /^[A-Za-z_][A-Za-z0-9_]*:?=/.exec(inner)?.[0] ?? '';
+          if (inner.includes('~') || inner.slice(operator.length).includes('='))
+            return this.fail(`\${…} holding ~ or =: ${body}`);
           append(body);
           i = end + 1;
         } else {
@@ -632,6 +753,9 @@ class ShellLexer {
       } else if ((c === '<' || c === '>') && next === '(') {
         i = substitute(i + 2); // process substitution
         append(SUBSTITUTION);
+      } else if (c === '<' && /^<\d*-\d*>/.test(src.slice(i))) {
+        // zsh reads `<->`, `<1-10>` as numeric globs, not redirections: never readable (R-n).
+        return this.fail(`zsh numeric glob: ${/^<\d*-\d*>/.exec(src.slice(i))![0]}`);
       } else if (c === '<' || c === '>') {
         if (word !== null && !quoted && /^\d+$/.test(word))
           word = null; // the fd: `2>`
@@ -659,6 +783,29 @@ class ShellLexer {
       } else if (c === ';') {
         flushCommand(false);
         i++;
+      } else if (c === '(' && word !== null && !/^\s*\)/.test(src.slice(i + 1))) {
+        // zsh reads `word(…)` as glob qualifiers or modifiers (`a(:s/x/y/)` rewrites the path,
+        // `a(e:'…':)` runs code): never readable (P14-03 review, ruling R-l). `name()` is a
+        // function definition, read elsewhere.
+        const close = src.indexOf(')', i + 1);
+        return this.fail(
+          `zsh glob qualifier or modifier: ${word}${src.slice(i, close < 0 ? src.length : close + 1)}`,
+        );
+      } else if (
+        c === '(' &&
+        (i === closedAt ||
+          (!/^\s*\)/.test(src.slice(i + 1)) &&
+            (pendingOp !== null ||
+              cmd.redirects.length > 0 ||
+              cmd.words.some((w) => !COMMAND_POSITION_WORDS.has(w)))))
+      ) {
+        // Outside command position zsh reads `(…)` as a glob group (`cat (a|b)`) and a `(` right
+        // after a `)` as glob qualifiers (`(*)(e:'…':)` runs code): never readable (P14-03
+        // review, ruling R-m). `name ()` stays a function definition, read elsewhere.
+        const close = src.indexOf(')', i + 1);
+        return this.fail(
+          `zsh glob group or qualifier: ${src.slice(i, close < 0 ? src.length : close + 1)}`,
+        );
       } else if (c === '(') {
         flushCommand(false);
         depth++;
@@ -666,11 +813,34 @@ class ShellLexer {
       } else if (c === ')') {
         flushCommand(false);
         i++;
+        closedAt = i;
         if (depth === 0 && nested) return i;
         if (depth > 0) depth--;
-      } else if ((c === '{' || c === '}') && word === null && isWordEnd(next)) {
+      } else if (
+        // `{` and `}` are reserved only in command position, as in bash: before any word or
+        // redirection of the simple command, or right after reserved words that put the next
+        // word in command position (`time {`, `then {`). Elsewhere they are ordinary arguments.
+        (c === '{' || c === '}') &&
+        word === null &&
+        pendingOp === null &&
+        cmd.words.every((w) => COMMAND_POSITION_WORDS.has(w)) &&
+        cmd.redirects.length === 0 &&
+        isWordEnd(next)
+      ) {
         flushCommand(false);
         i++;
+      } else if (
+        c === '=' &&
+        !(word === null && isWordEnd(next)) &&
+        (word === null || !/^[A-Za-z0-9_./:@%+-]+$/.test(src.slice(wordStart, i)))
+      ) {
+        // zsh expands an unquoted `=cmd` to the command's path (`=node`), also after quotes,
+        // expansions and brace alternatives (`''=ls`, `$x=git`, `{x,''=ls}`): an `=` is readable
+        // only after plain literal characters (`--color=auto`, R-l, R-m, R-n). A lone `=` names
+        // no command and stays as it is (`test a = b`).
+        let end = i + 1;
+        while (end < src.length && !/[\s;&|<>()]/.test(src[end]!)) end++;
+        return this.fail(`zsh =command expansion: ${src.slice(i, end)}`);
       } else {
         append(c);
         i++;
@@ -753,6 +923,20 @@ class ShellLexer {
   }
 }
 
+/** Reserved words after which the next word is again in command position. */
+const COMMAND_POSITION_WORDS: ReadonlySet<string> = new Set([
+  'then',
+  'do',
+  'else',
+  'elif',
+  'if',
+  'while',
+  'until',
+  '!',
+  'time',
+  'coproc',
+]);
+
 function newCommand(piped: boolean): SimpleCommand {
   return { words: [], redirects: [], piped, heredoc: false };
 }
@@ -779,9 +963,13 @@ export function splitCommand(command: string): string[] {
 
 /**
  * Wrappers that run the next word as the command (`sudo rm`, `env X=1 rm`, `timeout 30 rm`);
- * skipped, with their options, to find the command's real name.
+ * skipped, with their options, to find the command's real name. zsh's precommand modifiers
+ * `noglob`, `nocorrect` and `-` too (P14-08: `noglob cd /tmp/x` enters /tmp/x).
  */
 const WRAPPERS = new Set([
+  'noglob',
+  'nocorrect',
+  '-',
   'sudo',
   'doas',
   'env',
@@ -803,16 +991,185 @@ const WRAPPER_VALUE_OPTS: Record<string, RegExp> = {
   nice: /^-n$/,
   ionice: /^-[cnp]$/,
   timeout: /^-[sk]$/,
+  exec: /^-a$/,
   xargs: /^-[IdEsLnPa]$/,
-  env: /^-[uCS]$/,
+  // `-iC dir` (a cluster ending in a value option) and the long forms take the next word too.
+  env: /^(?:-[A-Za-z]*[uCS]|--chdir|--unset|--split-string)$/,
 };
+
+/**
+ * An assignment word: `NAME=`, zsh's and bash's `NAME+=`, `NAME[...]=`, `NAME[...]+=`. In front of
+ * a command each of them sets the command's environment (P14-08 review C-1: `GIT_DIR+=x git …`
+ * is `GIT_DIR=x` when the variable is unset).
+ */
+export const ASSIGNMENT_WORD = /^[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?\+?=/;
+
+/**
+ * The folders `env` moves its program to, in order (P14-08 review I-3): `-C <dir>`, `-C<dir>`,
+ * a cluster ending in `C` (`-iC <dir>`), `--chdir <dir>`, `--chdir=<dir>` — among the options of
+ * an `env` word in the command's wrapper chain (`nice env -C d cmd` too).
+ */
+function envChdirs(words: readonly string[]): string[] {
+  const h = commandHead([...words]);
+  const out: string[] = [];
+  let inEnv = false;
+  for (let k = 0; k < h; k++) {
+    const w = words[k]!;
+    if (!w.startsWith('-')) {
+      inEnv = baseName(w) === 'env';
+      continue;
+    }
+    if (!inEnv) continue;
+    const long = /^--chdir(?:=(.*))?$/.exec(w);
+    const short = /^-[A-Za-z]*C(.*)$/.exec(w);
+    if (!long && !short) continue;
+    const glued = long ? long[1] : short![1];
+    if (glued !== undefined && glued !== '') out.push(glued);
+    else if (k + 1 < h) out.push(words[++k]!);
+  }
+  return out;
+}
+
+/**
+ * Whether any `env` word of the simple command — wherever it is, since many programs run their
+ * arguments (`find -exec`, `fd -x`, `exec -a NAME`, `arch`, `watch`, `parallel`) — has anything the
+ * engine does not read after it (P14-08 review rounds 3 and 5): only `-i`, `-v`, `-u NAME`,
+ * `-C DIR` (clustered, the value glued or next), `--ignore-environment`, `--unset[=]NAME`,
+ * `--chdir[=]DIR`, `--` and `x=y` words may come before its program. Anything else — a lone `-`,
+ * `-S`/`--split-string` in any form, `-0`, `-a`, `-P`, an unknown option, a missing value — makes
+ * the line unreadable (fail closed). An `env` that is only an argument is read the same way, so
+ * `rg env -S src` asks: the cost of not knowing which programs run their arguments.
+ */
+export function envUnreadable(words: readonly string[]): boolean {
+  return words.some((w, i) => baseName(w) === 'env' && !envArgumentsReadable(words, i + 1));
+}
+
+function envArgumentsReadable(words: readonly string[], from: number): boolean {
+  for (let k = from; k < words.length; k++) {
+    const w = words[k]!;
+    // A computed option, assignment or program (`env $o …`, `env "$x" …`): round 6.
+    if (computedWord(w)) return false;
+    if (w === '--') return true;
+    if (w.startsWith('--')) {
+      const eq = w.indexOf('=');
+      const name = eq < 0 ? w : w.slice(0, eq);
+      if (name === '--ignore-environment' && eq < 0) continue;
+      if (name !== '--unset' && name !== '--chdir') return false;
+      if (eq < 0 && ++k >= words.length) return false; // its value is the next word
+      continue;
+    }
+    if (w.startsWith('-')) {
+      if (w === '-') return false;
+      const letters = w.slice(1);
+      for (let j = 0; j < letters.length; j++) {
+        const c = letters[j]!;
+        if (c === 'i' || c === 'v') continue;
+        if (c !== 'u' && c !== 'C') return false;
+        if (j === letters.length - 1 && ++k >= words.length) return false; // value: next word
+        break; // the rest of the cluster is the value
+      }
+      continue;
+    }
+    if (w.includes('=')) continue;
+    return true; // env's program: its own options are its own
+  }
+  return true; // no program: env prints the environment
+}
+
+/** Commands that change the shell's options (glob ones among them: GLOB_DOTS, EXTENDED_GLOB). */
+const OPTION_COMMANDS = new Set(['setopt', 'unsetopt', 'emulate', 'shopt']);
+/** `set -o`/`+o` names that leave globbing alone. */
+const SET_SAFE_OPTIONS = new Set(['pipefail', 'errexit', 'nounset', 'xtrace']);
+
+/**
+ * zsh's builtins (and its modules'), any of which may be handed a parameter name to set
+ * (`read -A options`, `vared`, `typeset`, `print -v`, `getopts`, `zparseopts -A`, …).
+ */
+const ZSH_BUILTINS = new Set(
+  (
+    '. : [ alias autoload bg bindkey break builtin bye cd chdir command compadd compctl ' +
+    'compset continue declare dirs disable disown echo emulate enable eval exec exit export ' +
+    'false fc fg float functions getln getopts hash history integer jobs kill let limit ' +
+    'local logout popd print printf private pushd pushln pwd r read readonly rehash return ' +
+    'sched set setopt shift source strftime suspend sysopen sysread sysseek syswrite test ' +
+    'times trap true ttyctl type typeset ulimit umask unalias unfunction unhash unlimit ' +
+    'unset unsetopt vared wait whence where which zcompile zformat zle zmodload zparseopts ' +
+    'zregexparse zstat zstyle'
+  ).split(' '),
+);
+
+/**
+ * Whether a simple command may change how the shell globs (P14-08 review rounds 3 and 5):
+ * `setopt`, `unsetopt`, `emulate`, `shopt`, an `options[…]`/`options=` assignment, a builtin given
+ * `options` or `options[…]` as a word (`read -A options`, `vared options`, `typeset -A options`),
+ * or `set` with anything but `-e`/`-u`/`-x` (clustered, `+` too) and `-o`/`+o`
+ * `pipefail|errexit|nounset|xtrace`. The engine assumes zsh's default glob options, so such a line
+ * is unreadable (fail closed). `options` given to a program (`grep -r options src`) is data.
+ */
+export function setsGlobOptions(words: readonly string[]): boolean {
+  if (words.some((w) => /^options(?:\[|\+?=)/.test(w))) return true;
+  const h = commandHead([...words]);
+  const name = words[h];
+  if (name === undefined) return false;
+  if (OPTION_COMMANDS.has(baseName(name))) return true;
+  if (ZSH_BUILTINS.has(name) && words.slice(h + 1).some((w) => /^options(?:\[|$)/.test(w))) {
+    return true;
+  }
+  if (name !== 'set') return false;
+  const args = words.slice(h + 1);
+  for (let k = 0; k < args.length; k++) {
+    const letters = /^[-+]([eux]*o?)$/.exec(args[k]!)?.[1];
+    if (letters === undefined || letters === '') return true;
+    if (letters.endsWith('o') && !SET_SAFE_OPTIONS.has(args[++k] ?? '')) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a shell word (any path, any position) has `-c` among its options (P14-08 review round
+ * 5): `zsh -o globdots -c '…'`, `bash -O extglob -c '…'`, `zsh -fc '…'`. The options are read up
+ * to the first operand; a cluster holding `o`/`O` and a `--long` option are taken to consume the
+ * next word (fail closed: the scan goes on).
+ */
+export function shellRunsString(words: readonly string[]): boolean {
+  for (const [i, w] of words.entries()) {
+    if (!SHELLS.test(baseName(w))) continue;
+    for (let k = i + 1; k < words.length; k++) {
+      const opt = words[k]!;
+      if (opt === '--' || opt === '-' || !/^[-+]/.test(opt)) break;
+      if (opt.startsWith('--')) {
+        if (!opt.includes('=')) k++;
+        continue;
+      }
+      const letters = opt.slice(1);
+      if (letters.includes('c')) return true;
+      if (/[oO]/.test(letters)) k++;
+    }
+  }
+  return false;
+}
+
+/**
+ * Whether the command is `trap` with code to run (P14-08 review round 5): the engine never reads
+ * it (`trap 'setopt globdots' DEBUG`). `trap`, `trap - SIG`, `trap '' SIG` and `trap -l`/`-p`
+ * set no code.
+ */
+export function trapRunsCode(words: readonly string[]): boolean {
+  const h = commandHead([...words]);
+  if (words[h] === undefined || baseName(words[h]) !== 'trap') return false;
+  const args = words.slice(h + 1);
+  if (args[0] === '--') args.shift();
+  const code = args[0];
+  return code !== undefined && code !== '' && code !== '-' && !/^-[lp]+$/.test(code);
+}
 
 /** Index of the command's real name in `words`, past assignments and wrappers. */
 export function commandHead(words: string[]): number {
   let k = 0;
   while (k < words.length) {
     const w = words[k]!;
-    if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+    // Assignments and reserved words that put the next word in command position (R-h).
+    if (ASSIGNMENT_WORD.test(w) || (COMMAND_POSITION_WORDS.has(w) && w !== 'time')) {
       k++;
       continue;
     }
@@ -825,12 +1182,14 @@ export function commandHead(words: string[]): number {
         k += WRAPPER_VALUE_OPTS[name]?.test(opt) ? 2 : 1;
       } else if (name === 'timeout' && /^\d/.test(opt)) {
         k++;
-      } else if (name === 'env' && /^[A-Za-z_][A-Za-z0-9_]*=/.test(opt)) {
+      } else if (name === 'env' && opt.includes('=')) {
+        // env sets any `x=y` it is given, whatever the name (`env 'A B=1' cmd`).
         k++;
       } else break;
     }
   }
-  return k;
+  // A wrapper's option value missing at the end (`env -C`) never points past the words.
+  return Math.min(k, words.length);
 }
 
 function baseName(word: string): string {
@@ -1190,6 +1549,126 @@ function hiddenProgram(command: SimpleCommand): string | undefined {
   return undefined;
 }
 
+/**
+ * Whether a word may become another word when the shell runs it (P14-08 review round 6): a
+ * parameter or command substitution (`$x`, `` `…` ``), a glob (`*`, `?`, `[`, zsh's `^` and `#`),
+ * a brace expansion, or a `~` past the first character (zsh's `a~b`). The lexer has removed the
+ * quotes, so a quoted `'*'` counts too (fail closed). A leading `~` is the home folder.
+ */
+export function computedWord(word: string): boolean {
+  return /[$`*?[{}^#]/.test(word) || word.indexOf('~', 1) > 0;
+}
+
+/** Programs that run a command line the engine never sees (from stdin, or as one string). */
+const RUNS_UNSEEN = new Set(['xargs', 'parallel', 'sem', 'watch']);
+/** find's options that run the words after them as a program. */
+const FIND_EXEC = /^-(?:exec|execdir|ok|okdir)$/;
+/** fd's options that run the words after them as a program. */
+const FD_EXEC = /^(?:-x|-X|--exec|--exec-batch)$/;
+/** zsh's builtins whose words name what they set or run (`read -A options`, `vared`, `trap`). */
+const KEYED_BUILTINS = new Set([
+  'read',
+  'vared',
+  'trap',
+  'setopt',
+  'unsetopt',
+  'emulate',
+  'set',
+  'shopt',
+  'getopts',
+  'zparseopts',
+  'mapfile',
+  'readarray',
+]);
+/** Builtins that declare variables: the name before an `=` must be literal. */
+const DECLARING_BUILTINS = new Set([
+  'typeset',
+  'declare',
+  'local',
+  'export',
+  'readonly',
+  'integer',
+  'float',
+  'private',
+]);
+
+/**
+ * Why a simple command runs something the engine cannot name (P14-08 review round 6), if it does.
+ * Coarse and fail closed: the engine keys its rules on literal words, so a computed or globbed
+ * word (`computedWord`) wherever a rule looks makes the line unreadable — the command name and
+ * the wrappers before it (`zs? -c`, `"$PNPM" install`), the program after `find -exec` or `fd -x`
+ * and any `$` word of it, a shell's option words (`zsh $o '…'`), an `env` word's options and
+ * program, and the words of `read`, `vared`, `trap`, `setopt`, `emulate`, … (`read -A $x`; for
+ * `typeset` and friends the name before `=`). `zmodload` anywhere loads builtins the engine does not
+ * know (`pcre_match -a options`), and `xargs`, `parallel`, `sem` and `watch` run a command line the
+ * engine never sees: unreadable too.
+ */
+export function unseenWords(words: readonly string[]): string | undefined {
+  if (words.some((w) => /zmodload/i.test(w)))
+    return 'zmodload loads builtins the engine does not know';
+  const chainOf = (from: number) => {
+    const sub = words.slice(from);
+    return sub.slice(0, Math.min(commandHead(sub) + 1, sub.length));
+  };
+  const runsChain = (chain: readonly string[]): string | undefined => {
+    for (const w of chain) {
+      if (ASSIGNMENT_WORD.test(w)) continue;
+      if (computedWord(w) && w !== '[' && w !== '[[') {
+        return 'the command name is computed at run time';
+      }
+      if (RUNS_UNSEEN.has(baseName(w)))
+        return `${baseName(w)} runs a command the engine cannot see`;
+    }
+    return undefined;
+  };
+  const head = runsChain(chainOf(0));
+  if (head) return head;
+  const h = commandHead([...words]);
+  const name = words[h] === undefined ? '' : baseName(words[h]);
+  const fd = name === 'fd' || name === 'fdfind';
+  for (let k = h + 1; k < words.length; k++) {
+    if (!FIND_EXEC.test(words[k]!) && !(fd && FD_EXEC.test(words[k]!))) continue;
+    const why = runsChain(chainOf(k + 1));
+    if (why) return why;
+    if (words.slice(k + 1).some((w) => /[$`]/.test(w))) {
+      return 'the program find or fd runs is computed at run time';
+    }
+  }
+  for (const [i, w] of words.entries()) {
+    if (SHELLS.test(baseName(w)) && shellOptionsComputed(words, i + 1)) {
+      return 'a shell option is computed at run time';
+    }
+  }
+  const args = words.slice(h + 1);
+  // `print -v`/`printf -v` set the variable they are given.
+  const keyed =
+    KEYED_BUILTINS.has(name) ||
+    ((name === 'print' || name === 'printf') && args.some((w) => /^-[A-Za-z]*v/.test(w)));
+  if (keyed && args.some(computedWord)) {
+    return `${name} is given a word computed at run time`;
+  }
+  if (DECLARING_BUILTINS.has(name) && args.some((w) => computedWord(w.split('=')[0]!))) {
+    return `${name} is given a name computed at run time`;
+  }
+  return undefined;
+}
+
+/** Whether a computed word is among a shell's options (and their values), from `from`. */
+function shellOptionsComputed(words: readonly string[], from: number): boolean {
+  let value = false;
+  for (let k = from; k < words.length; k++) {
+    const w = words[k]!;
+    if (computedWord(w)) return true;
+    if (value) {
+      value = false;
+      continue;
+    }
+    if (w === '--' || w === '-' || !/^[-+]/.test(w)) return false;
+    value = w.startsWith('--') ? !w.includes('=') : /[oO]/.test(w);
+  }
+  return false;
+}
+
 /** Commands that only read their arguments: an agent-config path among them is fine. */
 const READ_ONLY_COMMANDS = new Set([
   'cat',
@@ -1234,12 +1713,276 @@ export const HARMLESS_DEVICES: ReadonlySet<string> = new Set([
   '/dev/tty',
 ]);
 
+/**
+ * Bash builtins and reserved words. External programs cannot change the shell's state; only
+ * builtins, keywords and assignments can (ruling R-g).
+ */
+const SHELL_BUILTINS = new Set([
+  'alias',
+  'bg',
+  'bind',
+  'break',
+  'builtin',
+  'caller',
+  'cd',
+  'command',
+  'compgen',
+  'complete',
+  'compopt',
+  'continue',
+  'declare',
+  'dirs',
+  'disown',
+  'echo',
+  'enable',
+  'eval',
+  'exec',
+  'exit',
+  'export',
+  'false',
+  'fc',
+  'fg',
+  'getopts',
+  'hash',
+  'help',
+  'history',
+  'jobs',
+  'kill',
+  'let',
+  'local',
+  'logout',
+  'mapfile',
+  'popd',
+  'printf',
+  'pushd',
+  'pwd',
+  'read',
+  'readarray',
+  'readonly',
+  'return',
+  'set',
+  'shift',
+  'shopt',
+  'source',
+  'suspend',
+  'test',
+  'times',
+  'trap',
+  'true',
+  'type',
+  'typeset',
+  'ulimit',
+  'umask',
+  'unalias',
+  'unset',
+  'wait',
+  '.',
+  ':',
+  '[',
+  // Reserved words: they prefix or wrap other commands, so the next word is not the program.
+  'function',
+  'coproc',
+  'time',
+  '!',
+  '[[',
+  '((',
+  'if',
+  'then',
+  'else',
+  'elif',
+  'fi',
+  'do',
+  'done',
+  'while',
+  'until',
+  'for',
+  'case',
+  'esac',
+  'select',
+  'in',
+  '{',
+  '}',
+  // Not a builtin, but it runs its arguments as a command with a changed environment.
+  'env',
+  // zsh (the user's shell may be zsh): builtins and keywords that change options, functions,
+  // variables or what runs (P14-03 review, ruling R-k).
+  'setopt',
+  'unsetopt',
+  'emulate',
+  'zmodload',
+  'autoload',
+  'bindkey',
+  'functions',
+  'unfunction',
+  'integer',
+  'float',
+  'noglob',
+  'nocorrect',
+  'repeat',
+  'foreach',
+  'zstyle',
+  'zparseopts',
+  'disable',
+  'unhash',
+  'vared',
+  'sched',
+  'zle',
+  'limit',
+  'unlimit',
+  // zsh's precommand modifier `- cmd` (runs cmd as a login command).
+  '-',
+]);
+/** Builtins that cannot change what a later command's network destination is. */
+const STATE_SAFE_BUILTINS = new Set([
+  'cd',
+  'chdir',
+  'print',
+  'pushd',
+  'popd',
+  'echo',
+  'true',
+  'false',
+  'test',
+  '[',
+  'pwd',
+  ':',
+  'printf',
+]);
+/** `NAME=value` or `NAME+=value`: a prefix assignment (no subscript). */
+const PREFIX_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+/** The variable an assignment word sets. */
+function assignedName(word: string): string {
+  return /^[A-Za-z_][A-Za-z0-9_]*/.exec(word)?.[0] ?? '';
+}
+/**
+ * Which prefix assignments (`NAME=value` before `program` in the same simple command) a caller
+ * does not count as a change of shell state (P14-07, ruling F-2).
+ */
+export type PrefixAssignmentOk = (name: string, program: string) => boolean;
+
+/**
+ * Prefix assignments that cannot make a program run other code or read other configuration
+ * (P14-08): a token, the locale, the time zone, colour switches, `CI`. An allow-list: a variable
+ * not named here (`GIT_EXTERNAL_DIFF`, `GIT_PAGER`, `EDITOR`, `LD_PRELOAD`, `XDG_CONFIG_HOME`,
+ * `PS4`, … and `TERM`, which picks a terminfo entry) may run or load something.
+ */
+const INERT_PREFIX = /^(?:GH_TOKEN|GITHUB_TOKEN|LANG|LC_[A-Z]+|TZ|NO_COLOR|FORCE_COLOR|CI)$/;
+
+/**
+ * Folder rules (ruling F-2a, P14-08): a prefix assignment of an inert variable (`INERT_PREFIX`,
+ * case-sensitive) sets the program's environment only — unless the program changes the directory.
+ * Any other prefix assignment counts as a change of state: the line is never folder-covered.
+ */
+export const FOLDER_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
+  !['cd', 'pushd', 'chdir', 'popd'].includes(program.toLowerCase()) && INERT_PREFIX.test(name);
+
+/**
+ * Whether a simple command sets a variable that is not inert (`INERT_PREFIX`) other than by a
+ * leading prefix assignment (P14-08 review I-1): an assignment word in its wrapper chain (`sudo
+ * X=1 cmd`, `nice env X=1 cmd`, `timeout 5 env X+=1 cmd`), or any `x=y` word after an `env` word
+ * anywhere (fail closed: env sets whatever it is given). Leading assignments are judged by
+ * `changesShellState` with `FOLDER_PREFIX_OK`.
+ */
+export function wrapperSetsEnv(words: readonly string[]): boolean {
+  const h = commandHead([...words]);
+  let lead = 0;
+  while (lead < words.length && ASSIGNMENT_WORD.test(words[lead]!)) lead++;
+  const envAt = words.findIndex((w) => baseName(w) === 'env');
+  return words.some((w, i) => {
+    if (i < lead) return false;
+    const inChain = i < h && ASSIGNMENT_WORD.test(w);
+    const afterEnv = envAt >= 0 && i > envAt && !w.startsWith('-') && w.includes('=');
+    return (inChain || afterEnv) && !INERT_PREFIX.test(w.slice(0, w.search(/\+?=/)));
+  });
+}
+
+/** Visible hosts (ruling F-2b): gh's token does not route, so `GH_TOKEN=… gh …` keeps its host. */
+export const HOSTS_PREFIX_OK: PrefixAssignmentOk = (name, program) =>
+  (name === 'GH_TOKEN' || name === 'GITHUB_TOKEN') && program === 'gh';
+
+/** A word the shell could expand into another word (a builtin's name, for one). */
+const EXPANDABLE = /[$`{}*?[\]~\\]/;
+/** `${NAME:=…}`, `${NAME=…}` and friends assign while they expand. */
+const ASSIGNING_EXPANSION = /\$\{[^}]*=/;
+
+/**
+ * Whether a simple command may change the shell's state (variables, functions, traps, hashed
+ * paths, options) that a later command's destination could depend on. An allowlist (ruling
+ * R-g): false only with no assignment word, no assigning expansion, and a program word that is
+ * an external program or one of the safe builtins (`printf` only without `-v…`).
+ */
+function changesShellState(simple: SimpleCommand, prefixOk?: PrefixAssignmentOk): boolean {
+  const { words } = simple;
+  const texts = [...words, ...simple.redirects.map((r) => r.target), simple.heredocBody ?? ''];
+  if (texts.some((w) => ASSIGNING_EXPANSION.test(w))) return true;
+  // Prefix assignments (`NAME=value program …`) the caller accepts are not a change of state:
+  // they set the program's environment only. Standalone ones (no program after them) still are.
+  let k = 0;
+  while (prefixOk && k < words.length && PREFIX_ASSIGNMENT.test(words[k]!)) k++;
+  const after = words[k];
+  const accepted =
+    k > 0 &&
+    after !== undefined &&
+    words.slice(0, k).every((w) => prefixOk!(assignedName(w), after));
+  const program = words[accepted ? k : 0];
+  if (program === undefined) return false;
+  if (STATE_SAFE_BUILTINS.has(program)) {
+    if (program === 'printf') return words.some((w) => w.startsWith('-v'));
+    // zsh's print: `-v` assigns, `-z` pushes onto the editing buffer, `-s`/`-S` onto the history.
+    if (program === 'print') return words.slice(1).some((w) => /^-[A-Za-z]*[vzsS]/.test(w));
+    return false;
+  }
+  return ASSIGNMENT_WORD.test(program) || EXPANDABLE.test(program) || SHELL_BUILTINS.has(program);
+}
+
+/**
+ * Whether a command line may change the shell's state anywhere (ruling R-g): a simple command
+ * that does (`changesShellState`), a function definition, or arithmetic (`(( X = 1 ))`, `$[X=1]`).
+ * The lexer drops a function definition's parentheses, so those two are read from the text —
+ * joined as bash joins it first: a backslash-newline is removed before words are split (`(\⏎(`).
+ * Shared by visible hosts and by folder rules (P14-03, ruling R-k).
+ */
+export function lineChangesShellState(
+  command: string,
+  lexed: ReturnType<typeof lexCommand> = lexCommand(command.trim()),
+  prefixOk?: PrefixAssignmentOk,
+): boolean {
+  const joined = command.trim().replace(/\\\n/g, '');
+  return (
+    lexed.commands.some((c) => changesShellState(c, prefixOk)) ||
+    /[A-Za-z_][\w-]*\s*\(\s*\)|\bfunction\s/.test(joined) ||
+    /\(\(|\$\[/.test(joined)
+  );
+}
+
 export function classifyCommand(command: string, ctx: PolicyContext): Classification {
   const actions = new Set<PermissionAction>();
   const reasons: string[] = [];
+  const findings: Finding[] = [];
+  const note = (action: PermissionAction | undefined, reason: string, extra: Partial<Finding>) => {
+    reasons.push(reason);
+    if (action === undefined) return;
+    actions.add(action);
+    const finding: Finding = { action, part: '', reason, ...extra };
+    // One row per distinct reason: the same rule matching twice in a part adds no second finding.
+    const same = (f: Finding) =>
+      f.action === finding.action &&
+      f.part === finding.part &&
+      f.segment === finding.segment &&
+      f.path === finding.path &&
+      JSON.stringify(f.hosts) === JSON.stringify(finding.hosts);
+    const existing = findings.find(same);
+    if (!existing) findings.push(finding);
+    else {
+      if (existing.reason !== reason) (existing.merged ??= []).push(reason);
+      if (finding.guarded) existing.guarded = true;
+    }
+  };
   let guarded = false;
   const trimmed = command.trim();
-  if (trimmed === '') return { actions: [], reasons: ['empty command'], unclassified: true };
+  if (trimmed === '') {
+    return { actions: [], reasons: ['empty command'], findings: [], unclassified: true };
+  }
 
   const lexed = lexCommand(trimmed);
   let opaque = lexed.opaque.length > 0;
@@ -1247,18 +1990,48 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
 
   // `cd` changes where the later segments resolve relative paths from.
   let cwd = cwdOf(ctx);
+  // Variables set anywhere in the line (export, an assignment segment, ...) can redirect any
+  // command's network destination: no host is then visible (ruling R-d).
+  const lineSetsEnv = lineChangesShellState(trimmed, lexed, HOSTS_PREFIX_OK);
 
-  for (const simple of lexed.commands) {
+  for (const [segment, simple] of lexed.commands.entries()) {
     const here: PolicyContext = { ...ctx, cwd };
     const text = simple.words.join(' ');
     const shown = text || simple.redirects.map((r) => `${r.op}${r.target}`).join(' ');
+    const redirectsToFile = simple.redirects.some((r) => WRITE_REDIRECTS.has(r.op));
+    // The resolved place a path token reaches from this segment's cwd; none for a glob.
+    const placeOf = (token: string, at: PolicyContext = here): Partial<Finding> =>
+      /[*?[]/.test(token) ? {} : { path: unalias(resolvePath(token, at, at.cwd!), at) };
+    const seg = (extra: Partial<Finding> = {}): Partial<Finding> => ({
+      part: shown,
+      segment,
+      words: simple.words,
+      redirects: redirectsToFile,
+      ...extra,
+    });
     for (const rule of OPAQUE_RULES) {
       if (rule.pattern.test(text)) {
         opaque = true;
         reasons.push(`${rule.reason}: ${shown}`);
       }
     }
-    const hidden = hiddenProgram(simple);
+    if (!OPAQUE_RULES[0]!.pattern.test(text) && shellRunsString(simple.words)) {
+      opaque = true;
+      reasons.push(`${OPAQUE_RULES[0]!.reason}: ${shown}`);
+    }
+    if (trapRunsCode(simple.words)) {
+      opaque = true;
+      reasons.push(`trap hides the command it runs: ${shown}`);
+    }
+    if (setsGlobOptions(simple.words)) {
+      opaque = true;
+      reasons.push(`changes the shell's options, which the engine does not follow: ${shown}`);
+    }
+    if (envUnreadable(simple.words)) {
+      opaque = true;
+      reasons.push(`env with options the engine does not read: ${shown}`);
+    }
+    const hidden = hiddenProgram(simple) ?? unseenWords(simple.words);
     if (hidden) {
       opaque = true;
       reasons.push(`${hidden}: ${shown}`);
@@ -1266,44 +2039,110 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     const scanned = [text, ...simple.redirects.map((r) => r.target)].join(' ');
     for (const rule of ALL_RULES) {
       if (rule.pattern.test(scanned)) {
-        actions.add(rule.action);
-        reasons.push(`${rule.reason}: ${shown}`);
+        const hosts =
+          rule.action === 'network'
+            ? hostsOfCommand(simple.words, {
+                lineSetsEnv,
+                hasRedirect: simple.redirects.length > 0,
+              })
+            : undefined;
+        note(rule.action, `${rule.reason}: ${shown}`, seg(hosts ? { hosts } : {}));
       }
     }
-    const { paths, unresolvable } = pathsOf(simple);
-    for (const p of paths) {
-      if (!isInsideWorkspace(p, here)) {
-        actions.add('outside_workspace');
-        reasons.push(`${p}: outside the workspace`);
+    // `env -C <dir>` runs the program in <dir> (P14-08 review I-3): the folder is judged like a
+    // `cd`'s, and the command's paths from there AND from the shell's cwd (its redirections
+    // open there; fail closed). A folder the engine cannot place is guarded: it always asks.
+    let envCwd: string | undefined;
+    for (const dir of envChdirs(simple.words)) {
+      if (/[$`]/.test(dir) || /^~[^/]/.test(dir)) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `env -C ${dir}: cannot tell where it leads`,
+          seg({ guarded: true }),
+        );
+        continue;
+      }
+      const base = envCwd ?? cwd;
+      envCwd = resolvePath(dir, ctx, base);
+      if (!isInsideWorkspace(envCwd, ctx)) {
+        note(
+          'outside_workspace',
+          `env -C ${dir}: runs outside the workspace`,
+          seg({ path: unalias(envCwd, ctx) }),
+        );
+      }
+      const why = guardedWriteReason(envCwd, ctx) ?? guardedGlobReason(dir, { ...ctx, cwd: base });
+      if (why) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `${dir}: ${why}`,
+          seg({ path: unalias(envCwd, ctx), guarded: true }),
+        );
+      }
+    }
+    const places: PolicyContext[] = envCwd === undefined ? [here] : [here, { ...ctx, cwd: envCwd }];
+    const { paths, unresolvable, clustered } = pathsOf(simple);
+    for (const at of places) {
+      for (const p of paths) {
+        if (!isInsideWorkspace(p, at)) {
+          note('outside_workspace', `${p}: outside the workspace`, seg(placeOf(p, at)));
+        }
+      }
+      for (const c of clustered) {
+        if (!isInsideWorkspace(c.path, at)) {
+          note('outside_workspace', `${c.shown}: cannot tell where it points`, seg());
+        }
       }
     }
     for (const p of unresolvable) {
-      actions.add('outside_workspace');
-      reasons.push(`${p}: cannot tell where it points`);
+      note('outside_workspace', `${p}: cannot tell where it points`, seg());
     }
     // The card names every file curl sends, inside the workspace too (`.env`): P9-17 review S2.
     for (const f of curlUploads(simple.words)) reasons.push(`curl reads and sends the file ${f}`);
-    for (const g of guardedTargets(simple, here)) {
-      guarded = true;
-      actions.add('outside_workspace');
-      reasons.push(`${g.path}: ${g.reason}`);
+    for (const at of places) {
+      for (const g of guardedTargets(simple, at)) {
+        guarded = true;
+        note(
+          'outside_workspace',
+          `${g.path}: ${g.reason}`,
+          seg({ ...placeOf(g.path, at), guarded: true }),
+        );
+      }
     }
 
     const h = commandHead(simple.words);
     const name = simple.words[h]?.toLowerCase();
-    if (name === 'cd' || name === 'pushd') {
-      const target = simple.words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
-      if (target === undefined || target === '' || target === '~') {
+    // zsh's `chdir` is `cd` (P14-03 review, ruling R-l).
+    if (name === 'cd' || name === 'pushd' || name === 'chdir') {
+      const args = simple.words.slice(h + 1).filter((w) => w !== '--');
+      const operands = args.filter((w) => w === '-' || !/^-[A-Za-z]+$/.test(w));
+      const target = operands[0];
+      let cdResolved = true;
+      // zsh's `cd old new` (replace in the cwd) and the stack (`-`, `+N`, `-N`): unknown.
+      const unknown =
+        operands.length > 1 || (target !== undefined && /^(?:-|[+-]\d+)$/.test(target));
+      if (!unknown && (target === undefined || target === '' || target === '~')) {
         cwd = ctx.home ?? homedir();
-      } else if (target === '-' || unresolvable.length > 0 || /[$`]/.test(target)) {
-        actions.add('outside_workspace');
-        reasons.push(`cd ${target}: cannot tell where it leads`);
+      } else if (unknown || unresolvable.length > 0 || /[$`]/.test(target ?? '')) {
+        cdResolved = false;
+        note('outside_workspace', `cd ${target}: cannot tell where it leads`, seg());
       } else {
-        cwd = resolvePath(target, ctx, cwd);
+        cwd = resolvePath(target ?? '', ctx, cwd);
+      }
+      // `cd .gi?` may enter `.git` (P14-08 review round 2): guarded, like `env -C`.
+      const globWhy = target === undefined ? undefined : guardedGlobReason(target, here);
+      if (globWhy) {
+        guarded = true;
+        note('outside_workspace', `${target}: ${globWhy}`, seg({ guarded: true }));
       }
       if (!isInsideWorkspace(cwd, ctx)) {
-        actions.add('outside_workspace');
-        reasons.push(`${shown}: leaves the workspace`);
+        note(
+          'outside_workspace',
+          `${shown}: leaves the workspace`,
+          seg(cdResolved ? { path: unalias(cwd, ctx) } : {}),
+        );
       }
     }
   }
@@ -1311,18 +2150,26 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     // What the engine saw still counts; a push hidden in the unreadable part is looked for in
     // the raw text (decision 49), so a trusted project still asks before anything leaves.
     for (const why of mentionsPush(trimmed)) {
-      actions.add('push');
-      reasons.push(why);
+      note('push', why, { part: why });
     }
     return {
       actions: [...actions],
       reasons,
+      findings,
       unclassified: true,
       ...(guarded ? { guarded: true as const } : {}),
     };
   }
-  if (actions.size === 0) actions.add('run_workspace');
-  return { actions: [...actions], reasons, ...(guarded ? { guarded: true as const } : {}) };
+  if (actions.size === 0) {
+    actions.add('run_workspace');
+    findings.push({ action: 'run_workspace', part: '', reason: '' });
+  }
+  return {
+    actions: [...actions],
+    reasons,
+    findings,
+    ...(guarded ? { guarded: true as const } : {}),
+  };
 }
 
 /** `git`, then — anywhere later in the text — `push` as a word (`git-push`, `'git','push'` too). */
@@ -1408,6 +2255,62 @@ export function guardedWriteReason(p: string, ctx: PolicyContext): string | unde
   return undefined;
 }
 
+/** The single names `guardedWriteReason` protects, for matching globs against. */
+function guardedNames(ctx: PolicyContext): string[] {
+  const parts = (p: string) => p.split('/').filter((s) => s !== '');
+  return [
+    ...new Set([
+      '.git',
+      '.claude',
+      '.husky',
+      '.agents',
+      '.gemini',
+      '.codex',
+      '.mcp.json',
+      '.claude.json',
+      ...HOME_GUARDED_FILES.flatMap(parts),
+      ...HOME_GUARDED_TREES.flatMap(parts),
+      ...SYSTEM_GUARDED_TREES.flatMap(parts),
+      ...(ctx.userFolders ?? []).flatMap(parts),
+    ]),
+  ];
+}
+
+/** At most this many concrete paths are tried for one glob; more is guarded (fail closed). */
+const MAX_GLOB_INSTANCES = 256;
+
+/**
+ * Why a glob word may write guarded ground (P14-08 review round 2), or `undefined`: each glob
+ * segment is replaced by every guarded name it can match under zsh's rules — case-folded (APFS),
+ * and a name with a leading dot only by a segment that starts with `.` or a bracket class
+ * (`.gi?`, `.g*`, `[.]git`; no GLOB_DOTS, so `?git` and `*` never match `.git`) — and each
+ * resulting path is judged by `guardedWriteReason`.
+ */
+function guardedGlobReason(word: string, ctx: PolicyContext): string | undefined {
+  if (!GLOB_META.test(word)) return undefined;
+  const names = guardedNames(ctx);
+  let instances = [''];
+  for (const [k, seg] of word.split('/').entries()) {
+    const hits = GLOB_META.test(seg) ? names.filter((n) => zshGlobMatches(seg, n)) : [];
+    const options = hits.length > 0 ? hits : [seg];
+    instances = instances.flatMap((p) => options.map((o) => (k === 0 ? o : `${p}/${o}`)));
+    if (instances.length > MAX_GLOB_INSTANCES) return 'a glob that may reach guarded ground';
+  }
+  for (const p of instances) {
+    if (p === word) continue;
+    const why = guardedWriteReason(p, ctx);
+    if (why) return why;
+  }
+  return undefined;
+}
+
+/** Whether a glob segment can match `name` in zsh without GLOB_DOTS (case-folded). */
+function zshGlobMatches(seg: string, name: string): boolean {
+  // A segment that starts with a bracket may match a leading dot too (`[.]git`): conservative.
+  if (name.startsWith('.') && !/^[.[]/.test(seg)) return false;
+  return globSegmentMatches(seg.toLowerCase(), name.toLowerCase());
+}
+
 /** A word as a path: `$HOME`/`${HOME}` read as `~`, `$PWD` as `.` (as `pathToken` does). */
 function asPathWord(word: string): string {
   return word.replace(/^\$\{?HOME\}?(?=\/|$)/, '~').replace(/^\$\{?PWD\}?(?=\/|$)/, '.');
@@ -1426,11 +2329,24 @@ function guardedTargets(
     .filter((r) => WRITE_REDIRECTS.has(r.op))
     .map((r) => r.target);
   const h = commandHead(command.words);
+  // A leading assignment's value is a place the program may write, whatever it is
+  // (`GIT_DIR=.git/hooks git status`, `GIT_TRACE=.git/hooks/x git log`: P14-08).
+  for (const w of command.words.slice(0, h)) {
+    if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
+  }
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
     for (const w of command.words.slice(h + 1)) {
-      const eq = w.indexOf('=');
-      candidates.push(eq > 0 && w.startsWith('-') ? w.slice(eq + 1) : w);
+      // Each comma part too (`-Wl,-o,.git/hooks/x`): fail closed for any program.
+      for (const part of w.includes(',') ? [w, ...w.split(',')] : [w]) {
+        const values = part.startsWith('-') ? optionValues(part) : [];
+        candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [part]));
+      }
+      if (ASSIGNMENT_WORD.test(w)) candidates.push(...assignedPaths(w));
+    }
+    for (const part of passThroughParts(command.words.slice(h + 1))) {
+      const values = part.startsWith('-') ? optionValues(part) : [];
+      candidates.push(...(values.length > 0 ? values.map((v) => v.value) : [part]));
     }
   }
   const out: { path: string; reason: string }[] = [];
@@ -1438,7 +2354,7 @@ function guardedTargets(
     for (const alt of expandBraces(c) ?? [c]) {
       const word = asPathWord(alt);
       if (word === '' || /[$`]/.test(word) || HARMLESS_DEVICES.has(word)) continue;
-      const reason = guardedWriteReason(word, ctx);
+      const reason = guardedWriteReason(word, ctx) ?? guardedGlobReason(word, ctx);
       if (reason) {
         out.push({ path: alt, reason });
         break;
@@ -1453,6 +2369,12 @@ export interface CommandPaths {
   paths: string[];
   /** Tokens with a shell variable, substitution or `~user` the engine cannot expand lexically. */
   unresolvable: string[];
+  /**
+   * Paths only a cluster reading of an option word gives (`-ro/x`: `-r -o /x`; P14-08 review
+   * I-4), with the word they come from: one outside the workspace cannot be placed (it asks, with
+   * no folder row); one inside is nothing.
+   */
+  clustered: { path: string; shown: string }[];
 }
 
 /**
@@ -1461,22 +2383,79 @@ export interface CommandPaths {
  * ../foo` is checked. `$HOME` and `$PWD` are expanded; any other `$VAR` or substitution inside
  * a path-like token makes it unresolvable, and so does `~user`.
  */
-export function pathsInCommand(command: string): CommandPaths {
-  const out: CommandPaths = { paths: [], unresolvable: [] };
+export function pathsInCommand(command: string): Omit<CommandPaths, 'clustered'> {
+  const out: Omit<CommandPaths, 'clustered'> = { paths: [], unresolvable: [] };
   for (const c of lexCommand(command).commands) {
     const p = pathsOf(c);
-    out.paths.push(...p.paths);
+    // A caller that only reads `paths` judges the cluster readings too (fail closed).
+    out.paths.push(...p.paths, ...p.clustered.map((x) => x.path));
     out.unresolvable.push(...p.unresolvable);
   }
   return out;
 }
 
+/**
+ * Programs whose single-dash options never cluster (`gcc -Iinclude/x` is `include/x`, not `-I -i
+ * …`): only the value after the first letter counts (P14-08 review I-4).
+ */
+const NON_CLUSTERING = new Set([
+  'cc',
+  'c++',
+  'gcc',
+  'g++',
+  'clang',
+  'clang++',
+  'ld',
+  'javac',
+  'swiftc',
+  'rustc',
+]);
+/**
+ * The compilers' multi-letter single-dash options with a glued path (`-isystem/usr/x`, `-MF/x`,
+ * `-dumpdir/x`: P14-08 review N-2). Longer names first. Options with `=` (`-specs=`,
+ * `-fprofile-use=`, `--output=`) and one-letter ones (`-o`, `-B`) are read by `optionValues`.
+ */
+const COMPILER_PATH_OPTION =
+  /^-(?:isystem|iquote|idirafter|imacros|include|iprefix|iwithprefixbefore|iwithprefix|isysroot|iframework|imultilib|MF|MJ|dumpdir|dumpbase-ext|dumpbase)(.+)$/;
+/** An option that hands its comma-separated parts to the linker, assembler or preprocessor. */
+const PASS_THROUGH_OPTION = /^-W[alp],/;
+/** rustc's linker arguments: `-Clink-arg=…`, `-C link-args=…`, `--codegen[=]link-arg=…`. */
+const LINK_ARG = /^(?:-C|--codegen=?)?(link-args?)=(.*)$/s;
+
+/**
+ * The words an option passes on to another program (P14-08 review N-2, round 3): each comma
+ * part of `-Wl,`/`-Wa,`/`-Wp,`, and rustc's `link-arg=` value or `link-args=` words.
+ */
+function passThroughParts(words: readonly string[]): string[] {
+  const out: string[] = [];
+  for (const [k, w] of words.entries()) {
+    if (PASS_THROUGH_OPTION.test(w)) out.push(...w.split(',').slice(1));
+    const m = LINK_ARG.exec(w);
+    const prev = words[k - 1];
+    if (m && (/^(?:-C|--codegen)/.test(w) || prev === '-C' || prev === '--codegen')) {
+      out.push(...(m[1] === 'link-args' ? m[2]!.split(/\s+/) : [m[2]!]));
+    }
+  }
+  return out.filter((p) => p !== '');
+}
+
 function pathsOf(command: SimpleCommand): CommandPaths {
-  const out: CommandPaths = { paths: [], unresolvable: [] };
+  const out: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
+  const head = command.words[commandHead(command.words)];
+  const clusters = head === undefined || !NON_CLUSTERING.has(baseName(head));
   const add = (word: string, isTarget: boolean) => {
-    for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word);
+    for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word, clusters);
   };
-  for (const w of command.words) add(w, false);
+  for (const w of command.words) {
+    const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
+    if (long !== undefined) add(long, false);
+    add(w, false);
+    // An assignment's value may name a path (`GIT_WORK_TREE=/x git …`, `make DESTDIR=/x`, `dd
+    // of=/x`), a list of them (`PYTHONPATH=a:/x`) too (P14-07).
+    if (ASSIGNMENT_WORD.test(w)) for (const part of assignedPaths(w)) add(part, false);
+  }
+  // `-Wl,-o,/x`, `-Clink-arg=-o/x`: each passed-on part is a word of its own (P14-08 review N-2).
+  for (const part of passThroughParts(command.words)) add(part, false);
   // A file curl reads and sends is a read target, wherever it is (P9-17 review S2).
   for (const f of curlUploads(command.words)) add(f, true);
   for (const r of command.redirects) {
@@ -1537,13 +2516,81 @@ export function curlUploads(words: readonly string[]): string[] {
   return out;
 }
 
-function pathToken(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
-  let token = raw;
-  if (!isTarget) {
-    const eq = token.indexOf('=');
-    if (eq > 0 && token.startsWith('-')) token = token.slice(eq + 1);
-    if (token.startsWith('-')) return;
+/**
+ * What an assignment word's value may name as paths: the value, each `:`-separated part of it
+ * (`PYTHONPATH=a:/x`) — a URL kept whole (`registry=https://…` names no path).
+ */
+function assignedPaths(word: string): string[] {
+  const value = word.slice(ASSIGNMENT_WORD.exec(word)?.[0].length ?? word.indexOf('=') + 1);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return [value];
+  return value.split(':').filter((p) => p !== '');
+}
+
+/** A value an option word may carry; `strict` when it starts like an expansion (`$`, `~`). */
+interface OptionValue {
+  value: string;
+  strict: boolean;
+  /** Read after the second or a later option letter: only a cluster reading gives it. */
+  later: boolean;
+}
+
+/**
+ * The values an option word may carry (none for a word that carries none): `--opt=<value>` (any
+ * `-…=`), and a value glued to single-dash option letters — after ANY of them, since the letters
+ * may be a cluster (`-ro/etc/x` is `-r -o /etc/x`; `-ox/../x` is `-o x/../x`): every suffix that
+ * contains a `/`, is `..` (P14-07 M5, P14-08: `-C..`) or starts with `$` or `~` (`-o$HOME/.zshrc`;
+ * `strict`: an expanded path, outside or unknown). A suffix of none of these kinds stays an option
+ * (`-la`, `-n5`).
+ */
+function optionValues(word: string): OptionValue[] {
+  const out: OptionValue[] = [];
+  const eq = word.indexOf('=');
+  if (eq > 0 && word.startsWith('-')) {
+    out.push({ value: word.slice(eq + 1), strict: false, later: false });
   }
+  const m = /^-([A-Za-z0-9]+)(.*)$/.exec(word);
+  if (m) {
+    const [, letters = '', rest = ''] = m;
+    for (let i = 1; i <= letters.length; i++) {
+      const value = letters.slice(i) + rest;
+      const later = i > 1;
+      if (/^[$~]/.test(value)) out.push({ value, strict: true, later });
+      else if (value.includes('/') || value === '..') out.push({ value, strict: false, later });
+    }
+  }
+  return out;
+}
+
+/**
+ * A word's path tokens into `out`. An option word's first value is a path; a later one (a cluster
+ * reading, `clusters` only) goes to `out.clustered` (P14-08 review I-4).
+ */
+function pathToken(
+  raw: string,
+  isTarget: boolean,
+  out: CommandPaths,
+  shown: string,
+  clusters = true,
+): void {
+  if (!isTarget && raw.startsWith('-')) {
+    for (const v of optionValues(raw)) {
+      if (!v.strict && v.value.startsWith('-')) continue;
+      if (!v.later) wordPath(v.value, v.strict, out, shown);
+      else if (clusters) {
+        const seen: CommandPaths = { paths: [], unresolvable: [], clustered: [] };
+        wordPath(v.value, v.strict, seen, shown);
+        out.clustered.push(...seen.paths.map((path) => ({ path, shown })));
+        out.unresolvable.push(...seen.unresolvable);
+      }
+    }
+    return;
+  }
+  wordPath(raw, isTarget, out, shown);
+}
+
+/** `pathToken` for a word that is not an option. */
+function wordPath(raw: string, isTarget: boolean, out: CommandPaths, shown: string): void {
+  let token = raw;
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(token)) return; // URLs are the network rules' business
   token = token.replace(/^\$\{?HOME\}?(?=\/|$)/, '~').replace(/^\$\{?PWD\}?(?=\/|$)/, '.');
   if (HARMLESS_DEVICES.has(token) || /^\/dev\/(?:tcp|udp)\//.test(token)) return;

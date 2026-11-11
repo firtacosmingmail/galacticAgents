@@ -355,7 +355,7 @@ describe('focus kept when an item goes away, and the waiting count announced', (
     await answered('q-1', 4);
     // No clarification left: the permission's card.
     expect(focused()).toBe(within(view()).getByRole('article', { name: /^permission question/ }));
-    within(focused()).getByRole('button', { name: 'Allow' }).focus();
+    within(focused()).getByRole('button', { name: 'Allow once' }).focus();
     await answered('q-2', 1);
     // Nothing left to answer: the main area's title.
     expect(focused()).toBe(within(main()).getByRole('heading', { level: 1 }));
