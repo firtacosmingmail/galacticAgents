@@ -52,9 +52,12 @@ interface Line {
 }
 
 const STATE_TEXT: Record<'unused' | 'undeclared', string> = {
-  unused: 'not used last run',
+  unused: 'not used by the last good run',
   undeclared: 'not declared',
 };
+
+/** How many recent runs the map reads: enough to find the last good run behind a failed one. */
+export const MAP_RUNS = 10;
 
 export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
   const api = useApi();
@@ -62,13 +65,13 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
   const panels = useAppStore((s) => s.world.panels);
   const stacked = useMediaQuery(COMPACT_TOP_BAR_QUERY);
   const showPanel = useDockView((s) => s.showPanel);
-  const [lastRun, setLastRun] = useState<JobRun>();
+  const [runs, setRuns] = useState<JobRun[]>([]);
   const [now] = useState(() => new Date());
   const stamp = `${job?.lastRun?.runId ?? ''}:${job?.lastRun?.outcome ?? ''}`;
   useEffect(() => {
     let live = true;
-    api.jobRuns(jobId, 1).then(
-      (r) => live && setLastRun(r.runs[0]),
+    api.jobRuns(jobId, MAP_RUNS).then(
+      (r) => live && setRuns(r.runs),
       () => undefined,
     );
     return () => {
@@ -77,8 +80,8 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
   }, [api, jobId, stamp]);
 
   const model = useMemo(
-    () => (job ? jobMapModel(job, lastRun, Object.values(panels)) : undefined),
-    [job, lastRun, panels],
+    () => (job ? jobMapModel(job, runs, Object.values(panels)) : undefined),
+    [job, runs, panels],
   );
 
   const [hover, setHover] = useState<string>();

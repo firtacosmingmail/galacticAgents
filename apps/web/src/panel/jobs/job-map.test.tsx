@@ -106,9 +106,14 @@ describe('JobMap', () => {
     expect(onClose).toHaveBeenCalledTimes(2);
   });
 
-  it('shows the empty-map message and only what the last run used', async () => {
+  it('shows the empty-map message and only what the last good run used', async () => {
     open({ dataMap: undefined } as never, [
-      { ...fx.jobRun, jobId: 'j-1', sources: [{ kind: 'mcp', target: 'appstore' }] } as JobRun,
+      {
+        ...fx.jobRun,
+        jobId: 'j-1',
+        outcome: 'quiet',
+        sources: [{ kind: 'mcp', target: 'appstore' }],
+      } as JobRun,
     ]);
     expect(
       await screen.findByText('This job has no data map yet — ask the Waykeeper to add one'),
@@ -127,6 +132,31 @@ describe('JobMap', () => {
     ]);
     expect(await screen.findByText('login expired')).toBeTruthy();
     expect(screen.getByText('problem')).toBeTruthy();
+  });
+
+  it('reads the recent runs: a failed newest run leaves the last good run to judge sources', async () => {
+    const jobRuns = vi.fn(async () => ({
+      runs: [
+        { ...fx.jobRun, id: 'jr-9', jobId: 'j-1', outcome: 'failed' },
+        {
+          ...fx.jobRun,
+          id: 'jr-8',
+          jobId: 'j-1',
+          outcome: 'quiet',
+          sources: [{ kind: 'mcp', target: 'appstore' }],
+        },
+      ] as JobRun[],
+    }));
+    useAppStore.setState({
+      world: { ...emptyWorld(), jobs: { [job.id]: job }, panels: { [panel.id]: panel } },
+    } as never);
+    render(
+      <ApiContext.Provider value={{ jobRuns } as unknown as Api}>
+        <JobMap jobId={job.id} onClose={() => {}} />
+      </ApiContext.Provider>,
+    );
+    expect(await screen.findByText('not used by the last good run')).toBeTruthy();
+    expect(jobRuns).toHaveBeenCalledWith(job.id, 10);
   });
 
   it('highlights on focus and dims the rest', async () => {

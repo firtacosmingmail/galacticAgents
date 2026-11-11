@@ -144,7 +144,11 @@ const DRAFT_PROPERTIES = {
       'Where the job’s data comes from and what it does with it (P15-05): sources ' +
       '[{id,label,kind,target}], collects [{name,kind (number|table|list|calendar|status|text),' +
       'sourceIds,description}], steps [{text,uses,produces}]. A panel reads a collected value by ' +
-      'its name. At most 20 sources, 60 collected values and 30 steps.',
+      'its name. At most 20 sources, 60 collected values and 30 steps. Mission Control records ' +
+      'what each run really used and matches it to a source by its target, so write the target ' +
+      'as: mcp: the MCP server name (as in mcp__<server>__…); site: the host or a URL (its ' +
+      'subdomains match too); files: an absolute folder (folders inside it match too). ' +
+      'database, command and other are never checked against what a run used.',
   },
 };
 

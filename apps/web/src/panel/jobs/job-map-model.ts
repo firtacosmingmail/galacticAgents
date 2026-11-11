@@ -4,19 +4,23 @@ import {
   type JobCollect,
   type JobRun,
   type JobSource,
+  type JobSourceKind,
   type JobStep,
   type Panel,
+  type UsedSource,
 } from '@galactic/protocol';
 
 /**
  * The job map's model (P15-09; SPEC decision 156): where a job's data comes from, what it
  * collects, what it does with it and which panels show it, with the links between them. Pure: the
- * view draws it. A source's state comes from the job's last run: a `problem` it reported, `unused`
- * (declared, but the run did not read it) or `undeclared` (the run read something the map does not
- * list, added as an extra flagged node).
+ * view draws it. A source's state: a `problem` the newest run reported (`data.sourceProblems`);
+ * else, judged against the newest ended `quiet` or `findings` run that has recorded sources (the
+ * "good run"), `ok` (used) or `unused` (declared, not used); a source the good run used that the
+ * map does not declare is an extra `undeclared` node. With no good run, or for a kind Mission
+ * Control never records (database, command, other), a source is `unknown`: no used/unused state.
  */
 
-export type SourceState = 'ok' | 'problem' | 'unused' | 'undeclared';
+export type SourceState = 'ok' | 'problem' | 'unused' | 'undeclared' | 'unknown';
 export type MapSource = JobSource & { state: SourceState; problem?: string };
 export type MapCollect = JobCollect;
 export type MapStep = JobStep & { id: string };
@@ -50,27 +54,86 @@ export const collectNode = (name: string): string => `collect:${name}`;
 export const stepNode = (index: number): string => `step:${index}`;
 export const panelNode = (id: string): string => `panel:${id}`;
 
-export function jobMapModel(job: Job, lastRun: JobRun | undefined, panels: Panel[]): JobMapModel {
+/** The kinds Mission Control records a run using (P15-02): only these are judged used or unused. */
+const RECORDED_KINDS: ReadonlySet<JobSourceKind> = new Set(['mcp', 'site', 'files']);
+
+export const isRecordedKind = (kind: JobSourceKind): boolean => RECORDED_KINDS.has(kind);
+
+/** "posthog.com" from "https://PostHog.com/docs" or "posthog.com"; `undefined` when it is neither. */
+function hostOf(target: string): string | undefined {
+  const given = target.trim();
+  for (const url of [given, `http://${given}`]) {
+    try {
+      const host = new URL(url).hostname.toLowerCase().replace(/\.$/, '');
+      if (host) return host;
+    } catch {
+      // Not a URL: try it as a bare host.
+    }
+  }
+  return undefined;
+}
+
+/** A folder without its trailing slashes ("/" stays "/"). */
+const folderOf = (path: string): string => path.trim().replace(/\/+$/, '') || '/';
+
+/**
+ * Whether a run's recorded source (`used`) is the declared one (`declared`), by kind:
+ *
+ *  - `mcp`: the MCP server's name, ignoring case;
+ *  - `site`: the declared target is a host or a URL; a used host matches its hostname or a
+ *    subdomain of it (`api.posthog.com` matches `posthog.com`);
+ *  - `files`: the declared target is a folder; a used folder matches it or a folder inside it;
+ *  - `database`, `command`, `other`: never recorded, so never matched.
+ */
+export function sourceMatches(
+  declared: Pick<JobSource, 'kind' | 'target'>,
+  used: UsedSource,
+): boolean {
+  if (declared.kind !== used.kind) return false;
+  switch (declared.kind) {
+    case 'mcp':
+      return declared.target.trim().toLowerCase() === used.target.trim().toLowerCase();
+    case 'site': {
+      const want = hostOf(declared.target);
+      const got = hostOf(used.target);
+      return want !== undefined && got !== undefined && (got === want || got.endsWith(`.${want}`));
+    }
+    case 'files': {
+      const want = folderOf(declared.target);
+      const got = folderOf(used.target);
+      return got === want || got.startsWith(want === '/' ? '/' : `${want}/`);
+    }
+    default:
+      return false;
+  }
+}
+
+/** The run sources are judged against: the newest ended quiet or findings run with sources. */
+const goodRunOf = (runs: JobRun[]): JobRun | undefined =>
+  runs.find((r) => (r.outcome === 'quiet' || r.outcome === 'findings') && r.sources !== undefined);
+
+/** `runs`: the job's recent runs, newest first (the header shows the newest). */
+export function jobMapModel(job: Job, runs: JobRun[], panels: Panel[]): JobMapModel {
   const map = job.dataMap;
-  const used = lastRun?.sources ?? [];
+  const lastRun = runs[0];
+  const good = goodRunOf(runs);
+  const used = good?.sources ?? [];
   const problems = new Map(
     (lastRun?.data?.sourceProblems ?? []).map((p) => [p.sourceId, p.problem]),
   );
-  const sameSource = (s: { kind: string; target: string }, u: { kind: string; target: string }) =>
-    s.kind === u.kind && s.target === u.target;
 
   const sources: MapSource[] = [];
   if (map) {
     for (const s of map.sources) {
       const problem = problems.get(s.id);
       if (problem !== undefined) sources.push({ ...s, state: 'problem', problem });
-      else if (lastRun && !used.some((u) => sameSource(s, u)))
-        sources.push({ ...s, state: 'unused' });
-      else sources.push({ ...s, state: 'ok' });
+      else if (!good || !isRecordedKind(s.kind)) sources.push({ ...s, state: 'unknown' });
+      else if (used.some((u) => sourceMatches(s, u))) sources.push({ ...s, state: 'ok' });
+      else sources.push({ ...s, state: 'unused' });
     }
   }
   for (const u of used) {
-    const declared = map?.sources.some((s) => sameSource(s, u)) ?? false;
+    const declared = map?.sources.some((s) => sourceMatches(s, u)) ?? false;
     const id = `${map ? 'undeclared' : 'used'}:${u.kind}:${u.target}`;
     if (declared || sources.some((s) => s.id === id)) continue;
     sources.push({
