@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { panelsOf, type Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
+import { useMediaQuery, COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
+import { ArrangeMode } from './ArrangeMode.js';
 import { NeedsALook } from './NeedsALook.js';
 import { PanelGrid } from './PanelGrid.js';
 import { useDashboard } from './use-dashboard.js';
@@ -27,10 +29,10 @@ export function DashboardPane({ projectId }: { projectId: Id }) {
   const { data, loaded, error } = useDashboard(projectId);
   const now = useNow();
   const project = world.projects[projectId];
-  const panels = useMemo(
-    () => panelsOf(world, projectId).filter((p) => !p.layout.hidden),
-    [world, projectId],
-  );
+  const allPanels = useMemo(() => panelsOf(world, projectId), [world, projectId]);
+  const panels = useMemo(() => allPanels.filter((p) => !p.layout.hidden), [allPanels]);
+  const phone = useMediaQuery(COMPACT_TOP_BAR_QUERY);
+  const [arranging, setArranging] = useState(false);
   if (!project) return <p className="pnl-empty">This project is not in the current log.</p>;
   return (
     <section className="dash" aria-label={`dashboard of ${project.name}`}>
@@ -39,12 +41,30 @@ export function DashboardPane({ projectId }: { projectId: Id }) {
           Could not read the dashboard: {error}
         </p>
       )}
-      {panels.length === 0 ? (
+      {arranging && !phone ? (
+        <ArrangeMode
+          projectId={projectId}
+          panels={allPanels}
+          data={loaded ? data : {}}
+          now={now}
+          onClose={() => setArranging(false)}
+        />
+      ) : panels.length === 0 && allPanels.length === 0 ? (
         <p className="muted dash-empty">
           No panels yet. Ask the Waykeeper in the chat what you want to see here.
         </p>
       ) : (
         <>
+          {!phone && allPanels.length > 0 && (
+            <div className="dash-toolbar">
+              <button type="button" className="secondary" onClick={() => setArranging(true)}>
+                Arrange
+              </button>
+            </div>
+          )}
+          {panels.length === 0 && (
+            <p className="muted dash-empty">Every panel is hidden. Arrange shows them again.</p>
+          )}
           <NeedsALook panels={panels} data={data} />
           <PanelGrid panels={panels} data={loaded ? data : {}} now={now} />
         </>
