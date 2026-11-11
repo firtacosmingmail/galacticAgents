@@ -346,6 +346,7 @@
   outline-offset: 2px;
   border-radius: 8px;
 }
+/* The panel is inert while arranging (no focus, no clicks); pointer-events keeps drags clean. */
 .dash-arrange-cell > .dash-panel {
   flex: 1;
   pointer-events: none;

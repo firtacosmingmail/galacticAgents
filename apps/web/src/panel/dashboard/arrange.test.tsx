@@ -97,6 +97,17 @@ afterEach(async () => {
 describe('arrange mode', () => {
   const three = () => [panel('a', 0), panel('b', 1), panel('c', 2)];
 
+  it('makes the panels inert while arranging: their buttons cannot be reached by Tab', async () => {
+    await renderPane(three());
+    const menus = () => screen.getAllByRole('button', { name: 'More actions' });
+    expect(menus()[0]!.closest('[inert]')).toBeNull();
+    startArranging();
+    expect(menus()).toHaveLength(3);
+    for (const button of menus()) expect(button.closest('[inert]')).not.toBeNull();
+    // The arranging controls stay reachable.
+    expect(handle('a').closest('[inert]')).toBeNull();
+  });
+
   it('is not offered on the phone layout', async () => {
     stubMedia([COMPACT_TOP_BAR_QUERY]);
     await renderPane(three());

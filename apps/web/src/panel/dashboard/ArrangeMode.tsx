@@ -223,7 +223,7 @@ export function ArrangeMode({
                   <span aria-hidden="true">✕</span>
                 </button>
               </div>
-              <PanelFrame panel={{ ...panel, layout }} data={data[panelId]} now={now} />
+              <PanelFrame panel={{ ...panel, layout }} data={data[panelId]} now={now} inert />
               <button
                 type="button"
                 className="dash-grip"

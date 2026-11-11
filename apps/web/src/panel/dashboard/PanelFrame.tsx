@@ -70,10 +70,13 @@ export function PanelFrame({
   panel,
   data,
   now,
+  inert = false,
 }: {
   panel: Panel;
   data: PanelData | undefined;
   now: Date;
+  /** Shown but not usable (arrange mode): nothing inside takes focus, clicks or Tab. */
+  inert?: boolean;
 }) {
   const api = useApi();
   const reduced = useReducedMotion();
@@ -175,6 +178,7 @@ export function PanelFrame({
       id={`dash-panel-${panel.id}`}
       ref={articleRef}
       tabIndex={-1}
+      inert={inert}
       className={classes}
       aria-label={panel.title}
       style={{
