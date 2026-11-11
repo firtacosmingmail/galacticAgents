@@ -63,11 +63,11 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 - Plan Task 6.
 
 ### P15-07 — Arrange mode
-- **Status:** in progress · **Depends on:** P15-06 · **Parallel with:** —
+- **Status:** done (2026-11-11) · **Depends on:** P15-06 · **Parallel with:** —
 - Plan Task 7.
 
 ### P15-08 — Phone layout and cards
-- **Status:** todo · **Depends on:** P15-07 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P15-07 · **Parallel with:** —
 - Plan Task 8.
 
 ### P15-09 — Job map
