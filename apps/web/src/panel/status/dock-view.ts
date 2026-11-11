@@ -76,6 +76,14 @@ interface DockViewState {
   showTransient: (view: DockView) => void;
   /** Ends the transient override: the stored choice shows again. */
   endTransient: () => void;
+  /**
+   * A panel the dashboard should scroll to and focus (P15-09: a job map's panel chip). Set by
+   * `showPanel`; the panel's frame consumes it once with `clearFocusPanel`.
+   */
+  focusPanelId: string | undefined;
+  /** Switches to the Dashboard view (stored, like a click on its tab) and asks for `panelId`. */
+  showPanel: (panelId: string) => void;
+  clearFocusPanel: () => void;
   /** Reads the stored choice again, dropping any override (tests, another tab's change). */
   reload: () => void;
 }
@@ -87,6 +95,12 @@ export const useDockView = create<DockViewState>((set) => {
     stored,
     transient: undefined,
     chosenFor: undefined,
+    focusPanelId: undefined,
+    showPanel: (panelId) => {
+      useDockView.getState().setView('dashboard');
+      set({ focusPanelId: panelId });
+    },
+    clearFocusPanel: () => set({ focusPanelId: undefined }),
     setView: (view) => {
       writeDockView(view);
       set({
@@ -101,7 +115,13 @@ export const useDockView = create<DockViewState>((set) => {
       set((s) => (s.transient === undefined ? s : { view: s.stored, transient: undefined })),
     reload: () => {
       const view = readDockView();
-      set({ view, stored: view, transient: undefined, chosenFor: undefined });
+      set({
+        view,
+        stored: view,
+        transient: undefined,
+        chosenFor: undefined,
+        focusPanelId: undefined,
+      });
     },
   };
 });

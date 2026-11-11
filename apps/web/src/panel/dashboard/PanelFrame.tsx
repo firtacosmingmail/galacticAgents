@@ -1,8 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Panel, PanelData } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { useApi } from '../../console/hierarchy/shared.js';
 import { useReducedMotion } from '../../scene/motion.js';
+import { useDockView } from '../status/dock-view.js';
+import { JobMap } from '../jobs/JobMap.js';
 import { revealInbox, revealQuestion } from '../inbox-reveal.js';
 import { celebrated, markCelebrated } from './celebrated.js';
 import { Fireworks } from './Fireworks.js';
@@ -94,6 +96,19 @@ export function PanelFrame({
   const burst = burstFor !== undefined && burstFor === resultId;
   const endBurst = useCallback(() => setBurstFor(undefined), []);
 
+  const [mapOpen, setMapOpen] = useState(false);
+
+  // A job map's panel chip asked for this panel: scroll to it and focus it, once.
+  const articleRef = useRef<HTMLElement>(null);
+  const wanted = useDockView((s) => s.focusPanelId === panel.id);
+  const clearFocusPanel = useDockView((s) => s.clearFocusPanel);
+  useEffect(() => {
+    if (!wanted) return;
+    articleRef.current?.scrollIntoView?.({ block: 'start' });
+    articleRef.current?.focus();
+    clearFocusPanel();
+  }, [wanted, clearFocusPanel]);
+
   const [menu, setMenu] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState<'refresh' | 'clear'>();
@@ -112,6 +127,9 @@ export function PanelFrame({
 
   const paused = data?.status === 'job_paused' || job?.state === 'paused';
   const stopped = data?.status === 'job_stopped' || job?.state === 'stopped';
+  const sourceText = data
+    ? [data.sourceLine, ageText(data.lastGoodAt, now)].filter(Boolean).join(' · ')
+    : '';
   const note = data ? stateNote(panel, data, now) : undefined;
   const classes = [
     'dash-panel',
@@ -129,6 +147,8 @@ export function PanelFrame({
   return (
     <article
       id={`dash-panel-${panel.id}`}
+      ref={articleRef}
+      tabIndex={-1}
       className={classes}
       aria-label={panel.title}
       style={{
@@ -202,9 +222,18 @@ export function PanelFrame({
         </p>
       )}
       <footer className="dash-foot">
-        <span className="dash-source">
-          {data ? [data.sourceLine, ageText(data.lastGoodAt, now)].filter(Boolean).join(' · ') : ''}
-        </span>
+        {jobId && sourceText ? (
+          <button
+            type="button"
+            className="dash-source dash-link"
+            aria-haspopup="dialog"
+            onClick={() => setMapOpen(true)}
+          >
+            {sourceText}
+          </button>
+        ) : (
+          <span className="dash-source">{sourceText}</span>
+        )}
         {jobId && (
           <span className="dash-actions">
             {paused && (
@@ -223,6 +252,7 @@ export function PanelFrame({
           </span>
         )}
       </footer>
+      {mapOpen && jobId && <JobMap jobId={jobId} onClose={() => setMapOpen(false)} />}
       {burst && <Fireworks onDone={endBurst} />}
     </article>
   );

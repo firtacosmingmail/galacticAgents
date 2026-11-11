@@ -98,6 +98,7 @@ const api = {
   dashboard: vi.fn(async () => ({ panels: datas })),
   refreshJob: vi.fn(async () => ({ runId: 'jr-9', started: true })),
   clearPanelHistory: vi.fn(async () => ({})),
+  jobRuns: vi.fn(async () => ({ runs: [] })),
 };
 
 function setWorld() {
@@ -144,6 +145,32 @@ afterEach(async () => {
   cleanup();
   await settle();
   vi.unstubAllGlobals();
+});
+
+describe('the job map from a panel', () => {
+  it('the source line opens the job map, and Escape closes it', async () => {
+    panels = [panel('pn-1', 'tile', { title: 'Churn' })];
+    datas = [data('pn-1', { tile: { value: 4.1 } })];
+    await renderPane();
+    fireEvent.click(screen.getByRole('button', { name: /from job “Count churn”/ }));
+    await settle();
+    const dialog = screen.getByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Gathers from' })).toBeTruthy();
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a requested panel is scrolled to and focused once, then the request clears', async () => {
+    panels = [panel('pn-1', 'tile', { title: 'Churn' }), panel('pn-2', 'text')];
+    datas = [data('pn-1', { tile: { value: 4.1 } }), data('pn-2', { text: 'hi' })];
+    const scroll = vi.fn();
+    Element.prototype.scrollIntoView = scroll;
+    await renderPane();
+    act(() => useDockView.getState().showPanel('pn-2'));
+    expect(scroll).toHaveBeenCalledTimes(1);
+    expect(document.activeElement?.id).toBe('dash-panel-pn-2');
+    expect(useDockView.getState().focusPanelId).toBeUndefined();
+  });
 });
 
 describe('panels render from their data', () => {

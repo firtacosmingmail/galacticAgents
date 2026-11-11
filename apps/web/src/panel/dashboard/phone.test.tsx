@@ -8,6 +8,7 @@ import { stubMedia } from '../../a11y/a11y-fixtures.js';
 import { COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
 import type { Api } from '../../console/api.js';
 import { ApiContext } from '../../console/hierarchy/shared.js';
+import { useDockView } from '../status/dock-view.js';
 import { DashboardPane } from './DashboardPane.js';
 
 /** P15-08 (SPEC decision 156): the phone follows the Mac's order — tiles in a strip, cards below. */
@@ -107,5 +108,12 @@ describe('the phone dashboard', () => {
     expect(
       within(cards).getAllByRole('button', { name: /^Panel c\d$/, expanded: false }),
     ).toHaveLength(1);
+  });
+
+  it('a panel asked for by the job map opens if it was folded', () => {
+    act(() => useDockView.getState().showPanel('c5'));
+    const cards = screen.getByRole('region', { name: 'Panels' });
+    within(cards).getByRole('article', { name: 'Panel c5' });
+    expect(useDockView.getState().focusPanelId).toBeUndefined();
   });
 });

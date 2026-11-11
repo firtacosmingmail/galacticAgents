@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PHONE_OPEN_CARDS, type Panel, type PanelData } from '@galactic/protocol';
+import { useDockView } from '../status/dock-view.js';
 import { NeedsALook } from './NeedsALook.js';
 import { PanelFrame } from './PanelFrame.js';
 
@@ -19,6 +20,13 @@ export function PhoneDashboard({
   now: Date;
 }) {
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(new Set());
+  // A panel asked for by the job map opens if it is folded.
+  const wanted = useDockView((s) => s.focusPanelId);
+  const [seen, setSeen] = useState<string>();
+  if (wanted && wanted !== seen) {
+    setSeen(wanted);
+    setUnfolded((s) => new Set(s).add(wanted));
+  }
   const tiles = panels.filter((p) => p.type === 'tile');
   const cards = panels.filter((p) => p.type !== 'tile');
   return (

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { panelsOf, type Id } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
 import { useMediaQuery, COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
+import { useDockView } from '../status/dock-view.js';
 import { ArrangeMode } from './ArrangeMode.js';
 import { NeedsALook } from './NeedsALook.js';
 import { PanelGrid } from './PanelGrid.js';
@@ -34,6 +35,12 @@ export function DashboardPane({ projectId }: { projectId: Id }) {
   const panels = useMemo(() => allPanels.filter((p) => !p.layout.hidden), [allPanels]);
   const phone = useMediaQuery(COMPACT_TOP_BAR_QUERY);
   const [arranging, setArranging] = useState(false);
+  // A requested panel that is not shown here (hidden, or gone) must not wait for ever.
+  const focusPanelId = useDockView((s) => s.focusPanelId);
+  const clearFocusPanel = useDockView((s) => s.clearFocusPanel);
+  useEffect(() => {
+    if (focusPanelId && !panels.some((p) => p.id === focusPanelId)) clearFocusPanel();
+  }, [focusPanelId, panels, clearFocusPanel]);
   if (!project) return <p className="pnl-empty">This project is not in the current log.</p>;
   return (
     <section className="dash" aria-label={`dashboard of ${project.name}`}>

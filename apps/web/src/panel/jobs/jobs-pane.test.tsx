@@ -297,6 +297,24 @@ describe('the Jobs tab (P10-07)', () => {
     expect(screen.getAllByText(/^Gemini · /).length).toBe(2);
   });
 
+  it('"Details" opens the job map over the list, and Close returns focus to it', async () => {
+    useAppStore.getState().apply(snapshot());
+    const api = { jobRuns: async () => ({ runs }) } as unknown as Api;
+    render(
+      <ApiContext.Provider value={api}>
+        <JobsPane projectId="p-shop" />
+      </ApiContext.Provider>,
+    );
+    const details = screen.getAllByRole('button', { name: 'Details' })[0]!;
+    details.focus();
+    await click(details);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByRole('heading', { name: 'Shown in' })).toBeTruthy();
+    await click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(details);
+  });
+
   it('passes axe', async () => {
     useAppStore.getState().apply(snapshot());
     const api = { jobRuns: async () => ({ runs }) } as unknown as Api;
