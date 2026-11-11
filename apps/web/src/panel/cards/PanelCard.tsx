@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import {
   type PanelDraft,
   type Proposal,
@@ -8,14 +9,16 @@ import { useAppStore } from '../../state/store.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
-import { JobDetails, useMacOnly } from './JobCard.js';
+import { JobDetails, PanelsAffected, useMacOnly, usePanelsAffected } from './JobCard.js';
 import { RejectForm } from './ProposalCard.js';
 
 /**
  * A Waykeeper's panel card (P15-08; SPEC decision 156): add, change or remove one panel of its
  * long-term project's dashboard, with the job part that fills it — an existing job ("No job
  * changes") or a job proposed in the same card (shown as a job card's body). Approve or Reject
- * with a reason, never Edit. A panel grants nothing; a job part that grants new unattended rules
+ * with a reason, never Edit. A job part that changes the job's data map lists the other panels
+ * it leaves without data, with the job card's unticked "Also remove these panels" (the card's own
+ * panel is never one). A panel grants nothing; a job part that grants new unattended rules
  * is approved only where a job card would be (the Mac, or a phone under `autoApproveRemote`).
  */
 
@@ -110,6 +113,11 @@ export function PanelCard({ proposal: p, panel }: { proposal: Proposal; panel: P
   const decide = (d: ProposalDecisionBody) => run(() => api.decide(p.id, d));
   const proposedJob = panel.job && 'propose' in panel.job ? panel.job.propose : undefined;
   const macOnly = useMacOnly(proposedJob);
+  const [alsoRemove, setAlsoRemove] = useState(false);
+  const affected = usePanelsAffected(
+    proposedJob?.action === 'change' ? proposedJob : undefined,
+    panel.panelId,
+  );
   const shown = panel.draft ?? panel.before;
   const changes =
     panel.action === 'change' && panel.before && panel.draft
@@ -138,11 +146,22 @@ export function PanelCard({ proposal: p, panel }: { proposal: Proposal; panel: P
         </ul>
       )}
       <JobPart card={panel} />
+      {affected.length > 0 && p.state !== 'rejected' && (
+        <PanelsAffected panels={affected} checked={alsoRemove} onChange={setAlsoRemove} />
+      )}
       {p.rationale && <p className="muted">{p.rationale}</p>}
       {offline && <OfflineDecisionNote />}
       {p.state !== 'rejected' && (
         <div className="controls">
-          <button disabled={busy || macOnly} onClick={() => decide({ decision: 'approve' })}>
+          <button
+            disabled={busy || macOnly}
+            onClick={() =>
+              decide({
+                decision: 'approve',
+                ...(alsoRemove && affected.length > 0 ? { removePanels: true as const } : {}),
+              })
+            }
+          >
             Approve
           </button>
         </div>

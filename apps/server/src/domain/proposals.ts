@@ -713,9 +713,9 @@ function carryOutPanelCard(
  * these panels" (`removePanels`): a stop's every panel reading the job ("job stopped"), a change's
  * those reading a value the card's data map no longer collects ("no longer reported") — the card
  * the user saw, not the job as edits meanwhile left it; a change that leaves the data map as it
- * was removes nothing.
+ * was removes nothing. For a panel card's job part, the card's own panel (`except`) is never one.
  */
-function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor): void {
+function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor, except?: Id): void {
   if (!card.jobId || (card.action !== 'stop' && card.action !== 'change')) {
     throw new DomainError('invalid', 'only a job stop or change card removes panels');
   }
@@ -728,7 +728,9 @@ function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor): voi
         ? affectedPanels(panels, job.id, card.draft.dataMap)
         : [];
   const reason = card.action === 'stop' ? 'job stopped' : 'no longer reported';
-  for (const panel of affected) removePanel(ctx, panel.id, by, reason);
+  for (const panel of affected) {
+    if (panel.id !== except) removePanel(ctx, panel.id, by, reason);
+  }
 }
 
 /**
@@ -774,8 +776,18 @@ export function decideProposal(
       );
     }
   }
-  if (decision.decision === 'approve' && decision.removePanels && !jobCard) {
-    throw new DomainError('invalid', 'only a job stop or change card removes panels');
+  // A panel card's job part that changes a job may orphan other panels too (its card lists them).
+  const panelJob = panelCard?.job && 'propose' in panelCard.job ? panelCard.job.propose : undefined;
+  if (
+    decision.decision === 'approve' &&
+    decision.removePanels &&
+    !jobCard &&
+    panelJob?.action !== 'change'
+  ) {
+    throw new DomainError(
+      'invalid',
+      'only a job stop or change card, or a panel card that changes a job, removes panels',
+    );
   }
   if (longTerm?.projectId && (decision.decision === 'edit' || decision.decision === 'park')) {
     throw new DomainError(
@@ -813,7 +825,6 @@ export function decideProposal(
   }
   if (jobCard && decision.decision === 'approve') checkRemoteGrant(ctx, jobCard, opts.policyWrite);
   // A panel card's job part is checked the same way, before anything is written (P15-03).
-  const panelJob = panelCard?.job && 'propose' in panelCard.job ? panelCard.job.propose : undefined;
   if (panelJob && decision.decision === 'approve') {
     checkRemoteGrant(ctx, panelJob, opts.policyWrite);
   }
@@ -863,8 +874,14 @@ export function decideProposal(
         // P15-03: the user ticked "also remove these panels" on a stop or change card.
         if (decision.removePanels) removeJobPanels(ctx, jobCard, by ?? { type: 'system' });
       }
-      // A panel card's panel (and its job part) is written with the approval (P15-03).
-      if (panelCard) carryOutPanelCard(ctx, panelCard, by ?? { type: 'system' }, opts.policyWrite);
+      // A panel card's panel (and its job part) is written with the approval (P15-03). The other
+      // panels its job change orphans go first, judged as the card showed them, never its own.
+      if (panelCard) {
+        if (decision.removePanels && panelJob) {
+          removeJobPanels(ctx, panelJob, by ?? { type: 'system' }, panelCard.panelId);
+        }
+        carryOutPanelCard(ctx, panelCard, by ?? { type: 'system' }, opts.policyWrite);
+      }
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
       const made =
         plan || jobCard || panelCard

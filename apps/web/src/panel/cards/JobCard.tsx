@@ -238,16 +238,43 @@ export function useMacOnly(job: ProposalJob | undefined): boolean {
 
 /**
  * The panels a stop or a change that drops collected values leaves without data, as the server
- * works them out when the card is approved with `removePanels` (`removeJobPanels`).
+ * works them out when the card is approved with `removePanels` (`removeJobPanels`). A panel card
+ * passes its job part and the panel it is about (`except`), which is never listed.
  */
-function usePanelsAffected(job: ProposalJob): Panel[] {
+export function usePanelsAffected(job: ProposalJob | undefined, except?: string): Panel[] {
   const world = useAppStore((s) => s.world);
-  if (!job.jobId || (job.action !== 'stop' && job.action !== 'change')) return [];
-  const panels = panelsOf(world, job.projectId);
+  if (!job?.jobId || (job.action !== 'stop' && job.action !== 'change')) return [];
+  const panels = panelsOf(world, job.projectId).filter((p) => p.id !== except);
   if (job.action === 'stop') return affectedPanels(panels, job.jobId);
   const after = job.draft?.dataMap;
   if (!after || JSON.stringify(after) === JSON.stringify(job.before?.draft.dataMap)) return [];
   return affectedPanels(panels, job.jobId, after);
+}
+
+/** "Panels affected:" and the unticked "Also remove these panels" (P15-08, ruling R18). */
+export function PanelsAffected({
+  panels,
+  checked,
+  onChange,
+}: {
+  panels: Panel[];
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="job-panels">
+      <p>Panels affected:</p>
+      <ul className="items" aria-label="Panels affected">
+        {panels.map((panel) => (
+          <li key={panel.id}>{panel.title}</li>
+        ))}
+      </ul>
+      <label>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />{' '}
+        Also remove these panels
+      </label>
+    </div>
+  );
 }
 
 export function JobCard({ proposal: p, job }: { proposal: Proposal; job: ProposalJob }) {
@@ -275,22 +302,7 @@ export function JobCard({ proposal: p, job }: { proposal: Proposal; job: Proposa
       </header>
       <JobDetails job={job} />
       {affected.length > 0 && p.state !== 'rejected' && (
-        <div className="job-panels">
-          <p>Panels affected:</p>
-          <ul className="items" aria-label="Panels affected">
-            {affected.map((panel) => (
-              <li key={panel.id}>{panel.title}</li>
-            ))}
-          </ul>
-          <label>
-            <input
-              type="checkbox"
-              checked={alsoRemove}
-              onChange={(e) => setAlsoRemove(e.target.checked)}
-            />{' '}
-            Also remove these panels
-          </label>
-        </div>
+        <PanelsAffected panels={affected} checked={alsoRemove} onChange={setAlsoRemove} />
       )}
       {p.rationale && <p className="muted">{p.rationale}</p>}
       {offline && <OfflineDecisionNote />}

@@ -296,3 +296,76 @@ describe('the job card lists the panels a stop affects', () => {
     within(screen.getByRole('list', { name: 'Panels affected' })).getByText('Orders today');
   });
 });
+
+describe('a panel card whose job part changes a job lists the other panels it orphans', () => {
+  const panel = (id: string, title: string): Panel =>
+    ({
+      ...fx.panel,
+      id,
+      projectId: 'p-shop',
+      title,
+      source: { kind: 'job', jobId: 'j-1', values: ['orders'] },
+    }) as Panel;
+  const before = { ...jobDraft, unattendedRules: [] };
+  const changing = (dropped: boolean): Proposal =>
+    panelCard({
+      ...base,
+      action: 'change',
+      panelId: 'pn-own',
+      before: panelDraft,
+      draft: {
+        ...panelDraft,
+        title: 'Visits',
+        source: { kind: 'job', jobId: 'j-1', values: ['visits'] },
+      },
+      job: {
+        propose: {
+          ...base,
+          action: 'change',
+          jobId: 'j-1',
+          draft: {
+            ...before,
+            dataMap: dropped
+              ? {
+                  ...dataMap,
+                  collects: [
+                    { name: 'visits', kind: 'number', sourceIds: ['shop_db'], description: '' },
+                  ],
+                  steps: [],
+                }
+              : dataMap,
+          },
+          before: { draft: { ...before, dataMap }, areaId: 'ar-1' },
+        },
+      },
+    });
+
+  it('lists them without the card’s own panel; ticking sends removePanels', async () => {
+    world({ panels: [panel('pn-own', 'Orders today'), panel('pn-2', 'Orders per week')] });
+    show(<ProposalCard proposal={changing(true)} />);
+    const card = screen.getByRole('article');
+    const list = within(card).getByRole('list', { name: 'Panels affected' });
+    expect(
+      within(list)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['Orders per week']);
+    const tick = within(card).getByRole('checkbox', { name: 'Also remove these panels' });
+    expect((tick as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(tick);
+    await act(async () => fireEvent.click(within(card).getByRole('button', { name: 'Approve' })));
+    expect(api.decide).toHaveBeenCalledWith('pr-panel-change', {
+      decision: 'approve',
+      removePanels: true,
+    });
+  });
+
+  it('a job change that keeps the data map lists nothing and approves plainly', async () => {
+    world({ panels: [panel('pn-own', 'Orders today'), panel('pn-2', 'Orders per week')] });
+    show(<ProposalCard proposal={changing(false)} />);
+    expect(screen.queryByRole('list', { name: 'Panels affected' })).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Approve' })));
+    expect(api.decide).toHaveBeenCalledWith('pr-panel-change', { decision: 'approve' });
+  });
+});

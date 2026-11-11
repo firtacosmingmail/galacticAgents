@@ -199,8 +199,9 @@ export type ProposalDecision =
   | {
       decision: 'approve';
       /**
-       * A job stop or change card (P15-03): also remove the dashboard panels the job no longer
-       * fills (`affectedPanels`), as "job stopped" / "no longer reported".
+       * A job stop or change card (P15-03), or a panel card whose job part changes a job: also
+       * remove the dashboard panels the job no longer fills (`affectedPanels`; never the panel
+       * card's own panel), as "job stopped" / "no longer reported".
        */
       removePanels?: true;
     }

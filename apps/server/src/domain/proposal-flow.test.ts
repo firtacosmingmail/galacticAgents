@@ -1110,6 +1110,99 @@ describe('panel cards (P15-03, decision 156)', () => {
     expect(f.tables.panels.all()).toEqual([]);
   });
 
+  it('a panel card whose job part changes the data map removes the other panels it orphans, only when ticked', () => {
+    for (const removePanels of [true, undefined] as const) {
+      const f = dashboard();
+      const collect = (name: string) => ({
+        name,
+        kind: 'number' as const,
+        sourceIds: ['shop'],
+        description: '',
+      });
+      const map = (...names: string[]) => ({
+        sources: [
+          { id: 'shop', label: 'Shop', kind: 'site' as const, target: 'https://shop.test' },
+        ],
+        collects: names.map(collect),
+        steps: [],
+      });
+      f.run((ctx) =>
+        updateJob(ctx, { jobId: f.job.id, changes: { dataMap: map('sales', 'visits') }, by: USER }),
+      );
+      const reads = (title: string, value: string) =>
+        f.run((ctx) =>
+          createPanel(
+            ctx,
+            f.project.id,
+            { ...tile(f.job.id, title), source: { kind: 'job', jobId: f.job.id, values: [value] } },
+            USER,
+          ),
+        ).value;
+      reads('Sales', 'sales');
+      // The card's own panel reads "visits" until the card changes it.
+      const own = reads('Visits', 'visits');
+      const orphan = reads('Visits chart', 'visits');
+      const card = f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action: 'change',
+          panelId: own.id,
+          draft: tile(f.job.id, 'Sales again'),
+          job: {
+            propose: {
+              projectId: f.project.id,
+              waykeeperId: f.wk,
+              action: 'change',
+              jobId: f.job.id,
+              draft: { ...JOB, dataMap: map('sales') },
+            },
+          },
+        }),
+      ).value;
+      f.decide(card, { decision: 'approve', ...(removePanels ? { removePanels } : {}) });
+      const left = f.tables.panels.all().map((p) => p.title);
+      if (removePanels) {
+        expect(left).toEqual(['Sales', 'Sales again']);
+        expect(f.seen.map((e) => e.event)).toContainEqual({
+          type: 'panel.removed',
+          panelId: orphan.id,
+          projectId: f.project.id,
+          by: USER,
+          reason: 'no longer reported',
+        });
+      } else {
+        expect(left).toEqual(['Sales', 'Sales again', 'Visits chart']);
+      }
+      expect(f.tables.panels.get(own.id)?.title).toBe('Sales again');
+    }
+  });
+
+  it('removePanels is refused on a panel card whose job part creates a job', () => {
+    const f = dashboard();
+    const card = f.run((ctx) =>
+      proposePanel(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'create',
+        draft: tile('$new'),
+        job: {
+          propose: {
+            projectId: f.project.id,
+            waykeeperId: f.wk,
+            action: 'create',
+            area: { areaId: f.job.areaId },
+            draft: { ...JOB, name: 'Count visits' },
+          },
+        },
+      }),
+    ).value;
+    expect(() => f.decide(card, { decision: 'approve', removePanels: true })).toThrow(
+      expect.objectContaining({ code: 'invalid' }),
+    );
+    expect(f.card(card.id).state).toBe('pending');
+  });
+
   it('removePanels is refused on a card that is not a job card', () => {
     const f = dashboard();
     const card = f.run((ctx) =>
