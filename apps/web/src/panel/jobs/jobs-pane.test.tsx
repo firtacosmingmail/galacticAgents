@@ -150,11 +150,11 @@ const runs: JobRun[] = [
 ];
 
 const json = (body: unknown) => new Response(JSON.stringify(body));
-const runRoute = vi.fn((url: string) =>
-  new URL(url, 'http://x').pathname === '/api/jobs/j-replies/runs'
-    ? json({ runs } satisfies JobRunsResponse)
-    : undefined,
-);
+const runRoute = vi.fn((url: string) => {
+  const path = new URL(url, 'http://x').pathname;
+  if (path === '/api/projects/p-shop/dashboard') return json({ panels: [] }); // the default tab
+  return path === '/api/jobs/j-replies/runs' ? json({ runs } satisfies JobRunsResponse) : undefined;
+});
 
 beforeEach(() => {
   FakeWebSocket.instances = [];
@@ -183,7 +183,8 @@ const click = async (el: Element) => {
   });
   await settle();
 };
-const toggle = () => within(main()).getByRole('group', { name: /^show the chat/ });
+const toggle = () =>
+  within(main()).getByRole('group', { name: /^show the (dashboard, the )?chat/ });
 const options = () =>
   within(toggle())
     .getAllByRole('button')
@@ -198,8 +199,8 @@ async function openJobs() {
 describe('the Jobs tab (P10-07)', () => {
   it("shows Jobs only for a long-term project's Waykeeper", async () => {
     await openApp('/waykeeper/a-wk-shop', snapshot());
-    expect(options()[3]).toMatch(/^Jobs/);
-    expect(options()).toHaveLength(4);
+    expect(options()[4]).toMatch(/^Jobs/);
+    expect(options()).toHaveLength(5);
     // A dot: a paused job and a waiting finding need Cosmin.
     expect(within(toggle()).getByRole('button', { name: /^Jobs/ }).textContent).toContain(
       '2 need you',
