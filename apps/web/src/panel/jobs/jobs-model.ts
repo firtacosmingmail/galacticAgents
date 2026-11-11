@@ -115,7 +115,10 @@ export function runLine(run: RunLike, now: Date, reason?: string): string {
     case 'failed':
       return `✕ ${when} — ${reason ?? run.summary ?? 'failed'}`;
     case 'interrupted':
-      return `↻ ${when} — cut short; it runs again`;
+      // A refresh (P15-04) is never run again: the schedule stands.
+      return run.purpose === 'refresh'
+        ? `↻ ${when} — refresh cut short`
+        : `↻ ${when} — cut short; it runs again`;
     default: {
       const mark = run.purpose === 'catch_up' ? '↻' : '✓';
       const why =
@@ -125,7 +128,9 @@ export function runLine(run: RunLike, now: Date, reason?: string): string {
             ? ' (retry)'
             : run.purpose === 'follow_up'
               ? ' (follow-up)'
-              : '';
+              : run.purpose === 'refresh'
+                ? ' (refresh)'
+                : '';
       return `${mark} ${when}${why}${tail(run.summary)}`;
     }
   }

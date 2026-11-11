@@ -180,11 +180,22 @@ function crosses(t: Threshold, runs: JobRun[], run: JobRun, name: string, value:
 const arrowOf = (t: Threshold): 'up' | 'down' =>
   t.op === 'above' || t.op === 'rise' ? 'up' : 'down';
 
+/**
+ * The verdict's arrow (ruling R12): the value's movement against the panel's comparison value
+ * (a tile's `compare` run, a series' previous point) — "churn ▼ 0.6 pt"; without one, or with no
+ * change, the limit's own direction.
+ */
+function arrowFor(t: Threshold, value: number, previous: number | undefined): 'up' | 'down' {
+  if (previous === undefined || value === previous) return arrowOf(t);
+  return value > previous ? 'up' : 'down';
+}
+
 function verdictOf(
   limits: PanelLimit[],
   names: string[],
   runs: JobRun[],
   newest: JobRun,
+  previousOf: (name: string) => number | undefined,
 ): PanelData['verdict'] {
   for (const kind of ['very_bad', 'very_good'] as const) {
     for (const limit of limits) {
@@ -193,7 +204,8 @@ function verdictOf(
       const value = newest.numbers?.[limit.value];
       if (!threshold || value === undefined) continue;
       if (crosses(threshold, runs, newest, limit.value, value)) {
-        return { kind, value: limit.value, arrow: arrowOf(threshold), resultId: newest.id };
+        const arrow = arrowFor(threshold, value, previousOf(limit.value));
+        return { kind, value: limit.value, arrow, resultId: newest.id };
       }
     }
   }
@@ -368,7 +380,17 @@ export function evaluatePanel(
   const lastGoodAt = shownRun ? (shownRun.endedAt ?? shownRun.startedAt) : undefined;
   const verdict =
     status === 'ok' && NUMBER_PANELS.has(panel.type) && newest
-      ? verdictOf(panel.limits, panel.type === 'tile' ? names.slice(0, 1) : names, good, newest)
+      ? verdictOf(
+          panel.limits,
+          panel.type === 'tile' ? names.slice(0, 1) : names,
+          good,
+          newest,
+          (name) => {
+            if (panel.type === 'tile') return shown.tile?.previous;
+            const points = shown.series?.find((s) => s.name === name)?.points ?? [];
+            return points.length >= 2 ? points[points.length - 2]!.value : undefined;
+          },
+        )
       : undefined;
   return {
     panelId: panel.id,

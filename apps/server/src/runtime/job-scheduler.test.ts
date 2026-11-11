@@ -1522,6 +1522,38 @@ describe('refresh: a run now (P15-04)', () => {
     expect(errors).toEqual([]);
   });
 
+  it('is refused for an agent: a refresh is the user’s', async () => {
+    const { c, errors } = boot();
+    const { job, wk } = await longTermJob(c);
+    await expect(c.jobs.runNow(job.id, { type: 'agent', id: wk.id })).rejects.toMatchObject({
+      code: 'invalid',
+    });
+    expect(runsOf(c, job.id)).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('is refused while the job waits on its usage-limit question', async () => {
+    const LIMITED: FakeScenario = {
+      steps: [
+        {
+          kind: 'fail',
+          error: 'usage limit reached',
+          reason: 'limit',
+          resetsAt: oct(1, 14).toISOString(),
+        },
+      ],
+    };
+    const { c, clock, errors } = boot({ scenario: () => LIMITED });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    expect(jobNow(c, job.id).state).toBe('active');
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    expect(runsOf(c, job.id)).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
   it('is refused with `limit` when the caps leave no slot; no run row is written', async () => {
     const { c } = boot({
       caps: { maxConcurrentAgents: 1 },

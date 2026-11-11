@@ -206,6 +206,53 @@ describe('evaluatePanel — very bad / very good', () => {
     expect(evaluatePanel(table, job(), runs, NOW).verdict).toBeUndefined();
   });
 
+  it('the arrow follows the value’s movement against the comparison run (ruling R12)', () => {
+    const panel = tile('installs', {
+      limits: [{ value: 'installs', better: 'higher', veryGood: { op: 'above', value: 100 } }],
+    });
+    // Still above 100, but it fell against a week ago: the arrow says so.
+    const fell = newestFirst(
+      run(daysAgo(7), { installs: 180 }),
+      run(daysAgo(0), { installs: 150 }),
+    );
+    expect(evaluatePanel(panel, job(), fell, NOW).verdict).toMatchObject({
+      kind: 'very_good',
+      arrow: 'down',
+    });
+    // No change against the comparison run: the limit's direction.
+    const flat = newestFirst(
+      run(daysAgo(7), { installs: 150 }),
+      run(daysAgo(0), { installs: 150 }),
+    );
+    expect(evaluatePanel(panel, job(), flat, NOW).verdict?.arrow).toBe('up');
+  });
+
+  it('without a previous value the arrow is the limit’s direction', () => {
+    const panel = tile('churn', {
+      limits: [{ value: 'churn', better: 'lower', veryBad: { op: 'above', value: 6 } }],
+    });
+    // A run only two days older is no week comparison: no previous value.
+    const runs = newestFirst(run(daysAgo(2), { churn: 9 }), run(daysAgo(0), { churn: 7 }));
+    expect(evaluatePanel(panel, job(), runs, NOW).verdict).toMatchObject({
+      kind: 'very_bad',
+      arrow: 'up',
+    });
+  });
+
+  it('a series’ arrow compares its latest point with the previous one', () => {
+    const limits = [
+      { value: 'errors', better: 'lower' as const, veryBad: { op: 'above' as const, value: 10 } },
+    ];
+    const chart: Panel = { ...tile('errors', { limits }), type: 'line', display: {} };
+    const rose = newestFirst(run(daysAgo(1), { errors: 4 }), run(daysAgo(0), { errors: 12 }));
+    expect(evaluatePanel(chart, job(), rose, NOW).verdict).toMatchObject({
+      kind: 'very_bad',
+      arrow: 'up',
+    });
+    const easing = newestFirst(run(daysAgo(1), { errors: 20 }), run(daysAgo(0), { errors: 12 }));
+    expect(evaluatePanel(chart, job(), easing, NOW).verdict?.arrow).toBe('down');
+  });
+
   it('a rise without a comparison run judges nothing', () => {
     const panel = tile('churn', {
       limits: [
