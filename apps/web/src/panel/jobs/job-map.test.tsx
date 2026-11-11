@@ -3,6 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyWorld, type Job, type JobRun, type Panel } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
+import { stubMedia } from '../../a11y/a11y-fixtures.js';
+import { COMPACT_TOP_BAR_QUERY } from '../use-media-query.js';
 import { useAppStore } from '../../state/store.js';
 import { useDockView } from '../status/dock-view.js';
 import type { Api } from '../../console/api.js';
@@ -54,6 +56,45 @@ describe('JobMap', () => {
     expect(useDockView.getState().view).toBe('dashboard');
     expect(useDockView.getState().focusPanelId).toBe('pn-1');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('Escape closes it even when focus is on plain text (the body)', async () => {
+    const onClose = open();
+    await screen.findByRole('dialog');
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('Tab cannot leave the dialog', async () => {
+    open();
+    await screen.findByRole('dialog');
+    (document.activeElement as HTMLElement).blur();
+    fireEvent.keyDown(document.body, { key: 'Tab' });
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true);
+  });
+
+  it('a second tap on a node unlights it even while it keeps focus and hover', async () => {
+    open();
+    const crm = (await screen.findByText('CRM')).closest('button')!;
+    act(() => crm.focus());
+    fireEvent.mouseEnter(crm);
+    fireEvent.click(crm);
+    expect(crm.classList.contains('is-lit')).toBe(true);
+    expect(crm.getAttribute('aria-pressed')).toBe('true');
+    fireEvent.click(crm);
+    expect(crm.getAttribute('aria-pressed')).toBe('false');
+    expect(crm.classList.contains('is-lit')).toBe(false);
+    expect(screen.getByRole('dialog').classList.contains('is-highlighting')).toBe(false);
+  });
+
+  it('on a phone the columns stack: links are listed as text and no SVG is drawn', async () => {
+    stubMedia([COMPACT_TOP_BAR_QUERY]);
+    open();
+    await screen.findByRole('dialog');
+    expect(screen.getAllByText('→ Churn').length).toBeGreaterThan(0);
+    expect(document.querySelector('svg.jm-lines')).toBeNull();
+    vi.unstubAllGlobals();
   });
 
   it('Escape and Close both close it', async () => {

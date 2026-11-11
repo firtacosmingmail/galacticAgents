@@ -5,7 +5,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
   type ReactNode,
 } from 'react';
 import { createPortal } from 'react-dom';
@@ -101,26 +100,40 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
       if (opener && opener.isConnected) opener.focus();
     };
   }, []);
-  const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      e.stopPropagation();
-      onClose();
-      return;
-    }
-    if (e.key !== 'Tab' || !dialogRef.current) return;
-    const items = [...dialogRef.current.querySelectorAll<HTMLElement>('button:not([disabled])')];
-    if (items.length === 0) return;
-    const first = items[0]!;
-    const last = items[items.length - 1]!;
-    const here = document.activeElement;
-    if (e.shiftKey && here === first) {
-      e.preventDefault();
-      last.focus();
-    } else if (!e.shiftKey && here === last) {
-      e.preventDefault();
-      first.focus();
-    }
-  };
+  // Escape and Tab are handled on the document, so they work wherever focus is (clicking plain
+  // text in the dialog leaves it on the body) and Tab cannot escape into the background.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+  useEffect(() => {
+    const onKey = (e: globalThis.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        onCloseRef.current();
+        return;
+      }
+      const dialog = dialogRef.current;
+      if (e.key !== 'Tab' || !dialog) return;
+      const items = [...dialog.querySelectorAll<HTMLElement>('button:not([disabled])')];
+      if (items.length === 0) return;
+      const first = items[0]!;
+      const last = items[items.length - 1]!;
+      const here = document.activeElement;
+      if (!dialog.contains(here)) {
+        e.preventDefault();
+        (e.shiftKey ? last : first).focus();
+      } else if (e.shiftKey && here === first) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && here === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, []);
 
   // Connectors: measured between the nodes, again when the window or the content resizes.
   const gridRef = useRef<HTMLDivElement>(null);
@@ -185,17 +198,25 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
   });
   const links = (id: string): ReactNode => {
     if (!stacked) return null;
-    const out = model.edges.filter((e) => e.from === id).map((e) => labels.get(e.to) ?? e.to);
+    const out = model.edges
+      .filter((e) => e.from === id)
+      .map((e) => ({ id: e.to, label: labels.get(e.to) ?? e.to }));
     if (out.length === 0) return null;
     return (
       <ul className="jm-links">
         {out.map((l) => (
-          <li key={l}>→ {l}</li>
+          <li key={l.id}>→ {l.label}</li>
         ))}
       </ul>
     );
   };
-  const tap = (id: string) => () => setPin((p) => (p === id ? undefined : id));
+  // A tap pins the node (a second tap unpins it). The click also drops hover and focus, which a
+  // touch tap or the click itself leaves set, so the second tap really unlights it.
+  const tap = (id: string) => () => {
+    setHover(undefined);
+    setFocus(undefined);
+    setPin((p) => (p === id ? undefined : id));
+  };
 
   const sourceNodeView = (s: MapSource) => {
     const id = sourceNode(s.id);
@@ -235,7 +256,6 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
         aria-modal="true"
         aria-label={`Data map of ${job.name}`}
         className={`jm${lit ? ' is-highlighting' : ''}${stacked ? ' is-stacked' : ''}`}
-        onKeyDown={onKeyDown}
       >
         <header className="jm-head">
           <h2 className="jm-title">{job.name}</h2>
