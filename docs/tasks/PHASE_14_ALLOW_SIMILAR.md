@@ -1,7 +1,7 @@
 # Phase 14 — "Allow similar" per reason
 
-**Current task:** P14-09 (todo) · **Task status:** P14-01..08 done; P14-09 todo
-**Phase status:** 8/9 — feature done (2026-11-09); follow-up P14-09 todo — branch `agent-allow-similar-reasons`
+**Current task:** P14-09 (todo) · **Task status:** P14-01..08, P14-10 done; P14-09 todo
+**Phase status:** 9/10 — feature done (2026-11-09); follow-up P14-09 todo — branch `agent-allow-similar-reasons`
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -32,6 +32,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 7 | P14-07 | Final review fixes. |
 | 8 | P14-08 | Residual permission holes. |
 | 9 | P14-09 | Remaining command-text gaps; sandbox design. |
+| 10 | P14-10 | Chooser says why its button is off. |
 
 P14-01…08 run in order.
 
@@ -92,6 +93,10 @@ P14-01…08 run in order.
   - Other command-string runners not looked into: `tmux new`, `script -c`, `su -c`, `flock -c`, `nodemon --exec`, `entr -s`, `ssh host cmd`.
   - Parked: rustc `-Z pre-link-arg=`/`RUSTFLAGS`, comma parts in `--grep '[a,b]'`, Next.js `[[...slug]]` paths always asking, `permissions.ts` size (~2500 lines).
 - Design question for Cosmin: replace text-guessing for Bash with a sandbox (macOS sandbox profile / SDK sandbox) or a short allow-list of known-safe command shapes.
+
+### P14-10 — The chooser says why its button is off (added 2026-11-11)
+- **Status:** done (2026-11-11) · **Depends on:** P14-05 · **Parallel with:** —
+- Found in Cosmin's test: a card whose only reason was guarded ground (a read of the Steward's saved tool output under `~/.claude`) opened a chooser with no rows and a greyed "Allow and remember ticked", with no word on why. Now a chooser with nothing to tick says "Nothing in this command can be remembered as a rule, so it will ask again next time. Use Allow once to let it run now." and shows only Close; with rows but none ticked it says "Tick at least one row to remember it."
 
 ## Exit criteria (verified 2026-11-09)
 

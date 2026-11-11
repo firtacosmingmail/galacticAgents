@@ -280,6 +280,44 @@ describe('the permission card’s "Allow similar" (P9-17)', () => {
     expect(onStale).toHaveBeenCalledWith('q-install', 'already answered');
   });
 
+  it('says why the button is off: tick a row, or nothing here can be remembered (P14-10)', async () => {
+    world();
+    show(<QuestionCard question={install} />);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
+    );
+    const chooser = await screen.findByRole('group', { name: /Allow from now on/ });
+    expect(chooser.textContent).toMatch(/Tick at least one row to remember it\./);
+    fireEvent.click(within(chooser).getAllByRole('checkbox')[0]!);
+    expect(chooser.textContent).not.toMatch(/Tick at least one row/);
+
+    cleanup();
+    world();
+    api.similarPreview.mockResolvedValueOnce({
+      ...PREVIEW,
+      call: 'grep x /Users/u/.claude/projects/p/tool-results/a.txt',
+      asking: ['grep x /Users/u/.claude/projects/p/tool-results/a.txt'],
+      notRememberable: [
+        {
+          part: 'grep x /Users/u/.claude/projects/p/tool-results/a.txt',
+          reason: 'guarded ground (agent or git configuration): it always asks',
+        },
+      ],
+      options: [],
+    });
+    show(<QuestionCard question={install} />);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /^Allow similar for/ })),
+    );
+    const none = await screen.findByRole('group', { name: /Allow from now on/ });
+    expect(none.textContent).toMatch(
+      /Nothing in this command can be remembered as a rule, so it will ask again next time\. Use Allow once to let it run now\./,
+    );
+    expect(within(none).queryByRole('button', { name: 'Allow and remember ticked' })).toBeNull();
+    fireEvent.click(within(none).getByRole('button', { name: 'Close' }));
+    expect(screen.queryByRole('group', { name: /Allow from now on/ })).toBeNull();
+  });
+
   it('a push call: the chooser opens, and the server’s rows for its other reasons show (P14-07)', async () => {
     world();
     const push: Question = {

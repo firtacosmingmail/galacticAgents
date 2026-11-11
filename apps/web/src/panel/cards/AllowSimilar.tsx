@@ -206,6 +206,8 @@ export function AllowSimilar({
   const data = preview.status === 'ready' ? preview.data : undefined;
   const offered = data?.options.filter((o) => o.available) ?? [];
   const unavailable = data?.options.filter((o) => !o.available) ?? [];
+  // P14-10: a chooser with nothing to tick says so instead of showing a button that never enables.
+  const nothingToRemember = !!data && !data.refused && offered.length === 0;
 
   return (
     <>
@@ -317,23 +319,34 @@ export function AllowSimilar({
                   {` Not offered: ${o.reason ?? 'unavailable'}.`}
                 </p>
               ))}
+              {nothingToRemember && (
+                <p>
+                  Nothing in this command can be remembered as a rule, so it will ask again next
+                  time. Use Allow once to let it run now.
+                </p>
+              )}
               {!data.allowed && (
                 <p className="muted">
                   Only the Mac (or a phone when remote auto-approval is on) can make a rule.
                 </p>
               )}
+              {!nothingToRemember && data.allowed && digests.length === 0 && (
+                <p className="muted">Tick at least one row to remember it.</p>
+              )}
             </>
           )}
           <div className="controls">
-            <button
-              type="button"
-              disabled={busy || !data || !!data.refused || !data.allowed || digests.length === 0}
-              onClick={() => void allow()}
-            >
-              Allow and remember ticked
-            </button>
+            {!nothingToRemember && (
+              <button
+                type="button"
+                disabled={busy || !data || !!data.refused || !data.allowed || digests.length === 0}
+                onClick={() => void allow()}
+              >
+                Allow and remember ticked
+              </button>
+            )}
             <button type="button" className="secondary" onClick={close}>
-              Cancel
+              {nothingToRemember ? 'Close' : 'Cancel'}
             </button>
           </div>
           <ErrorLine error={error} />
