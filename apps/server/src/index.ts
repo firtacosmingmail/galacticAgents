@@ -507,6 +507,7 @@ const app = buildApp({
   agyBridge,
   runtime: composed.runtime,
   commands: composed.commands,
+  jobs: composed.jobs,
   ...(composed.processes ? { processes: composed.processes } : {}),
   settings,
   opener,

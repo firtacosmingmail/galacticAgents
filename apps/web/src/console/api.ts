@@ -50,6 +50,10 @@ import type {
   RunPreviewResponse,
   RunsResponse,
   JobRunsResponse,
+  ArrangePanelsRequest,
+  ClearJobValuesResponse,
+  DashboardResponse,
+  RefreshJobResponse,
   RuntimesInfo,
   StartRunBody,
   StartRunResponse,
@@ -421,6 +425,28 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
       call<JobRunsResponse>(
         'GET',
         `/api/jobs/${encodeURIComponent(jobId)}/runs${queryString({ limit })}`,
+      ),
+    /** A long-term project's dashboard: every panel's data now, in order (P15-04). */
+    dashboard: (projectId: string) =>
+      call<DashboardResponse>('GET', `/api/projects/${encodeURIComponent(projectId)}/dashboard`),
+    /** Runs the job now, or gives the run already going (`started: false`; the phone too). */
+    refreshJob: (jobId: string) =>
+      call<RefreshJobResponse>('POST', `/api/jobs/${encodeURIComponent(jobId)}/refresh`),
+    /** The panel ignores the runs before now (after the confirmation; cannot be undone). */
+    clearPanelHistory: (panelId: string) =>
+      call<Record<string, never>>(
+        'POST',
+        `/api/panels/${encodeURIComponent(panelId)}/clear-history`,
+      ),
+    /** Deletes the job's stored values; gives the panels reading it (cannot be undone). */
+    clearJobValues: (jobId: string) =>
+      call<ClearJobValuesResponse>('POST', `/api/jobs/${encodeURIComponent(jobId)}/clear-values`),
+    /** Places every panel of the dashboard (the user's arrange mode). */
+    arrangePanels: (projectId: string, layouts: ArrangePanelsRequest['layouts']) =>
+      call<Record<string, never>>(
+        'PUT',
+        `/api/projects/${encodeURIComponent(projectId)}/dashboard/layout`,
+        { layouts } satisfies ArrangePanelsRequest,
       ),
     /** A run's output after `after` (a `seq`), oldest first, `limit` chunks at most. */
     runOutput: (runId: string, query: { after?: number; limit?: number } = {}) =>

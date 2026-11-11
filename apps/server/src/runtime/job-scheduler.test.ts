@@ -1455,3 +1455,87 @@ describe("a run's end wakes no one (P10-04)", () => {
     expect(wk.prompts()).toHaveLength(turnsBefore);
   });
 });
+
+describe('refresh: a run now (P15-04)', () => {
+  it('pressed twice gives one run: the second returns its id; the end leaves nextRunAt and the window alone (Review Focus 2)', async () => {
+    let spawns = 0;
+    const { c, clock, errors } = boot({ scenario: () => (spawns++ === 0 ? ASKS : ECHO) });
+    const { job } = await longTermJob(c);
+    const nextRunAt = jobNow(c, job.id).nextRunAt;
+    expect(nextRunAt).toBe(oct(1, 9).toISOString());
+    setTo(clock, oct(1, 8, 10));
+
+    const first = await c.jobs.runNow(job.id, USER);
+    expect(first.started).toBe(true);
+    expect(c.log.tables.jobRuns.get(first.runId)).toMatchObject({
+      purpose: 'refresh',
+      coversFrom: job.createdAt,
+    });
+    expect(stewardsOf(c, job.taskId)).toHaveLength(1);
+    expect(await c.jobs.runNow(job.id, USER)).toEqual({ runId: first.runId, started: false });
+    expect(stewardsOf(c, job.taskId)).toHaveLength(1);
+
+    const asked = c.log.tables.questions.all().find((q) => q.status === 'open')!;
+    await c.commands.answerQuestion({ questionId: asked.id, answer: 'the new ones', by: USER });
+    await until(ended(c, job.id), 'the refresh run to end');
+    expect(jobNow(c, job.id)).toMatchObject({
+      nextRunAt,
+      lastRun: { runId: first.runId, purpose: 'refresh', outcome: 'quiet' },
+    });
+
+    // The scheduled run is still for 09:00 and covers from where it did before the refresh.
+    setTo(clock, oct(1, 9));
+    expect((await c.jobs.tick()).started).toHaveLength(1);
+    expect(runsOf(c, job.id)[1]).toMatchObject({ purpose: 'scheduled', coversFrom: job.createdAt });
+    expect(errors).toEqual([]);
+  });
+
+  it('a refresh cut short does not make the job due', async () => {
+    const { c, clock } = boot({ scenario: () => ASKS });
+    const { job } = await longTermJob(c);
+    const nextRunAt = jobNow(c, job.id).nextRunAt;
+    setTo(clock, oct(1, 8, 10));
+    const { runId } = await c.jobs.runNow(job.id, USER);
+    const steward = c.log.tables.jobRuns.get(runId)!.agentId!;
+    await c.runtime.stop(steward, SYSTEM);
+    clock.advance(60_000);
+    const report = await c.jobs.tick();
+    expect(report).toMatchObject({ started: [], interrupted: [runId] });
+    expect(jobNow(c, job.id).nextRunAt).toBe(nextRunAt);
+    clock.advance(60_000);
+    expect((await c.jobs.tick()).started).toEqual([]);
+  });
+
+  it('is refused while the job is paused or stopped, or its project paused', async () => {
+    const { c, errors } = boot();
+    const { job, project } = await longTermJob(c);
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'pause' }, USER);
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'resume' }, USER);
+
+    await c.commands.setJobState({ jobId: job.id, state: 'paused', by: USER });
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await c.commands.setJobState({ jobId: job.id, state: 'stopped', by: USER });
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(c.jobs.runNow('j-nope', USER)).rejects.toMatchObject({ code: 'not_found' });
+    expect(runsOf(c, job.id)).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('is refused with `limit` when the caps leave no slot; no run row is written', async () => {
+    const { c } = boot({
+      caps: { maxConcurrentAgents: 1 },
+      scenario: (spawn) => (spawn.prompt === 'blocker' ? ASKS : ECHO),
+    });
+    const { job } = await longTermJob(c);
+    const spawned = await c.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'blocker',
+      cwd: '/w/other',
+    });
+    expect(spawned.ok).toBe(true);
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'limit' });
+    expect(runsOf(c, job.id)).toEqual([]);
+  });
+});

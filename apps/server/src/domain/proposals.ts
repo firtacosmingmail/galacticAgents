@@ -678,6 +678,8 @@ function carryOutPanelCard(
   by: Actor,
   write: PolicyWrite | undefined,
 ): void {
+  // Every action needs the dashboard's project still open, not only a new panel (Task 3 review).
+  dashboardProject(ctx, card.projectId);
   let created: Job | undefined;
   if (card.job && 'propose' in card.job) {
     checkRemoteGrant(ctx, card.job.propose, write);
@@ -709,7 +711,9 @@ function carryOutPanelCard(
 /**
  * The panels an approved job stop or change card also removes when the user ticked "also remove
  * these panels" (`removePanels`): a stop's every panel reading the job ("job stopped"), a change's
- * those reading a value the job no longer collects ("no longer reported").
+ * those reading a value the card's data map no longer collects ("no longer reported") — the card
+ * the user saw, not the job as edits meanwhile left it; a change that leaves the data map as it
+ * was removes nothing.
  */
 function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor): void {
   if (!card.jobId || (card.action !== 'stop' && card.action !== 'change')) {
@@ -720,8 +724,8 @@ function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor): voi
   const affected =
     card.action === 'stop'
       ? affectedPanels(panels, job.id)
-      : job.dataMap
-        ? affectedPanels(panels, job.id, job.dataMap)
+      : card.draft?.dataMap && !same(card.draft.dataMap, card.before?.draft.dataMap)
+        ? affectedPanels(panels, job.id, card.draft.dataMap)
         : [];
   const reason = card.action === 'stop' ? 'job stopped' : 'no longer reported';
   for (const panel of affected) removePanel(ctx, panel.id, by, reason);

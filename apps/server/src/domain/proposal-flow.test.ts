@@ -1125,4 +1125,104 @@ describe('panel cards (P15-03, decision 156)', () => {
       expect.objectContaining({ code: 'invalid' }),
     );
   });
+
+  it('a change card with removePanels removes what the card showed, not what the job became meanwhile (Task 3 review)', () => {
+    const f = dashboard();
+    const collect = (name: string) => ({
+      name,
+      kind: 'number' as const,
+      sourceIds: ['shop'],
+      description: '',
+    });
+    const map = (...names: string[]) => ({
+      sources: [{ id: 'shop', label: 'Shop', kind: 'site' as const, target: 'https://shop.test' }],
+      collects: names.map(collect),
+      steps: [],
+    });
+    f.run((ctx) =>
+      updateJob(ctx, {
+        jobId: f.job.id,
+        changes: { dataMap: map('sales', 'visits', 'orders') },
+        by: USER,
+      }),
+    );
+    for (const value of ['sales', 'visits', 'orders']) {
+      f.run((ctx) =>
+        createPanel(
+          ctx,
+          f.project.id,
+          { ...tile(f.job.id, value), source: { kind: 'job', jobId: f.job.id, values: [value] } },
+          USER,
+        ),
+      );
+    }
+    // A card that only renames the job: its data map is unchanged, so it removes nothing — even
+    // after the user dropped `visits` from the job meanwhile.
+    const rename = f.run((ctx) =>
+      proposeJob(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'change',
+        jobId: f.job.id,
+        changes: { name: 'Count the sales daily' },
+      }),
+    ).value;
+    f.run((ctx) =>
+      updateJob(ctx, { jobId: f.job.id, changes: { dataMap: map('sales', 'orders') }, by: USER }),
+    );
+    f.decide(rename, { decision: 'approve', removePanels: true });
+    expect(f.tables.panels.all().map((p) => p.title)).toEqual(['sales', 'visits', 'orders']);
+
+    // A card that drops `orders`: it removes the `orders` panel it showed, not `visits` too (the
+    // card's map still collects `visits`).
+    f.run((ctx) =>
+      updateJob(ctx, {
+        jobId: f.job.id,
+        changes: { dataMap: map('sales', 'visits', 'orders') },
+        by: USER,
+      }),
+    );
+    const drop = f.run((ctx) =>
+      proposeJob(ctx, {
+        projectId: f.project.id,
+        waykeeperId: f.wk,
+        action: 'change',
+        jobId: f.job.id,
+        changes: { dataMap: map('sales', 'visits') },
+      }),
+    ).value;
+    f.run((ctx) =>
+      updateJob(ctx, { jobId: f.job.id, changes: { name: 'Renamed meanwhile' }, by: USER }),
+    );
+    f.decide(drop, { decision: 'approve', removePanels: true });
+    expect(f.tables.panels.all().map((p) => p.title)).toEqual(['sales', 'visits']);
+  });
+
+  it('a change or removal card is refused once the project is no longer open (Task 3 review)', () => {
+    for (const action of ['change', 'remove'] as const) {
+      const f = dashboard();
+      const panel = f.run((ctx) => createPanel(ctx, f.project.id, tile(f.job.id), USER)).value;
+      const card = f.run((ctx) =>
+        proposePanel(ctx, {
+          projectId: f.project.id,
+          waykeeperId: f.wk,
+          action,
+          panelId: panel.id,
+          ...(action === 'change'
+            ? { draft: tile(f.job.id, 'Sales today'), job: { use: f.job.id } }
+            : {}),
+        }),
+      ).value;
+      f.run((ctx) => {
+        ctx.tables.projects.upsert({
+          ...ctx.tables.projects.get(f.project.id)!,
+          state: 'completed',
+        });
+      });
+      expect(() => f.decide(card, { decision: 'approve' }), action).toThrow(
+        expect.objectContaining({ code: 'invalid' }),
+      );
+      expect(f.tables.panels.get(panel.id)?.title, action).toBe('Sales');
+    }
+  });
 });

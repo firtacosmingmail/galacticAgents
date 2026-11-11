@@ -8,16 +8,19 @@ import {
   type Agent,
   type Event,
   type EventEnvelope,
+  type FollowUp,
   type Id,
   type Job,
   type JobChanges,
   type JobRun,
   type JobRunOutcome,
+  type ModelChoice,
   type RunData,
   type PermissionAction,
 } from '@galactic/protocol';
 import { jobRunPrompt } from '../brains/job-prompt.js';
 import type { Commands } from '../domain/commands.js';
+import { DomainError } from '../domain/errors.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
@@ -56,6 +59,12 @@ export { JOB_TICK_MS };
  * Steward reported (`run.meta.report`, written by `report_run`) or `quiet` with its last text, and
  * the Steward is stopped; a failed Steward fails its run. Job-run Stewards report to no one and
  * wake no one (`steward-reports.ts`, `wake.ts`).
+ *
+ * **Refresh** (P15-04; SPEC decision 156): `runNow` starts a `refresh` run of an active job at once,
+ * through the same queue, or returns the run already going. It is the user's, refused while the
+ * job or its project is paused (or the job stopped, or waiting on a usage limit) and when the caps
+ * leave no slot (`limit`); a refresh run never moves the job's `nextRunAt` nor its catch-up window
+ * (`job-runs.ts`).
  *
  * A Steward stopped by its provider's usage limit (P11-07, decision 148) ends its run `limited`:
  * the job stays active, nothing pauses, no failure question — `limits.askForRun` opens the one
@@ -214,6 +223,70 @@ export class JobScheduler {
     );
   }
 
+  /**
+   * Refresh (P15-04): runs the job now, as purpose `refresh`, or returns the run already going
+   * (`started: false`) — one run per job at a time. Refused (`invalid`) for an agent, a job that
+   * is not active, a project that is paused or finished, and a job waiting on its usage-limit
+   * question; refused (`limit`) when the caps leave no slot (no run row is written). Hard caps
+   * apply to the run's Steward as to any run's.
+   */
+  async runNow(jobId: Id, by: Actor): Promise<{ runId: Id; started: boolean }> {
+    const outcome = await this.enqueue<{ runId: Id; started: boolean } | DomainError>(
+      async () => {
+        try {
+          return await this.refresh(jobId, by);
+        } catch (error) {
+          // A refusal goes back to whoever asked, never to `onError`.
+          if (error instanceof DomainError) return error;
+          throw error;
+        }
+      },
+      () => new DomainError('conflict', 'the job scheduler has stopped'),
+    );
+    if (outcome instanceof DomainError) throw outcome;
+    return outcome;
+  }
+
+  private async refresh(jobId: Id, by: Actor): Promise<{ runId: Id; started: boolean }> {
+    const { log, runtime } = this.opts;
+    const { tables } = log;
+    if (by.type === 'agent') {
+      throw new DomainError('invalid', 'a refresh is the user’s: an agent cannot ask for one');
+    }
+    const job = tables.jobs.get(jobId);
+    if (!job) throw new DomainError('not_found', `no job ${jobId}`);
+    if (job.state !== 'active') {
+      throw new DomainError('invalid', `job ${job.name} is ${job.state}; it cannot be refreshed`);
+    }
+    const owner = tables.projects.get(job.projectId);
+    if (!owner || FINISHED_WORK.has(owner.state) || owner.state === 'paused') {
+      throw new DomainError(
+        'invalid',
+        `the project is ${owner?.state ?? 'gone'}; job ${job.name} cannot be refreshed`,
+      );
+    }
+    if (job.runningRunId) return { runId: job.runningRunId, started: false };
+    const limit = job.limitQuestionId ? tables.questions.get(job.limitQuestionId) : undefined;
+    if (limit && (limit.status === 'open' || limit.answer === LIMIT_WAIT)) {
+      throw new DomainError(
+        'invalid',
+        `job ${job.name} waits for its usage limit; answer its question first`,
+      );
+    }
+    const supervisor = this.waykeeperOf(job.projectId);
+    const slot = runtime.caps.canSpawn({
+      role: 'steward',
+      ...(supervisor ? { supervisorId: supervisor.id, supervisorRole: 'waykeeper' as const } : {}),
+    });
+    if (!slot.ok) throw new DomainError('limit', slot.reason);
+    const now = this.now();
+    const run = log.runCommand((ctx) =>
+      startJobRun(ctx, { jobId: job.id, purpose: 'refresh', dueAt: now.toISOString() }),
+    ).value;
+    await this.spawnRun(job, run, supervisor, emptyReport(), {});
+    return { runId: run.id, started: true };
+  }
+
   private enqueue<T>(fn: () => Promise<T>, idle: () => T): Promise<T> {
     const next = this.chain.then(() => (this.disposed ? idle() : fn()));
     this.chain = next.catch((error: unknown) => this.opts.onError(error));
@@ -260,9 +333,14 @@ export class JobScheduler {
     if (!job.nextRunAt) return undefined;
     let due = new Date(job.nextRunAt);
     // A run cut short is run again for the occurrence it was for (its lateness makes it a
-    // catch-up run), not for the moment it was found cut short.
+    // catch-up run), not for the moment it was found cut short. A follow-up or a refresh was for
+    // no occurrence: the schedule stands as it is.
     const last = job.lastRun;
-    if (last?.outcome === 'interrupted' && last.purpose !== 'follow_up') {
+    if (
+      last?.outcome === 'interrupted' &&
+      last.purpose !== 'follow_up' &&
+      last.purpose !== 'refresh'
+    ) {
       const cutShort = this.opts.log.tables.jobRuns.get(last.runId);
       // A run the user stopped kept its schedule (ruling R9): nothing to run again.
       const kept = cutShort?.meta?.['keptSchedule'] === true;
@@ -285,7 +363,7 @@ export class JobScheduler {
   }
 
   private async startIfDue(jobId: Id, report: JobTickReport): Promise<void> {
-    const { log, commands, runtime } = this.opts;
+    const { log, runtime } = this.opts;
     const { tables } = log;
     const job = tables.jobs.get(jobId);
     if (!job || job.state !== 'active') return;
@@ -356,7 +434,26 @@ export class JobScheduler {
       return started;
     }).value;
     report.started.push(run.id);
+    await this.spawnRun(job, run, supervisor, report, {
+      ...(followUp ? { followUp } : {}),
+      ...(switchTo ? { switchTo } : {}),
+    });
+  }
 
+  /**
+   * Spawns the Steward of a run just started (a due run or a refresh): on the job's hidden task,
+   * supervised by the project's Waykeeper row. A run that cannot get one ends `failed` (no
+   * Waykeeper, a refusal), or `interrupted` when the caps refused it after all.
+   */
+  private async spawnRun(
+    job: Job,
+    run: JobRun,
+    supervisor: Agent | undefined,
+    report: JobTickReport,
+    { followUp, switchTo }: { followUp?: FollowUp; switchTo?: ModelChoice },
+  ): Promise<void> {
+    const { log, commands, runtime } = this.opts;
+    const { tables } = log;
     if (!supervisor) {
       this.fail(run.id, 'the project has no Waykeeper to supervise its runs');
       report.ended.push(run.id);

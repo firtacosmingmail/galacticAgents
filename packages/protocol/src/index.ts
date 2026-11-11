@@ -36,3 +36,4 @@ export * from './schedule.js';
 export * from './launch-flags.js';
 export * from './waykeeper-approvals.js';
 export * from './dashboard.js';
+export * from './dashboard-eval.js';
