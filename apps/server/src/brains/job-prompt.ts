@@ -33,6 +33,7 @@ const PURPOSE_TEXT: Record<JobRun['purpose'], string> = {
   catch_up: 'a catch-up run (Mission Control missed the scheduled time)',
   retry: 'a retry after a failed run',
   follow_up: 'a follow-up run, to carry out what Cosmin approved',
+  refresh: 'a refresh run, started by Cosmin from the dashboard to update its panels',
 };
 
 function money(amount: number | undefined, currency: string | undefined): string {

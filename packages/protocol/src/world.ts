@@ -4,6 +4,7 @@ import type { Deliverable, RunSummary } from './deliverables.js';
 import type { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
 import { foldProposalMeta, type ProposalMetaChanges } from './domain.js';
 import { applyChanges, type EventEnvelope } from './events.js';
+import { type Panel } from './dashboard.js';
 import type { Area, Job } from './long-term.js';
 import type { Id, Meta } from './primitives.js';
 import { summarize, type SystemSummary } from './summary.js';
@@ -42,6 +43,8 @@ export interface WorldState {
    */
   areas: Record<Id, Area>;
   jobs: Record<Id, Job>;
+  /** The long-term projects' dashboard panels (P15-01). The snapshot's `panels` (absent: none). */
+  panels: Record<Id, Panel>;
 }
 
 export const emptyWorld = (): WorldState => ({
@@ -57,6 +60,7 @@ export const emptyWorld = (): WorldState => ({
   deliverables: {},
   areas: {},
   jobs: {},
+  panels: {},
 });
 
 const byId = <T extends { id: Id }>(items: T[]): Record<Id, T> =>
@@ -76,6 +80,7 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     deliverables: byId(snapshot.deliverables ?? []),
     areas: byId(snapshot.areas ?? []),
     jobs: byId(snapshot.jobs ?? []),
+    panels: byId(snapshot.panels ?? []),
   };
 }
 
@@ -571,6 +576,31 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
     case 'job_run.started':
     case 'job_run.ended':
       return next; // run history is REST (`GET /api/jobs/:id/runs`)
+
+    // Dashboard panels (P15-01). A world built before them may lack the record.
+    case 'panel.created':
+      return { ...next, panels: { ...(next.panels ?? {}), [event.panel.id]: event.panel } };
+    case 'panel.updated':
+      return {
+        ...next,
+        panels: patch(next.panels ?? {}, event.panelId, { ...event.changes, updatedAt: at }),
+      };
+    case 'panel.removed': {
+      const { [event.panelId]: _removed, ...rest } = next.panels ?? {};
+      return { ...next, panels: rest };
+    }
+    case 'panels.arranged': {
+      const panels = { ...(next.panels ?? {}) };
+      for (const { panelId, layout } of event.layouts) {
+        const panel = panels[panelId];
+        if (panel && panel.projectId === event.projectId) {
+          panels[panelId] = { ...panel, layout, updatedAt: at };
+        }
+      }
+      return { ...next, panels };
+    }
+    case 'job.values_cleared':
+      return next; // the run data is on the server; the command deletes it
   }
 }
 
@@ -613,4 +643,11 @@ function withoutRecorded(projects: Record<Id, Project>, id: Id): Record<Id, Proj
   if (!project?.recordedApprovals) return projects;
   const { recordedApprovals: _old, ...rest } = project;
   return { ...projects, [id]: rest };
+}
+
+/** A project's dashboard panels, in the order Cosmin arranged them. */
+export function panelsOf(world: Pick<WorldState, 'panels'>, projectId: Id): Panel[] {
+  return Object.values(world.panels ?? {})
+    .filter((p) => p.projectId === projectId)
+    .sort((a, b) => a.layout.order - b.layout.order || a.createdAt.localeCompare(b.createdAt));
 }

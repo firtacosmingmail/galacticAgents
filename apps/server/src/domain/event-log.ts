@@ -421,6 +421,7 @@ export class EventLog {
       deliverables: this.tables.deliverables.all(),
       areas: this.tables.areas.all(),
       jobs: this.tables.jobs.all(),
+      panels: this.tables.panels.all(),
     }))();
   }
 }

@@ -16,6 +16,7 @@ import { AgentSpend } from './budget.js';
 import { StorageHealth } from './storage.js';
 import { Deliverable, RunOutputChunk } from './deliverables.js';
 import { Area, Job } from './long-term.js';
+import { Panel } from './dashboard.js';
 
 // ---------------------------------------------------------------------------
 // WebSocket protocol (TECHNOLOGY §6.3). Client state is derived from the stream only.
@@ -127,6 +128,8 @@ export const SnapshotMessage = z.object({
    */
   areas: z.array(Area).optional(),
   jobs: z.array(Job).optional(),
+  /** Every dashboard panel at `seq` (P15-01). Absent from older servers: none. */
+  panels: z.array(Panel).optional(),
   /**
    * Whether the database takes writes (P8-09): runtime state, never an event (a full disk could
    * not log it). Absent from older servers: taken as `ok`.

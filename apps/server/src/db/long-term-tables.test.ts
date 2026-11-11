@@ -143,7 +143,7 @@ describe('long-term tables (P10-01)', () => {
       agents: t.agents.all(),
     };
 
-    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19]);
+    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19, 20]);
     const after = tables(db);
     expect(after.bodies.all()).toEqual(before.bodies);
     expect(after.questions.all()).toEqual(before.questions);
@@ -181,5 +181,92 @@ describe('long-term tables (P10-01)', () => {
     const snap = log.snapshot();
     expect(snap.areas).toEqual([fx.area]);
     expect(snap.jobs).toEqual([fx.job]);
+  });
+
+  it('puts the panels in the snapshot (P15-01)', () => {
+    const log = new EventLog(openDatabase(':memory:'));
+    expect(log.snapshot()).toMatchObject({ panels: [] });
+    seed(log.tables);
+    log.tables.panels.insert(fx.panel);
+    expect(log.snapshot().panels).toEqual([fx.panel]);
+  });
+});
+
+describe('dashboard tables (P15-01)', () => {
+  it('round-trips a panel, with and without its optional fields', () => {
+    const t = tables(openDatabase(':memory:'));
+    seed(t);
+    const full = {
+      ...fx.panel,
+      id: 'pn-2',
+      type: 'line' as const,
+      display: { rangeDays: 30 as const, format: 'money' as const, currency: 'EUR', unit: '€' },
+      limits: [
+        {
+          value: 'revenue',
+          better: 'higher' as const,
+          veryBad: { op: 'fall' as const, percent: 20, vs: 'week' as const },
+          veryGood: { op: 'above' as const, value: 1000 },
+        },
+      ],
+      layout: { order: 2, w: 4 as const, h: 2 as const, hidden: true as const },
+      historyFrom: '2026-10-01T00:00:00.000Z',
+      removalSuggestedAt: '2026-10-29T00:00:00.000Z',
+      meta: { note: 'x' },
+    };
+    t.panels.insert(fx.panel);
+    t.panels.insert(full);
+    t.panels.insert({ ...fx.panel, id: 'pn-3', type: 'status', source: { kind: 'tasks' } });
+    expect(t.panels.get('pn-1')).toEqual(fx.panel);
+    expect(t.panels.get('pn-2')).toEqual(full);
+    expect(t.panels.get('pn-3')?.source).toEqual({ kind: 'tasks' });
+    t.panels.delete('pn-3');
+    expect(t.panels.all().map((p) => p.id)).toEqual(['pn-1', 'pn-2']);
+  });
+
+  it('refuses a panel of an unknown project', () => {
+    const t = tables(openDatabase(':memory:'));
+    seed(t);
+    expect(() => t.panels.insert({ ...fx.panel, projectId: 'p-nowhere' })).toThrow(/FOREIGN KEY/);
+  });
+
+  it('round-trips a job with a data map and a run with data and sources', () => {
+    const t = tables(openDatabase(':memory:'));
+    seed(t);
+    t.areas.insert(fx.area);
+    const dataMap = {
+      sources: [{ id: 'crm', label: 'CRM', kind: 'mcp' as const, target: 'crm-server' }],
+      collects: [
+        {
+          name: 'messages',
+          kind: 'number' as const,
+          sourceIds: ['crm'],
+          description: 'New messages',
+        },
+      ],
+      steps: [{ text: 'Count them', uses: ['crm'], produces: ['messages'] }],
+    };
+    const job = { ...fx.job, dataMap };
+    t.jobs.insert(job);
+    const run = {
+      ...fx.jobRun,
+      purpose: 'refresh' as const,
+      data: {
+        tables: {
+          plans: {
+            columns: ['plan', 'n'],
+            rows: [
+              ['pro', 3],
+              ['free', null],
+            ],
+          },
+        },
+        texts: { note: 'All fine.' },
+      },
+      sources: [{ kind: 'mcp' as const, target: 'crm-server' }],
+    };
+    t.jobRuns.insert(run);
+    expect(t.jobs.get('j-1')).toEqual(job);
+    expect(t.jobRuns.get('jr-2')).toEqual(run);
   });
 });

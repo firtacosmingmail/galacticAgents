@@ -4,6 +4,7 @@ import { PermissionRule } from './domain.js';
 import { RequestOrigin } from './enums.js';
 import { LONG_TERM_LIMITS, PublishContext } from './long-term-questions.js';
 import { Provider } from './providers.js';
+import { JobDataMap, RunData, UsedSource } from './dashboard.js';
 import { Id, Meta, Timestamp } from './primitives.js';
 
 /**
@@ -90,7 +91,7 @@ export type JobRunOutcome = z.infer<typeof JobRunOutcome>;
  * Why a run started: on time, late (`catch_up`: due more than two ticks before it started), after
  * a failure was fixed (`retry`), or to carry out an approved send or spend (`follow_up`).
  */
-export const JobRunPurpose = z.enum(['scheduled', 'catch_up', 'retry', 'follow_up']);
+export const JobRunPurpose = z.enum(['scheduled', 'catch_up', 'retry', 'follow_up', 'refresh']);
 export type JobRunPurpose = z.infer<typeof JobRunPurpose>;
 
 /** An approved send or spend, queued on its job until a follow-up run carries it out. */
@@ -162,6 +163,8 @@ export const Job = z.object({
   runningRunId: Id.optional(),
   /** Approved sends and spends waiting for a follow-up run, oldest first. */
   followUps: z.array(FollowUp).default([]),
+  /** Where the job's data comes from and what it does with it (absent on older jobs). */
+  dataMap: JobDataMap.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -184,6 +187,10 @@ export const JobRun = z.object({
   summary: z.string().optional(),
   /** Named numbers the run reported (kept for the dashboard, project 3). */
   numbers: z.record(z.string(), z.number()).optional(),
+  /** Tables, lists, calendars, status boards and text the run reported. */
+  data: RunData.optional(),
+  /** What the run actually read from. */
+  sources: z.array(UsedSource).optional(),
   followUp: FollowUp.optional(),
   /** What the user wrote when answering the failure question (a retry run). */
   note: z.string().optional(),
@@ -205,6 +212,7 @@ export const JobDraft = Job.pick({
   followUpProvider: true,
   followUpModel: true,
   limitQuestionId: true,
+  dataMap: true,
 }).extend({
   unattendedRules: z
     .array(

@@ -412,4 +412,30 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     summary: 'Two suggestions.',
     numbers: { messages: 14 },
   },
+  'panel.created': { type: 'panel.created', panel: d.panel },
+  'panel.updated': {
+    type: 'panel.updated',
+    panelId: 'pn-1',
+    changes: { title: 'Messages this week', layout: { order: 1, w: 2, h: 1 } },
+    by: user,
+  },
+  'panel.removed': {
+    type: 'panel.removed',
+    panelId: 'pn-1',
+    projectId: 'p-1',
+    by: user,
+    reason: 'Not needed any more.',
+  },
+  'panels.arranged': {
+    type: 'panels.arranged',
+    projectId: 'p-1',
+    layouts: [{ panelId: 'pn-1', layout: { order: 0, w: 1, h: 1, hidden: true } }],
+    by: user,
+  },
+  'job.values_cleared': {
+    type: 'job.values_cleared',
+    jobId: 'j-1',
+    upTo: '2026-10-01T09:10:00.000Z',
+    by: user,
+  },
 };

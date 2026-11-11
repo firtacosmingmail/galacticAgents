@@ -42,6 +42,7 @@ import {
   Port,
   RunOutcome,
 } from './deliverables.js';
+import { Panel, PanelChanges, PanelLayout } from './dashboard.js';
 import { Area, FollowUp, Job, JobRun, JobRunOutcome, PublishContext } from './long-term.js';
 
 // ---------------------------------------------------------------------------
@@ -928,6 +929,45 @@ export const JobRunEnded = z.object({
   numbers: z.record(z.string(), z.number()).optional(),
 });
 
+// ---------------------------------------------------------------------------
+// panel.*, panels.arranged and job.values_cleared (Phase 15; SPEC decision 156)
+// ---------------------------------------------------------------------------
+
+/** A panel was added to a project's dashboard: the whole row. */
+export const PanelCreated = z.object({ type: z.literal('panel.created'), panel: Panel });
+/** A panel changed: edited, re-laid-out, its history cleared, or a removal suggested. */
+export const PanelUpdated = z.object({
+  type: z.literal('panel.updated'),
+  panelId: Id,
+  changes: PanelChanges.refine((c) => Object.keys(c).length > 0, changesSomething),
+  by: Actor,
+});
+/** A panel was removed (its row is deleted; the event keeps who and why). */
+export const PanelRemoved = z.object({
+  type: z.literal('panel.removed'),
+  panelId: Id,
+  projectId: Id,
+  by: Actor,
+  reason: z.string(),
+});
+/** Cosmin arranged the dashboard: every panel's new layout, in one event. */
+export const PanelsArranged = z.object({
+  type: z.literal('panels.arranged'),
+  projectId: Id,
+  layouts: z.array(z.object({ panelId: Id, layout: PanelLayout })),
+  by: Actor,
+});
+/**
+ * A job's stored values (the `numbers` and `data` of its runs up to `upTo`) were cleared. Folds to
+ * nothing in the world; on the server the command deletes the run data in the same transaction.
+ */
+export const JobValuesCleared = z.object({
+  type: z.literal('job.values_cleared'),
+  jobId: Id,
+  upTo: Timestamp,
+  by: Actor,
+});
+
 /** Every event that can appear in the `events` log and on the WebSocket stream. */
 export const Event = z.discriminatedUnion('type', [
   AgentCreated,
@@ -1008,6 +1048,11 @@ export const Event = z.discriminatedUnion('type', [
   JobUpdated,
   JobRunStarted,
   JobRunEnded,
+  PanelCreated,
+  PanelUpdated,
+  PanelRemoved,
+  PanelsArranged,
+  JobValuesCleared,
 ]);
 export type Event = z.infer<typeof Event>;
 export type EventType = Event['type'];

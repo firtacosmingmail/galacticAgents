@@ -33,7 +33,9 @@ function classify(
   | 'run'
   | 'area'
   | 'job'
-  | 'job_run' {
+  | 'job_run'
+  | 'panel'
+  | 'panels' {
   switch (e.type) {
     case 'agent.created':
     case 'agent.updated':
@@ -129,10 +131,17 @@ function classify(
       return 'area';
     case 'job.created':
     case 'job.updated':
+    case 'job.values_cleared':
       return 'job';
     case 'job_run.started':
     case 'job_run.ended':
       return 'job_run';
+    case 'panel.created':
+    case 'panel.updated':
+    case 'panel.removed':
+      return 'panel';
+    case 'panels.arranged':
+      return 'panels';
     default:
       return assertNever(e);
   }
