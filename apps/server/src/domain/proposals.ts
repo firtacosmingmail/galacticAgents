@@ -1,10 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
   BudgetUsd,
+  NEW_JOB_ID,
+  affectedPanels,
   foldProposalMeta,
   proposalBudget,
   proposalJobOf,
   proposalLongTermOf,
+  proposalPanelOf,
   proposalPlan,
   TrustLevel,
   type Actor,
@@ -14,9 +17,12 @@ import {
   type Project,
   type Proposal,
   type ProposalDecision,
+  type PanelDraft,
   type ProposalJob,
+  type ProposalPanel,
   type ProposalState,
   type ProposeJobInput,
+  type ProposePanelInput,
   type ProposePlanInput,
   type RequestOrigin,
   type Task,
@@ -47,6 +53,17 @@ import {
   roomFor,
   unparkWaiting,
 } from './parking.js';
+import {
+  checkPanelRoom,
+  checkPanelSource,
+  checkedPanelDraft,
+  createPanel,
+  dashboardProject,
+  panelOf,
+  panelsOf,
+  removePanel,
+  updatePanel,
+} from './panels.js';
 import { checkPurposeAndGoals, checkSetLongTerm } from './projects.js';
 import type { PolicyWrite } from './permissions.js';
 import { setTaskState } from './states.js';
@@ -156,6 +173,12 @@ export function createProposal(
       "a job card is made by proposeJob, from the project's Waykeeper",
     );
   }
+  if (given.meta?.['panel'] !== undefined) {
+    throw new DomainError(
+      'invalid',
+      "a panel card is made by proposePanel, from the project's Waykeeper",
+    );
+  }
   const input = checkLongTermCard(ctx, given);
   checkShape(ctx, input);
   // A card's trust level is the user's alone (decision 49): whoever proposes cannot preset it.
@@ -240,6 +263,7 @@ export function proposePlan(
     tasks.push(
       createTask(ctx, {
         description: t.description,
+        ...(t.title ? { title: t.title } : {}),
         projectId: project.id,
         state: 'proposed',
         ...(t.priority ? { priority: t.priority } : {}),
@@ -296,7 +320,7 @@ function proposableJob(ctx: Reader, project: Project, jobId: Id): Job {
   }
   const waiting = ctx.tables.proposals
     .all()
-    .find((p) => WAITING.includes(p.state) && proposalJobOf(p)?.jobId === jobId);
+    .find((p) => WAITING.includes(p.state) && cardJobIdOf(p) === jobId);
   if (waiting) {
     throw new DomainError(
       'conflict',
@@ -304,6 +328,13 @@ function proposableJob(ctx: Reader, project: Project, jobId: Id): Job {
     );
   }
   return job;
+}
+
+/** The job a waiting card would change or stop: a job card's, or a panel card's job part's. */
+function cardJobIdOf(p: Proposal): Id | undefined {
+  const job = proposalPanelOf(p)?.job;
+  if (job && 'propose' in job) return job.propose.jobId;
+  return proposalJobOf(p)?.jobId;
 }
 
 const JOB_CARD_TITLE = { create: 'New recurring job', change: 'Change job', stop: 'Stop job' };
@@ -320,6 +351,23 @@ const JOB_CARD_TITLE = { create: 'New recurring job', change: 'Change job', stop
 export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposal {
   const project = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
   const waykeeper = waykeeperOf(ctx, project, input.waykeeperId);
+  const { card, name } = jobCardFor(ctx, project, waykeeper.id, input);
+  return insertCard(ctx, project, `${JOB_CARD_TITLE[card.action]}: ${name}`, input.rationale, {
+    job: card,
+  });
+}
+
+/**
+ * A job card's content (`meta.job`), checked by the rules of the command its approval runs: what
+ * `proposeJob` makes, and a panel card's job part.
+ */
+function jobCardFor(
+  ctx: CommandContext,
+  project: Project,
+  waykeeperId: Id,
+  input: ProposeJobInput,
+): { card: ProposalJob; name: string } {
+  const waykeeper = { id: waykeeperId };
   let card: ProposalJob;
   let name: string;
   switch (input.action) {
@@ -378,23 +426,191 @@ export function proposeJob(ctx: CommandContext, input: ProposeJobInput): Proposa
       break;
     }
   }
+  return { card, name };
+}
+
+/** A Waykeeper's card on its project's body (`proposal.created`), like a plan card. */
+function insertCard(
+  ctx: CommandContext,
+  project: Project,
+  requestText: string,
+  rationale: string | undefined,
+  meta: Proposal['meta'],
+): Proposal {
   const body = must(ctx.tables.bodies.get(project.bodyId), 'body', project.bodyId);
   const kind = body.kind === 'moon' ? 'moon' : 'planet';
   const proposal: Proposal = {
     id: `pr-${randomUUID()}`,
-    requestText: `${JOB_CARD_TITLE[card.action]}: ${name}`,
+    requestText,
     kind,
     proposedBody: { kind, bodyId: body.id, name: body.name },
     workspace: project.workspace,
-    rationale: input.rationale ?? '',
+    rationale: rationale ?? '',
     state: 'pending',
     createdAt: ctx.now,
     updatedAt: ctx.now,
-    meta: { job: card },
+    ...(meta ? { meta } : {}),
   };
   ctx.tables.proposals.insert(proposal);
   ctx.emit({ type: 'proposal.created', proposal });
   return proposal;
+}
+
+const PANEL_CARD_TITLE = { create: 'New panel', change: 'Change panel', remove: 'Remove panel' };
+
+/** A panel's editable part, as a draft (what a change or removal card shows as "before"). */
+const panelDraftOf = (p: PanelDraft): PanelDraft => ({
+  type: p.type,
+  title: p.title,
+  source: p.source,
+  display: p.display,
+  limits: p.limits,
+});
+
+const sameTitle = (a: string, b: string): boolean =>
+  a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+
+/** A job card's part of a panel card, as `proposeJob` takes it. */
+function jobPartInput(project: Project, waykeeperId: Id, job: ProposalJob): ProposeJobInput {
+  const base = { projectId: project.id, waykeeperId };
+  if (job.action === 'create') {
+    if (!job.draft || !job.area) {
+      throw new DomainError('invalid', "a panel card's new job needs a job and its area");
+    }
+    return { ...base, action: 'create', area: job.area, draft: job.draft };
+  }
+  if (job.action === 'change') {
+    if (!job.jobId || !job.draft) {
+      throw new DomainError('invalid', "a panel card's job change needs the job and its change");
+    }
+    const changes: Extract<ProposeJobInput, { action: 'change' }>['changes'] = {
+      ...Object.fromEntries(Object.entries(job.draft).filter(([, v]) => v !== undefined)),
+      ...(job.area && 'areaId' in job.area ? { areaId: job.area.areaId } : {}),
+    };
+    return { ...base, action: 'change', jobId: job.jobId, changes };
+  }
+  throw new DomainError('invalid', 'a panel card creates or changes a job, never stops one');
+}
+
+/** A job a panel card's `use` names: of the project, and not stopped. */
+function usableJob(ctx: Reader, projectId: Id, jobId: Id): Job {
+  const job = jobOf(ctx, jobId);
+  if (job.projectId !== projectId) {
+    throw new DomainError('invalid', `job ${jobId} is not a job of project ${projectId}`);
+  }
+  if (job.state === 'stopped') {
+    throw new DomainError('invalid', `job ${job.name} is stopped: a panel cannot read it`);
+  }
+  return job;
+}
+
+/**
+ * A Waykeeper's panel card (P15-03; SPEC decision 156): add, change or remove one panel of its
+ * long-term project's dashboard, filled by an existing job (`job.use`) or by a job the same card
+ * creates or changes (`job.propose`, checked like `proposeJob`; a new job's panel reads `$new`).
+ * The card keeps the panel as it was (`before`). A new card from the same Waykeeper about the same
+ * panel, or a new-panel card with the same title as its earlier new-panel card, supersedes that
+ * earlier waiting card (rejected as `superseded`); a change or removal never matches by title.
+ */
+export function proposePanel(ctx: CommandContext, input: ProposePanelInput): Proposal {
+  const project = dashboardProject(ctx, input.projectId);
+  const waykeeper = waykeeperOf(ctx, project, input.waykeeperId);
+  const draft = input.draft === undefined ? undefined : checkedPanelDraft(input.draft);
+  // The earlier waiting card this one replaces goes first: its job part no longer blocks this one.
+  const title = draft?.title;
+  for (const p of ctx.tables.proposals.all()) {
+    const other = proposalPanelOf(p);
+    if (!other || !WAITING.includes(p.state) || other.waykeeperId !== waykeeper.id) continue;
+    const samePanel = input.panelId !== undefined && other.panelId === input.panelId;
+    const sameDraft =
+      input.action === 'create' &&
+      other.action === 'create' &&
+      title !== undefined &&
+      other.draft !== undefined &&
+      sameTitle(other.draft.title, title);
+    if (samePanel || sameDraft) {
+      ctx.tables.proposals.upsert({ ...p, state: 'rejected', updatedAt: ctx.now });
+      ctx.emit({ type: 'proposal.rejected', proposalId: p.id, reason: 'superseded' });
+    }
+  }
+  let before: PanelDraft | undefined;
+  if (input.action === 'create') {
+    if (input.panelId !== undefined) throw new DomainError('invalid', 'a new panel has no id yet');
+    checkPanelRoom(ctx, project.id);
+  } else {
+    if (input.panelId === undefined) {
+      throw new DomainError('invalid', `a ${input.action} card names its panel`);
+    }
+    const panel = panelOf(ctx, input.panelId);
+    if (panel.projectId !== project.id) {
+      throw new DomainError(
+        'invalid',
+        `panel ${panel.id} is not on the dashboard of ${project.id}`,
+      );
+    }
+    before = panelDraftOf(panel);
+  }
+  let job: ProposalPanel['job'];
+  if (input.action === 'remove') {
+    if (draft || input.job)
+      throw new DomainError('invalid', 'a removal card removes, nothing else');
+  } else {
+    if (!draft) throw new DomainError('invalid', `a ${input.action} card needs the panel`);
+    if (before && draft.type !== before.type) {
+      throw new DomainError(
+        'invalid',
+        "a panel's type does not change: propose removing it and adding a new one",
+      );
+    }
+    const reads = draft.source.kind === 'job' ? draft.source.jobId : undefined;
+    if (input.job && 'use' in input.job) {
+      usableJob(ctx, project.id, input.job.use);
+      if (reads !== input.job.use) {
+        throw new DomainError(
+          'invalid',
+          `the panel reads job ${reads ?? 'none'}, not the one it uses`,
+        );
+      }
+      job = { use: input.job.use };
+    } else if (input.job && 'propose' in input.job) {
+      const part = jobCardFor(
+        ctx,
+        project,
+        waykeeper.id,
+        jobPartInput(project, waykeeper.id, input.job.propose),
+      ).card;
+      const expected = part.action === 'create' ? NEW_JOB_ID : part.jobId;
+      if (reads !== expected) {
+        throw new DomainError(
+          'invalid',
+          part.action === 'create'
+            ? `the panel reads the job the card creates: its source job is "${NEW_JOB_ID}"`
+            : `the panel reads job ${reads ?? 'none'}, not the one the card changes`,
+        );
+      }
+      job = { propose: part };
+    } else if (reads !== undefined) {
+      throw new DomainError(
+        'invalid',
+        'a panel reading a job says which: `use` it or `propose` it',
+      );
+    }
+    if (reads !== undefined && reads !== NEW_JOB_ID)
+      checkPanelSource(ctx, project.id, draft.source);
+  }
+  const card: ProposalPanel = {
+    projectId: project.id,
+    waykeeperId: waykeeper.id,
+    action: input.action,
+    ...(input.panelId !== undefined ? { panelId: input.panelId } : {}),
+    ...(draft ? { draft } : {}),
+    ...(before ? { before } : {}),
+    ...(job ? { job } : {}),
+  };
+  const name = draft?.title ?? before?.title ?? '';
+  return insertCard(ctx, project, `${PANEL_CARD_TITLE[card.action]}: ${name}`, input.rationale, {
+    panel: card,
+  });
 }
 
 const DRAFT_FIELDS = [
@@ -406,6 +622,7 @@ const DRAFT_FIELDS = [
   'followUpProvider',
   'followUpModel',
   'unattendedRules',
+  'dataMap',
 ] as const;
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -420,19 +637,18 @@ function carryOutJobCard(
   card: ProposalJob,
   by: Actor,
   origin: RequestOrigin | undefined,
-): void {
+): Job {
   const from = origin ? { origin } : {};
   switch (card.action) {
     case 'create':
       if (!card.draft || !card.area) throw new DomainError('invalid', 'a new job card needs a job');
-      createJob(ctx, {
+      return createJob(ctx, {
         projectId: card.projectId,
         area: card.area,
         draft: card.draft,
         by,
         ...from,
-      });
-      return;
+      }).job;
     case 'change': {
       if (!card.jobId || !card.draft || !card.before) {
         throw new DomainError('invalid', 'a job change card needs the job and its change');
@@ -446,13 +662,80 @@ function carryOutJobCard(
       if (card.area && 'areaId' in card.area && card.area.areaId !== card.before.areaId) {
         changes.areaId = card.area.areaId;
       }
-      updateJob(ctx, { jobId: card.jobId, changes, by, ...from });
-      return;
+      return updateJob(ctx, { jobId: card.jobId, changes, by, ...from });
     }
     case 'stop':
       if (!card.jobId) throw new DomainError('invalid', 'a job stop card needs the job');
-      setJobState(ctx, { jobId: card.jobId, state: 'stopped', by });
-      return;
+      return setJobState(ctx, { jobId: card.jobId, state: 'stopped', by });
+  }
+}
+
+/**
+ * What an approved panel card does, in the approval's transaction (P15-03). A job part that would
+ * grant unattended rules is checked first (`checkRemoteGrant`, before anything is written), then
+ * carried out like a job card; a `use` job must still be a running job of the project. Then the
+ * placeholder `$new` becomes the new job's id and the panel is created, changed or removed. Any
+ * refusal undoes the whole approval: the card is never half-applied. The panel itself grants
+ * nothing.
+ */
+function carryOutPanelCard(
+  ctx: CommandContext,
+  card: ProposalPanel,
+  by: Actor,
+  write: PolicyWrite | undefined,
+): void {
+  // Every action needs the dashboard's project still open, not only a new panel (Task 3 review).
+  dashboardProject(ctx, card.projectId);
+  let created: Job | undefined;
+  if (card.job && 'propose' in card.job) {
+    checkRemoteGrant(ctx, card.job.propose, write);
+    const job = carryOutJobCard(ctx, card.job.propose, by, write?.origin);
+    if (card.job.propose.action === 'create') created = job;
+  } else if (card.job) {
+    usableJob(ctx, card.projectId, card.job.use);
+  }
+  if (card.action === 'remove') {
+    if (!card.panelId) throw new DomainError('invalid', 'a removal card needs its panel');
+    removePanel(ctx, card.panelId, by, 'removed with its card');
+    return;
+  }
+  if (!card.draft) throw new DomainError('invalid', `a ${card.action} card needs the panel`);
+  const source =
+    card.draft.source.kind === 'job' && card.draft.source.jobId === NEW_JOB_ID
+      ? { ...card.draft.source, jobId: must(created, 'job', NEW_JOB_ID).id }
+      : card.draft.source;
+  const draft = { ...card.draft, source };
+  if (card.action === 'create') {
+    createPanel(ctx, card.projectId, draft, by);
+    return;
+  }
+  if (!card.panelId) throw new DomainError('invalid', 'a change card needs its panel');
+  const { type: _type, ...changes } = draft;
+  updatePanel(ctx, card.panelId, changes, by);
+}
+
+/**
+ * The panels an approved job stop or change card also removes when the user ticked "also remove
+ * these panels" (`removePanels`): a stop's every panel reading the job ("job stopped"), a change's
+ * those reading a value the card's data map no longer collects ("no longer reported") — the card
+ * the user saw, not the job as edits meanwhile left it; a change that leaves the data map as it
+ * was removes nothing. For a panel card's job part, the card's own panel (`except`) is never one.
+ */
+function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor, except?: Id): void {
+  if (!card.jobId || (card.action !== 'stop' && card.action !== 'change')) {
+    throw new DomainError('invalid', 'only a job stop or change card removes panels');
+  }
+  const job = jobOf(ctx, card.jobId);
+  const panels = panelsOf(ctx, job.projectId);
+  const affected =
+    card.action === 'stop'
+      ? affectedPanels(panels, job.id)
+      : card.draft?.dataMap && !same(card.draft.dataMap, card.before?.draft.dataMap)
+        ? affectedPanels(panels, job.id, card.draft.dataMap)
+        : [];
+  const reason = card.action === 'stop' ? 'job stopped' : 'no longer reported';
+  for (const panel of affected) {
+    if (panel.id !== except) removePanel(ctx, panel.id, by, reason);
   }
 }
 
@@ -484,18 +767,33 @@ export function decideProposal(
   const current = must(ctx.tables.proposals.get(proposalId), 'proposal', proposalId);
   const plan = proposalPlan(current);
   const jobCard = proposalJobOf(current);
+  const panelCard = proposalPanelOf(current);
   const longTerm = proposalLongTermOf(current);
-  if (jobCard) {
-    // A job card is the user's (decision 144), approved or rejected as the Waykeeper made it.
+  if (jobCard || panelCard) {
+    // A job or panel card is the user's (decisions 144, 156), decided as the Waykeeper made it.
+    const what = jobCard ? 'job' : 'panel';
     if (by?.type === 'agent') {
-      throw new DomainError('invalid', `job card ${proposalId} is the user's to decide`);
+      throw new DomainError('invalid', `${what} card ${proposalId} is the user's to decide`);
     }
     if (decision.decision === 'edit' || decision.decision === 'park') {
       throw new DomainError(
         'invalid',
-        `job card ${proposalId} is not ${DONE[decision.decision]}: reject it with a reason and the Waykeeper proposes another`,
+        `${what} card ${proposalId} is not ${DONE[decision.decision]}: reject it with a reason and the Waykeeper proposes another`,
       );
     }
+  }
+  // A panel card's job part that changes a job may orphan other panels too (its card lists them).
+  const panelJob = panelCard?.job && 'propose' in panelCard.job ? panelCard.job.propose : undefined;
+  if (
+    decision.decision === 'approve' &&
+    decision.removePanels &&
+    !jobCard &&
+    panelJob?.action !== 'change'
+  ) {
+    throw new DomainError(
+      'invalid',
+      'only a job stop or change card, or a panel card that changes a job, removes panels',
+    );
   }
   if (longTerm?.projectId && (decision.decision === 'edit' || decision.decision === 'park')) {
     throw new DomainError(
@@ -532,6 +830,10 @@ export function decideProposal(
     }
   }
   if (jobCard && decision.decision === 'approve') checkRemoteGrant(ctx, jobCard, opts.policyWrite);
+  // A panel card's job part is checked the same way, before anything is written (P15-03).
+  if (panelJob && decision.decision === 'approve') {
+    checkRemoteGrant(ctx, panelJob, opts.policyWrite);
+  }
   if (!ALLOWED[decision.decision].includes(current.state)) {
     throw new DomainError(
       'invalid_transition',
@@ -552,7 +854,7 @@ export function decideProposal(
   switch (decision.decision) {
     case 'approve': {
       // A work card needs its body now (P2-09): without one it is parked instead (decision 16).
-      const request = plan || jobCard ? undefined : bodyRequestOf(ctx, current);
+      const request = plan || jobCard || panelCard ? undefined : bodyRequestOf(ctx, current);
       const room = request ? roomFor(ctx, current, opts) : undefined;
       if (request && room && !room.ok) {
         if (current.state === 'parked') {
@@ -561,7 +863,7 @@ export function decideProposal(
         return park(ctx, current, parkingFor(request, room));
       }
       const workspace =
-        plan || jobCard
+        plan || jobCard || panelCard
           ? current.workspace
           : (opts.checkWorkspace?.(current.workspace) ?? current.workspace);
       const proposal = save({ state: 'approved' });
@@ -575,10 +877,20 @@ export function decideProposal(
       // A job card's job is created, changed or stopped with the approval (P10-06).
       if (jobCard) {
         carryOutJobCard(ctx, jobCard, by ?? { type: 'system' }, opts.policyWrite?.origin);
+        // P15-03: the user ticked "also remove these panels" on a stop or change card.
+        if (decision.removePanels) removeJobPanels(ctx, jobCard, by ?? { type: 'system' });
+      }
+      // A panel card's panel (and its job part) is written with the approval (P15-03). The other
+      // panels its job change orphans go first, judged as the card showed them, never its own.
+      if (panelCard) {
+        if (decision.removePanels && panelJob) {
+          removeJobPanels(ctx, panelJob, by ?? { type: 'system' }, panelCard.panelId);
+        }
+        carryOutPanelCard(ctx, panelCard, by ?? { type: 'system' }, opts.policyWrite);
       }
       // What the card asks for is created in the approval's transaction (P2-09, `approval.ts`).
       const made =
-        plan || jobCard
+        plan || jobCard || panelCard
           ? undefined
           : carryOut(ctx, proposal, room?.ok ? room.body : undefined, workspace, opts, by);
       // The budget the user gave the card (P8-01): the new project's or task's, a plan's project's.
@@ -656,7 +968,7 @@ export function decideProposal(
         proposalId,
         ...(decision.reason ? { reason: decision.reason } : {}),
       });
-      if (!plan && !jobCard) unparkWaiting(ctx, opts);
+      if (!plan && !jobCard && !panelCard) unparkWaiting(ctx, opts);
       return proposal;
     }
     case 'park':

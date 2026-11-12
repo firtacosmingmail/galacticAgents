@@ -126,6 +126,7 @@ export function exportMap(db: Database, opts: ExportOptions = {}): MapExport {
         deliverables: t.deliverables.all(),
         areas: t.areas.all(),
         jobs: t.jobs.all(),
+        panels: t.panels.all(),
       },
     };
     if (opts.transcripts) {
@@ -220,6 +221,7 @@ export async function* exportMapText(
         deliverables: t.deliverables.all(),
         areas: t.areas.all(),
         jobs: t.jobs.all(),
+        panels: t.panels.all(),
       },
     };
     yield `${JSON.stringify(head).slice(0, -1)},"events":[`;

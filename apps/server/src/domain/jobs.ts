@@ -29,6 +29,7 @@ import type { CommandContext } from './event-log.js';
 import { unattendedRuleLabel, unattendedRuleRefusal } from './permission-rules.js';
 import { cancelQuestion } from './questions.js';
 import { FINISHED_WORK } from './states.js';
+import { newStewardName } from './tasks.js';
 
 /**
  * Areas and recurring jobs (P10-03; SPEC decisions 143, 144). A long-term project's business
@@ -339,8 +340,9 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
       ? areaOf(ctx, project.id, input.area.areaId)
       : createArea(ctx, project.id, input.area.name);
   const jobId = `j-${randomUUID()}`;
+  const taskId = `t-${randomUUID()}`;
   const task: Task = {
-    id: `t-${randomUUID()}`,
+    id: taskId,
     projectId: project.id,
     bodyId: area.bodyId,
     description: taskDescription(draft.name),
@@ -349,7 +351,8 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     state: 'approved',
     createdAt: ctx.now,
     updatedAt: ctx.now,
-    meta: { jobId },
+    // its run Stewards are named like any task's (P15-11)
+    meta: { jobId, stewardName: newStewardName(ctx, taskId, project.id) },
   };
   ctx.tables.tasks.insert(task);
   ctx.emit({ type: 'task.created', task });
@@ -366,6 +369,7 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     ...(draft.followUpProvider ? { followUpProvider: draft.followUpProvider } : {}),
     ...(draft.followUpModel ? { followUpModel: draft.followUpModel } : {}),
     unattendedRules: storedRules(draft.unattendedRules, [], input.origin),
+    ...(draft.dataMap ? { dataMap: draft.dataMap } : {}),
     state: 'active',
     nextRunAt: nextRunAfter(draft, ctx.now),
     followUps: [],
@@ -424,6 +428,7 @@ export function draftOf(job: Job): JobDraft {
     ...(job.followUpProvider !== undefined ? { followUpProvider: job.followUpProvider } : {}),
     ...(job.followUpModel !== undefined ? { followUpModel: job.followUpModel } : {}),
     unattendedRules: job.unattendedRules,
+    ...(job.dataMap !== undefined ? { dataMap: job.dataMap } : {}),
   };
 }
 
@@ -468,6 +473,10 @@ export function planJobUpdate(
   if (!same(merged.schedule, current.schedule)) {
     changes.schedule = merged.schedule;
     if (current.state !== 'stopped') changes.nextRunAt = nextRunAfter(merged, ctx.now);
+  }
+  // A data map is replaced whole, never dropped (P15-03): a job keeps one once it has one.
+  if (merged.dataMap !== undefined && !same(merged.dataMap, current.dataMap)) {
+    changes.dataMap = merged.dataMap;
   }
   if (draftChanges.unattendedRules !== undefined) {
     const rules = storedRules(merged.unattendedRules, current.unattendedRules, input.origin);

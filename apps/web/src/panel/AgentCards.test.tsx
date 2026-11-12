@@ -3,6 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PERMISSION_POLICY_PRESETS,
+  stewardName,
+  taskShortName,
   type Agent,
   type AgentState,
   type ControlBody,
@@ -33,7 +35,7 @@ const steward: Agent = {
   supervisorId: 'a-harmonizer',
   bodyId: 'b-ast-1',
 };
-const STEWARD = 'Steward · Fix the flaky date test';
+const STEWARD = `${stewardName(fx.asteroidTask)} · ${taskShortName(fx.asteroidTask)}`;
 const WAYKEEPER = 'Waykeeper · Auth refactor';
 
 interface World {
@@ -520,7 +522,7 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     show('a-wk');
     const names = screen.getAllByRole('article').map((a) => a.getAttribute('aria-label'));
     expect(names).toEqual([
-      'card of Steward · Replace the session middleware',
+      `card of ${stewardName(fx.task)} · ${taskShortName(fx.task)}`,
       'card of Waykeeper · Token storage',
     ]);
   });
@@ -560,7 +562,7 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     };
     load({ extraTasks: [queued, proposed], extraProjects: [unspawned] });
     show();
-    const q = card('Task · Queued task');
+    const q = card(`${stewardName(queued)} · ${taskShortName(queued)}`);
     expect(within(q).getByText('queued: no agent yet')).toBeTruthy();
     // No agent row: no agent controls, no link, no agent figures.
     expect(within(q).queryByRole('group', { name: /^agent controls/ })).toBeNull();
@@ -568,7 +570,11 @@ describe('managed-agents cards: what they show (P25-04)', () => {
     expect(within(q).queryByLabelText('cost so far')).toBeNull();
     expect(card('Project · New project')).toBeTruthy();
     // Proposed work stays on its plan card.
-    expect(screen.queryByRole('article', { name: 'card of Task · Proposed task' })).toBeNull();
+    expect(
+      screen.queryByRole('article', {
+        name: `card of ${stewardName(proposed)} · ${taskShortName(proposed)}`,
+      }),
+    ).toBeNull();
 
     const controls = within(q).getByRole('group', { name: /^task controls of/ });
     for (const b of ['Pause', 'Stop', 'Cancel', 'Close', 'Pin', 'Edit'])

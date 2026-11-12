@@ -1,0 +1,448 @@
+/*
+ * The Dashboard tab (P15-06): a long-term project's panels over the side panel's tokens. A
+ * 4-column dense grid; nothing has a fixed width, so a narrow dock scrolls panels, not the page.
+ * Colour is never the only signal: a very bad / very good panel also carries the words and an
+ * arrow. Stale, stopped and no-longer-reported panels are never coloured.
+ */
+
+.dash {
+  --dash-good: #3fb37f;
+  --dash-bad: var(--pnl-failed);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  padding: 4px 0 8px;
+  overflow-wrap: anywhere;
+}
+@media (prefers-color-scheme: light) {
+  .dash {
+    --dash-good: #1f8a57;
+  }
+}
+.dash-empty {
+  margin: 0;
+  font-size: 12px;
+}
+
+.dash-look ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.dash-look .pnl-eyebrow {
+  margin: 0 0 4px;
+}
+.dash-look li.is-very-bad .dash-verdict {
+  color: var(--dash-bad);
+}
+.dash-look li.is-very-good .dash-verdict {
+  color: var(--dash-good);
+}
+
+.dash-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  grid-auto-rows: minmax(110px, auto);
+  gap: 10px;
+}
+
+.dash-panel {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-surface);
+  font-size: 13px;
+  overflow: hidden;
+}
+.dash-panel.is-very-bad {
+  border-color: var(--dash-bad);
+}
+.dash-panel.is-very-good {
+  border-color: var(--dash-good);
+}
+.dash-panel.is-glowing {
+  box-shadow:
+    0 0 0 1px var(--dash-good),
+    0 0 14px 2px var(--dash-good);
+}
+.dash-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dash-title {
+  flex: 1;
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.85;
+}
+.dash-verdict {
+  font-size: 11px;
+  font-weight: 700;
+}
+.dash-panel.is-very-bad .dash-verdict {
+  color: var(--dash-bad);
+}
+.dash-panel.is-very-good .dash-verdict {
+  color: var(--dash-good);
+}
+.dash-note {
+  margin: 0;
+  font-size: 11px;
+  color: var(--pnl-muted);
+}
+.dash-note.is-state {
+  color: var(--pnl-stalled);
+}
+
+.dash-big {
+  font-size: 26px;
+  font-weight: 700;
+}
+.dash-change {
+  font-size: 12px;
+  color: var(--pnl-muted);
+}
+.dash-chart {
+  width: 100%;
+  height: 90px;
+  color: var(--pnl-muted);
+}
+.dash-scroll {
+  overflow: auto;
+}
+.dash-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dash-table th,
+.dash-table td {
+  padding: 3px 4px;
+  border-bottom: 1px solid var(--pnl-line);
+  text-align: left;
+}
+.dash-feed {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-feed li {
+  margin-bottom: 4px;
+  padding: 2px 6px;
+  border-left: 3px solid var(--pnl-line);
+}
+.dash-tag {
+  display: inline-block;
+  margin: 0 4px 0 0;
+  padding: 1px 6px;
+  border-radius: 9px;
+  background: var(--pnl-raised);
+  font-size: 10px;
+  font-weight: 400;
+}
+.dash-cal-title {
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.dash-cal {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+  margin-bottom: 6px;
+  font-size: 10px;
+  text-align: center;
+}
+.dash-cal > div {
+  padding: 2px 0;
+  border-radius: 3px;
+  background: var(--pnl-raised);
+}
+.dash-cal > .dash-cal-head {
+  background: none;
+  color: var(--pnl-muted);
+}
+.dash-cal > .is-marked {
+  background: var(--pnl-here-soft);
+  box-shadow: inset 0 0 0 1px var(--pnl-here);
+  font-weight: 700;
+}
+.dash-board {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.dash-board-col {
+  min-width: 90px;
+  flex: 1;
+}
+.dash-board-col h4 {
+  margin: 0 0 4px;
+}
+.dash-board-col ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-text {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.dash-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  margin-top: auto;
+}
+.dash-source {
+  font-size: 10.5px;
+  color: var(--pnl-muted);
+}
+.dash-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.dash-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--pnl-beacon);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.dash-source.dash-link {
+  font-size: 10.5px;
+  color: var(--pnl-muted);
+}
+.dash-refresh {
+  padding: 2px 8px;
+  font-size: 11px;
+}
+
+.dash-menu {
+  position: relative;
+}
+.dash-icon {
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: var(--pnl-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.dash-menu-list {
+  position: absolute;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  min-width: 120px;
+  padding: 4px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+}
+.dash-menu-list button {
+  border: 0;
+  background: none;
+  text-align: left;
+  font-size: 12px;
+}
+.dash-confirm {
+  padding: 8px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 6px;
+  background: var(--pnl-raised);
+  font-size: 12px;
+}
+.dash-confirm p {
+  margin: 0 0 6px;
+}
+.dash-confirm-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Fireworks: ten sparks per burst, flying out and fading; the panel itself is never covered. */
+.dash-fireworks {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.dash-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: hsl(var(--hue) 90% 60%);
+  opacity: 0;
+  animation: dash-spark 0.9s ease-out both;
+}
+@keyframes dash-spark {
+  0% {
+    opacity: 1;
+    transform: rotate(var(--angle)) translateX(0);
+  }
+  100% {
+    opacity: 0;
+    transform: rotate(var(--angle)) translateX(42px);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dash-fireworks {
+    display: none;
+  }
+}
+
+/* Arrange mode (P15-07): handles over the same grid; the panels themselves stay inert. */
+.dash-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+.dash-arrange {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dash-arrange-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.dash-arrange-bar p {
+  margin: 0;
+  font-size: 11px;
+}
+.dash-arrange-actions {
+  display: inline-flex;
+  gap: 8px;
+}
+.dash-arrange-cell {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  outline: 1px dashed var(--pnl-beacon);
+  outline-offset: 2px;
+  border-radius: 8px;
+}
+/* The panel is inert while arranging (no focus, no clicks); pointer-events keeps drags clean. */
+.dash-arrange-cell > .dash-panel {
+  flex: 1;
+  pointer-events: none;
+  opacity: 0.85;
+}
+.dash-arrange-tools {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 6px;
+  background: var(--pnl-raised);
+}
+.dash-handle {
+  padding: 0 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 16px;
+  line-height: 1.4;
+  cursor: grab;
+  touch-action: none;
+}
+.dash-handle:active {
+  cursor: grabbing;
+}
+.dash-grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  z-index: 3;
+  padding: 0 2px;
+  border: 0;
+  background: none;
+  color: var(--pnl-muted);
+  font-size: 14px;
+  line-height: 1;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.dash-hidden ul {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.dash-hidden li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 8px;
+  border: 1px dashed var(--pnl-line);
+  border-radius: 6px;
+  font-size: 12px;
+}
+.dash-hidden .pnl-eyebrow {
+  margin: 0 0 4px;
+}
+
+/* The phone (P15-08): a swipeable strip of tiles, then full-width cards, the later ones folded. */
+.dash-strip {
+  display: flex;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x mandatory;
+}
+.dash-strip > .dash-panel {
+  flex: 0 0 min(46%, 170px);
+  scroll-snap-align: start;
+}
+.dash-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.dash-cards > .dash-panel {
+  grid-column: auto;
+}
+.dash-fold {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px;
+  border: 1px solid var(--pnl-line);
+  border-radius: 8px;
+  background: var(--pnl-surface);
+  color: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: left;
+}

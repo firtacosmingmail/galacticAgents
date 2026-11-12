@@ -2,6 +2,7 @@ import {
   ENDED_STATES,
   isJobTask,
   proposalJobOf,
+  proposalPanelOf,
   proposalPlan,
   type AgentRole,
   type Id,
@@ -12,6 +13,7 @@ import type { Tables } from '../db/tables.js';
 import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
 import { jobRuns } from '../domain/job-runs.js';
+import { panelsOf } from '../domain/panels.js';
 import type { WakeScope } from './wake.js';
 
 /**
@@ -69,6 +71,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
         .filter((a) => a.projectId === projectId)
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     jobRuns: (jobId, limit) => jobRuns({ tables }, jobId, limit),
+    panels: (projectId) => panelsOf({ tables }, projectId),
   };
   return queries;
 }
@@ -121,12 +124,12 @@ export function createWakeScope(
       projectId === brain.projectId || supervised().some((a) => a.projectId === projectId),
     // The Harmonizer proposes (SPEC §3.3); a plan card belongs to its project's Waykeeper —
     // whichever agent runs the project now, so a replacement Waykeeper learns the decision (P2-10).
-    // A job card (P10-06) is its project's Waykeeper's in the same way.
+    // A job card (P10-06) and a panel card (P15-05) are its project's Waykeeper's in the same way.
     // A Waykeeper's promotion request (`meta.promotion`) is its project's Waykeeper's too: only
     // that brain hears the decision (P2-12 does the move), never the Harmonizer as well.
     ownsProposal: (proposalId) => {
       const proposal = tables.proposals.get(proposalId);
-      const plan = proposalPlan(proposal) ?? proposalJobOf(proposal);
+      const plan = proposalPlan(proposal) ?? proposalJobOf(proposal) ?? proposalPanelOf(proposal);
       if (plan) return brain.role === 'waykeeper' && plan.projectId === brain.projectId;
       const promotion = proposal?.meta?.['promotion'] as
         { fromProjectId?: unknown; requestedBy?: unknown } | undefined;

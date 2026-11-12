@@ -68,4 +68,39 @@ describe('jobRunPrompt', () => {
       expect(text).not.toContain('already approved');
     }
   });
+
+  it('lists every collected value and its kind under "Report exactly these names"', () => {
+    const dataMap = {
+      sources: [{ id: 'crm', label: 'CRM', kind: 'mcp' as const, target: 'crm' }],
+      collects: [
+        { name: 'new_messages', kind: 'number' as const, sourceIds: ['crm'], description: 'New' },
+        { name: 'experiments', kind: 'table' as const, sourceIds: ['crm'], description: 'Tests' },
+      ],
+      steps: [],
+    };
+    const text = jobRunPrompt({
+      project,
+      job: { ...job, dataMap },
+      area,
+      run: run('scheduled'),
+      memory: [],
+      declares: true,
+    });
+    expect(text).toContain('Report exactly these names');
+    expect(text).toContain('  - new_messages (number)');
+    expect(text).toContain('  - experiments (table)');
+    expect(text).toContain('sourceProblems');
+  });
+
+  it('says nothing about names when the job has no data map', () => {
+    const text = jobRunPrompt({
+      project,
+      job,
+      area,
+      run: run('scheduled'),
+      memory: [],
+      declares: true,
+    });
+    expect(text).not.toContain('Report exactly these names');
+  });
 });

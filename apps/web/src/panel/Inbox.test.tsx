@@ -10,6 +10,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
@@ -225,11 +226,15 @@ describe('panel inbox (P25-06)', () => {
     expect(within(el).getByText('clarification')).toBeTruthy();
     expect(within(el).getByText('held by you')).toBeTruthy();
     expect(el.textContent).toMatch(
-      /from Steward · Replace the session middleware.*task "Replace the session middleware" · project Auth refactor · on Luna/,
+      new RegExp(
+        `from ${stewardName(fx.task)} · ${taskShortName(fx.task)}.*task "Replace the session middleware" · project Auth refactor · on Luna`,
+      ),
     );
     expect(within(el).getByRole('button', { name: 'yes' })).toBeTruthy();
     await click(
-      within(el).getByRole('link', { name: 'open Steward · Replace the session middleware' }),
+      within(el).getByRole('link', {
+        name: `open ${stewardName(fx.task)} · ${taskShortName(fx.task)}`,
+      }),
     );
     expect(useAppStore.getState().selection).toEqual({ kind: 'steward', id: 'a-steward-1' });
     expect(window.location.pathname).toBe('/steward/a-steward-1');

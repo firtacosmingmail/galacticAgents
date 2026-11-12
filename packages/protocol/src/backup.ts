@@ -3,6 +3,7 @@ import { Agent, Body, Project, Proposal, Question, Task } from './domain.js';
 import { Id, Timestamp } from './primitives.js';
 import { Deliverable } from './deliverables.js';
 import { Area, Job } from './long-term.js';
+import { Panel } from './dashboard.js';
 
 // --- backups (P8-03; TECHNOLOGY §6.4, docs/BACKUP_RESTORE.md) -----------------------------------
 
@@ -118,6 +119,8 @@ export const ExportedRows = z.object({
    */
   areas: z.array(Area).optional(),
   jobs: z.array(Job).optional(),
+  /** The dashboard panels (P15-01). Optional like the jobs: an older export has none. */
+  panels: z.array(Panel).optional(),
 });
 export type ExportedRows = z.infer<typeof ExportedRows>;
 

@@ -4,6 +4,7 @@ import { useAppStore } from '../../state/store.js';
 import { useApi } from '../../console/hierarchy/shared.js';
 import { revealInbox, revealQuestion } from '../inbox-reveal.js';
 import { choiceText, jobPublishesWith } from '../providers.js';
+import { JobMap } from './JobMap.js';
 import { jobsModel, providerText, runLine, useJobsFilter, type JobRow } from './jobs-model.js';
 import './jobs.css';
 
@@ -154,6 +155,7 @@ function nextText(row: JobRow): string {
 function JobItem({ row, now }: { row: JobRow; now: Date }) {
   const { job } = row;
   const [open, setOpen] = useState(false);
+  const [mapOpen, setMapOpen] = useState(false);
   const runsId = useId();
   return (
     <li className={`jobs-job tone-${row.tone}${job.state === 'stopped' ? ' is-stopped' : ''}`}>
@@ -168,8 +170,14 @@ function JobItem({ row, now }: { row: JobRow; now: Date }) {
           <span aria-hidden="true">{open ? '▾ ' : '▸ '}</span>
           {job.name}
         </button>
-        <span className="jobs-pill">{row.scheduleText}</span>
+        <span className="jobs-actions">
+          <button type="button" className="jobs-link" onClick={() => setMapOpen(true)}>
+            Details
+          </button>
+          <span className="jobs-pill">{row.scheduleText}</span>
+        </span>
       </div>
+      {mapOpen && <JobMap jobId={job.id} onClose={() => setMapOpen(false)} />}
       {row.lastLine && <p className={`jobs-line jobs-last tone-${row.tone}`}>{row.lastLine}</p>}
       <p className="jobs-line jobs-meta muted">
         <span>

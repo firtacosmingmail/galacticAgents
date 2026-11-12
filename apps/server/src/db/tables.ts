@@ -8,6 +8,7 @@ import {
   DeliverableRun,
   Job,
   JobRun,
+  Panel,
   Project,
   Proposal,
   Provider,
@@ -469,6 +470,7 @@ const jobs: Mapper<Job> = {
     last_run: json(j.lastRun),
     running_run_id: j.runningRunId ?? null,
     follow_ups: JSON.stringify(j.followUps),
+    data_map: json(j.dataMap),
     created_at: j.createdAt,
     updated_at: j.updatedAt,
     meta: json(j.meta),
@@ -494,6 +496,7 @@ const jobs: Mapper<Job> = {
     lastRun: parse(r['last_run']),
     runningRunId: opt<Id>(r['running_run_id']),
     followUps: parse<Job['followUps']>(r['follow_ups']) ?? [],
+    dataMap: parse(r['data_map']),
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -515,6 +518,8 @@ const jobRuns: Mapper<JobRun> = {
     outcome: r.outcome,
     summary: r.summary ?? null,
     numbers: json(r.numbers),
+    data: json(r.data),
+    sources: json(r.sources),
     follow_up: json(r.followUp),
     note: r.note ?? null,
     meta: json(r.meta),
@@ -531,8 +536,47 @@ const jobRuns: Mapper<JobRun> = {
     outcome: r['outcome'] as JobRun['outcome'],
     summary: opt<string>(r['summary']),
     numbers: parse(r['numbers']),
+    data: parse(r['data']),
+    sources: parse(r['sources']),
     followUp: parse(r['follow_up']),
     note: opt<string>(r['note']),
+    meta: parse(r['meta']),
+  }),
+};
+
+const dashboardPanels: Mapper<Panel> = {
+  table: 'dashboard_panels',
+  schema: Panel,
+  toRow: (p) => ({
+    id: p.id,
+    project_id: p.projectId,
+    type: p.type,
+    title: p.title,
+    source: JSON.stringify(p.source),
+    display: JSON.stringify(p.display),
+    limits: JSON.stringify(p.limits),
+    layout: JSON.stringify(p.layout),
+    history_from: p.historyFrom ?? null,
+    removal_suggested_at: p.removalSuggestedAt ?? null,
+    created_by: JSON.stringify(p.createdBy),
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
+    meta: json(p.meta),
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    projectId: r['project_id'] as Id,
+    type: r['type'] as Panel['type'],
+    title: r['title'] as string,
+    source: parse<Panel['source']>(r['source'])!,
+    display: parse<Panel['display']>(r['display'])!,
+    limits: parse<Panel['limits']>(r['limits']) ?? [],
+    layout: parse<Panel['layout']>(r['layout'])!,
+    historyFrom: opt<string>(r['history_from']),
+    removalSuggestedAt: opt<string>(r['removal_suggested_at']),
+    createdBy: parse<Panel['createdBy']>(r['created_by'])!,
+    createdAt: r['created_at'] as string,
+    updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
   }),
 };
@@ -565,7 +609,15 @@ export interface Tables {
   /** Recurring jobs of the areas (P10-01). */
   jobs: Table<Job>;
   /** Every run of a job (P10-01): the last 200 per job are kept. */
-  jobRuns: Table<JobRun>;
+  jobRuns: Table<JobRun> & {
+    /**
+     * A job's runs, newest first (by start; the later row first on a tie), through the
+     * `job_runs_job` index: `limit` of them, or every one without it.
+     */
+    of(jobId: Id, limit?: number): JobRun[];
+  };
+  /** A long-term project's dashboard panels (P15-01; migration 0020). */
+  panels: Table<Panel>;
   settings: {
     get<T = unknown>(key: string): T | undefined;
     set(key: string, value: unknown): void;
@@ -674,6 +726,10 @@ export function tables(db: Database): Tables {
   const runsOf = lazy(
     'SELECT * FROM deliverable_runs WHERE deliverable_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?',
   );
+  const jobRunsOf = lazy(
+    'SELECT * FROM job_runs WHERE job_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?',
+  );
+  const readJobRun = (row: Row): JobRun => JobRun.parse(compact(jobRuns.fromRow(row)));
   const readDeliverable = (row: Row): Deliverable =>
     Deliverable.parse(compact(deliverables.fromRow(row)));
   const readRun = (row: Row): DeliverableRun =>
@@ -851,24 +907,50 @@ export function tables(db: Database): Tables {
       'last_run',
       'running_run_id',
       'follow_ups',
+      'data_map',
       'created_at',
       'updated_at',
       'meta',
     ]),
-    jobRuns: new Table(db, jobRuns, [
+    jobRuns: Object.assign(
+      new Table(db, jobRuns, [
+        'id',
+        'job_id',
+        'agent_id',
+        'purpose',
+        'due_at',
+        'covers_from',
+        'started_at',
+        'ended_at',
+        'outcome',
+        'summary',
+        'numbers',
+        'data',
+        'sources',
+        'follow_up',
+        'note',
+        'meta',
+      ]),
+      {
+        // SQLite reads a negative LIMIT as "no limit".
+        of: (jobId: Id, limit?: number) =>
+          (jobRunsOf().all(jobId, limit ?? -1) as Row[]).map(readJobRun),
+      },
+    ),
+    panels: new Table(db, dashboardPanels, [
       'id',
-      'job_id',
-      'agent_id',
-      'purpose',
-      'due_at',
-      'covers_from',
-      'started_at',
-      'ended_at',
-      'outcome',
-      'summary',
-      'numbers',
-      'follow_up',
-      'note',
+      'project_id',
+      'type',
+      'title',
+      'source',
+      'display',
+      'limits',
+      'layout',
+      'history_from',
+      'removal_suggested_at',
+      'created_by',
+      'created_at',
+      'updated_at',
       'meta',
     ]),
     settings: {

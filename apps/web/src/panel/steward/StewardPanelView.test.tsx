@@ -8,6 +8,7 @@ import type {
   TranscriptChunk,
   TranscriptResponse,
 } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../../App.js';
 import { FakeWebSocket } from '../../client/fake-socket.js';
@@ -116,7 +117,9 @@ async function open(questions: Question[] = []) {
 }
 
 const view = () =>
-  screen.getByRole('region', { name: 'view of Steward · Replace the session middleware' });
+  screen.getByRole('region', {
+    name: `view of ${stewardName(fx.task)} · ${taskShortName(fx.task)}`,
+  });
 const composer = () => within(view()).queryByRole('form', { name: 'answer the clarification' });
 const subscribes = (socket: FakeWebSocket) =>
   socket.sent

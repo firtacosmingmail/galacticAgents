@@ -11,6 +11,7 @@ import { unattendedPermissionRules } from '../../domain/jobs.js';
 import { brainHarness, type BrainHarness, type ToolOutcome } from '../testing/index.js';
 import { providerFakes } from '../testing/provider-fakes.js';
 import { WAYKEEPER_SYSTEM_PROMPT, waykeeperDefinition } from './index.js';
+import { proposeJobTool } from './job-tools.js';
 
 /**
  * P10-06 — the Waykeeper's recurring-job tools (SPEC decision 144): one card per job set-up,
@@ -65,6 +66,17 @@ async function waykeeperCalling(project: Project, tool: string, input: unknown) 
 const theCard = () => h.log.tables.proposals.all().find((p) => proposalJobOf(p));
 
 describe('propose_job (P10-06)', () => {
+  it('tells the Waykeeper what a source’s target must be, so the map can match what a run used', () => {
+    const props = (
+      proposeJobTool.inputSchema as { properties: Record<string, { description: string }> }
+    ).properties;
+    const text = props['dataMap']!.description;
+    expect(text).toContain('mcp: the MCP server name');
+    expect(text).toContain('site: the host or a URL');
+    expect(text).toContain('files: an absolute folder');
+    expect(text).toMatch(/database, command and other are never checked/);
+  });
+
   it('opens one card; approval creates the area, task and job in one transaction and wakes the Waykeeper once', async () => {
     const project = await longTermProject();
     const { wk, out } = await waykeeperCalling(project, 'propose_job', {
@@ -363,6 +375,7 @@ describe('list_jobs and read_job_runs (P10-06)', () => {
         state: 'active',
         nextRunAt: job.nextRunAt,
         lastRun: null,
+        collects: [],
         openFindings: 0,
       },
     ]);

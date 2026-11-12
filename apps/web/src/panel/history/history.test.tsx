@@ -14,6 +14,7 @@ import type {
   ServerMessage,
   Task,
 } from '@galactic/protocol';
+import { stewardName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../../App.js';
 import { FakeWebSocket } from '../../client/fake-socket.js';
@@ -346,7 +347,9 @@ describe('history view (P25-10)', () => {
         name: 'Which timezone for the fixtures?',
       }),
     ).toBeNull();
-    await click(within(row).getByRole('link', { name: /^open Steward/ }));
+    await click(
+      within(row).getByRole('link', { name: new RegExp(`^open ${stewardName(archivedTask)} · `) }),
+    );
     expect(window.location.pathname).toBe('/steward/a-st-old');
   });
 

@@ -33,6 +33,7 @@ const PURPOSE_TEXT: Record<JobRun['purpose'], string> = {
   catch_up: 'a catch-up run (Mission Control missed the scheduled time)',
   retry: 'a retry after a failed run',
   follow_up: 'a follow-up run, to carry out what Cosmin approved',
+  refresh: 'a refresh run, started by Cosmin from the dashboard to update its panels',
 };
 
 function money(amount: number | undefined, currency: string | undefined): string {
@@ -65,6 +66,17 @@ function followUpText(followUp: FollowUp): string {
     `Cosmin approved spending ${money(followUp.amount, followUp.currency)} for ` +
     `${followUp.purpose ?? 'the purpose you asked for'}: do it now`
   );
+}
+
+/** What a job's data map tells the run to collect (P15-02): the exact names and their kinds. */
+function dataMapLines(job: Job): string[] {
+  const collects = job.dataMap?.collects ?? [];
+  if (collects.length === 0) return [];
+  return [
+    '- The dashboard shows what you collect. Report exactly these names, each in the `report_run` field of its kind (numbers, tables, lists, calendars, statuses, texts):',
+    ...collects.map((c) => `  - ${c.name} (${c.kind}): ${c.description}`),
+    '- If a source cannot be read, report it in `sourceProblems` as {sourceId, problem}: never invent its values.',
+  ];
 }
 
 export function jobRunPrompt(brief: JobPromptBrief): string {
@@ -116,6 +128,7 @@ export function jobRunPrompt(brief: JobPromptBrief): string {
             '- Before anything that costs real money, call `request_spend` and stop: a later run does it once Cosmin approves.',
           ]),
       '- End the run with `report_run`: its outcome, a short summary, and any numbers worth keeping.',
+      ...dataMapLines(job),
     );
   } else {
     lines.push(

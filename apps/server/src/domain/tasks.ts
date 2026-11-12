@@ -9,6 +9,8 @@ import {
   type ReopenInput,
   type Task,
   type TaskChanges,
+  pickStewardName,
+  WORK_NAME_MAX,
 } from '@galactic/protocol';
 import {
   bodyOf,
@@ -58,11 +60,26 @@ function checkBlockers(ctx: CommandContext, taskId: Id | undefined, blockedBy: I
   }
 }
 
+/**
+ * The name of a new task's Steward (P15-11, decision 157): a star's name none of the other tasks
+ * of its project uses (for a standalone task: none of the other standalone tasks).
+ */
+export function newStewardName(ctx: CommandContext, taskId: Id, projectId: Id | undefined): string {
+  const taken = new Set<string>();
+  for (const t of ctx.tables.tasks.all()) {
+    const name = t.meta?.['stewardName'];
+    if (typeof name === 'string' && t.projectId === projectId) taken.add(name);
+  }
+  return pickStewardName(taken, taskId);
+}
+
 export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
   if (!input.description.trim()) throw new DomainError('invalid', 'a task needs a description');
   const id = `t-${randomUUID()}`;
   const blockedBy = input.blockedBy ?? [];
   checkBlockers(ctx, undefined, blockedBy);
+  // the short name the creating agent gave, for lists (P15-11); the user may rename it later
+  const title = input.title?.trim().slice(0, WORK_NAME_MAX);
   let bodyId: Id;
   let asteroid;
   if (input.projectId) {
@@ -91,7 +108,11 @@ export function createTask(ctx: CommandContext, input: CreateTaskInput): Task {
     ...(input.model ? { model: input.model } : {}),
     ...(input.publishes ? { publishes: true } : {}),
     ...(input.makesImages ? { makesImages: true } : {}),
-    ...(input.meta ? { meta: input.meta } : {}),
+    meta: {
+      ...input.meta,
+      stewardName: newStewardName(ctx, id, input.projectId),
+      ...(title ? { title } : {}),
+    },
   };
   ctx.tables.tasks.insert(task);
   ctx.emit({ type: 'task.created', task });

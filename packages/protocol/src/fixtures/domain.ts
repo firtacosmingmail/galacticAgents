@@ -10,6 +10,7 @@ import type {
 } from '../domain.js';
 import type { Deliverable, DeliverableRun } from '../deliverables.js';
 import type { Area, Job, JobRun } from '../long-term.js';
+import type { Panel } from '../dashboard.js';
 
 export const NOW = '2026-09-30T10:00:00.000Z';
 
@@ -255,4 +256,18 @@ export const jobRun: JobRun = {
   coversFrom: NOW,
   startedAt: '2026-10-01T09:04:00.000Z',
   outcome: 'running',
+};
+
+export const panel: Panel = {
+  id: 'pn-1',
+  projectId: 'p-1',
+  type: 'tile',
+  title: 'Messages',
+  source: { kind: 'job', jobId: 'j-1', values: ['messages'] },
+  display: { compare: 'week', format: 'number' },
+  limits: [{ value: 'messages', better: 'higher', veryBad: { op: 'below', value: 5 } }],
+  layout: { order: 0, w: 1, h: 1 },
+  createdBy: { type: 'agent', id: 'a-waykeeper-1' },
+  createdAt: NOW,
+  updatedAt: NOW,
 };

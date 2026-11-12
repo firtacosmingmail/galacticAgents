@@ -17,6 +17,7 @@ import { registerAgentRoutes, type AgentRoutesOptions } from './http/agent-route
 import { registerPanelRoutes } from './http/panel-routes.js';
 import { customAppName, manifestWithAppName, pageWithAppName } from './http/app-name.js';
 import { registerBackupRoutes } from './http/backup-routes.js';
+import { registerDashboardRoutes, type DashboardRoutesOptions } from './http/dashboard-routes.js';
 import { registerJobRoutes } from './http/job-routes.js';
 import { registerDeliverableRoutes } from './http/deliverable-routes.js';
 import type { BackupService } from './db/backup.js';
@@ -97,6 +98,8 @@ export interface AppOptions {
   remote?: { service: Pick<RemoteService, 'status' | 'start' | 'stop'>; peer?: PeerCheck };
   /** The Antigravity hook bridge (P11-05): enables `POST /api/agy-hook[/tools|/call]`. */
   agyBridge?: HookBridge;
+  /** The job scheduler, for the dashboard's refresh (P15-04). */
+  jobs?: DashboardRoutesOptions['jobs'];
   /** Fastify's logger: on/off, or options (tests pass a `stream` to read what is logged). */
   logger?: boolean | { level?: string; stream?: { write(line: string): void } };
 }
@@ -286,6 +289,15 @@ export function buildApp(opts: AppOptions): App {
   // Jobs' run history (P10-07).
   if (opts.log) {
     registerJobRoutes(fastify, config, { log: opts.log });
+  }
+
+  // The project dashboard: panel data, refresh, clearing and the layout (P15-04).
+  if (opts.log && opts.commands) {
+    registerDashboardRoutes(fastify, config, {
+      log: opts.log,
+      commands: opts.commands,
+      ...(opts.jobs ? { jobs: opts.jobs } : {}),
+    });
   }
 
   // Managed runs (P9-08).

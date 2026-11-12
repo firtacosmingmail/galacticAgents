@@ -77,7 +77,13 @@ describe('recordControl', () => {
       {
         type: 'task.updated',
         taskId: task.id,
-        changes: { meta: { stewardInstructions: 'do it', title: 'Short name' } },
+        changes: {
+          meta: {
+            stewardInstructions: 'do it',
+            stewardName: task.meta?.['stewardName'],
+            title: 'Short name',
+          },
+        },
       },
     ]);
     expect(w.tables.tasks.get(task.id)).toMatchObject({
@@ -87,7 +93,10 @@ describe('recordControl', () => {
 
     // Blank or null goes back to the description; clearing again changes nothing.
     expect(rename('   ').events[0]).toMatchObject({ changes: { title: null } });
-    expect(w.tables.tasks.get(task.id)!.meta).toEqual({ stewardInstructions: 'do it' });
+    expect(w.tables.tasks.get(task.id)!.meta).toEqual({
+      stewardInstructions: 'do it',
+      stewardName: task.meta?.['stewardName'],
+    });
     expect(rename(null).types).toEqual(['control.edit']);
 
     expect(() => rename('x'.repeat(121))).toThrow(/at most 120/);

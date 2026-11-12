@@ -83,7 +83,7 @@ export interface ImportReport {
 
 /**
  * The row kinds the import checks and writes. `deliverables` (P9-01), `areas` and `jobs` (P10-01)
- * are optional in an export: one from a build before their phase has none and nothing is checked
+ * and `panels` (P15-01) are optional in an export: one from a build before their phase has none and nothing is checked
  * for them. The jobs' run history (`job_runs`) is never exported (`map-export.ts`).
  */
 const ROW_KINDS = [
@@ -96,6 +96,7 @@ const ROW_KINDS = [
   'deliverables',
   'areas',
   'jobs',
+  'panels',
 ] as const;
 
 /** Whether the database holds nothing worth keeping: no events, work, agents or transcripts. */
@@ -117,6 +118,7 @@ export function isEmptyDatabase(db: Database): boolean {
     'deliverables',
     'areas',
     'jobs',
+    'dashboard_panels',
     'transcript_chunks',
   ].every((table) => count(table) === 0);
 }
@@ -152,6 +154,7 @@ export function foldRows(seed: readonly Body[], events: readonly ExportedEvent[]
     deliverables: Object.values(world.deliverables),
     areas: Object.values(world.areas ?? {}),
     jobs: Object.values(world.jobs ?? {}),
+    panels: Object.values(world.panels ?? {}),
   };
 }
 
@@ -220,6 +223,7 @@ function writeRows(t: Tables, rows: ExportedRows, order: ExportedRows): void {
   }
   for (const a of sorted(rows.areas ?? [], order.areas ?? [])) t.areas.insert(a);
   for (const j of sorted(rows.jobs ?? [], order.jobs ?? [])) t.jobs.insert(j);
+  for (const p of sorted(rows.panels ?? [], order.panels ?? [])) t.panels.insert(p);
 }
 
 /** Refuses an export whose schema this build does not have (a newer build, or another branch). */

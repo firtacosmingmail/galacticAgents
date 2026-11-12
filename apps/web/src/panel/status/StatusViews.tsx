@@ -9,7 +9,7 @@ import {
   taskLabel,
 } from '@galactic/protocol';
 import { useAppStore } from '../../state/store.js';
-import { HARMONIZER } from '../../state/selection.js';
+import { HARMONIZER, selectionKey } from '../../state/selection.js';
 import { currentHarmonizer } from '../../console/hierarchy/HierarchyConsole.js';
 import { ErrorLine, StatePill, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { Beacon, NavLink } from '../Navigation.js';
@@ -21,6 +21,7 @@ import { ProjectDeliverables } from '../deliverables/DeliverablesList.js';
 import { PermissionRules } from './PermissionRules.js';
 import { liveRunCount } from '../deliverables/runs-model.js';
 import { JobsPane } from '../jobs/JobsPane.js';
+import { DashboardPane } from '../dashboard/DashboardPane.js';
 import { jobsNeedingYou } from '../jobs/jobs-model.js';
 import {
   budgetText,
@@ -138,12 +139,13 @@ export function DockViewToggle({
       role="group"
       aria-label={
         longTerm
-          ? 'show the chat, the status, the deliverables or the jobs'
+          ? 'show the dashboard, the chat, the status, the deliverables or the jobs'
           : role === 'waykeeper'
             ? 'show the chat, the status or the deliverables'
             : 'show the chat or the status'
       }
     >
+      {longTerm && option('dashboard', 'Dashboard')}
       {option('chat', 'Chat')}
       {option('status', 'Status')}
       {role === 'waykeeper' &&
@@ -192,6 +194,7 @@ export function BrainDock({ agent, children }: { agent: Agent; children: ReactNo
     longTerm,
   );
   const hidden = view !== 'chat';
+  useOpenOnDashboard(agent, longTerm);
   return (
     <>
       <div
@@ -211,6 +214,11 @@ export function BrainDock({ agent, children }: { agent: Agent; children: ReactNo
           <ProjectDeliverables projectId={projectId} />
         </div>
       )}
+      {view === 'dashboard' && projectId && (
+        <div className="sts-pane sts-pane-status sts-pane-dashboard">
+          <DashboardPane projectId={projectId} />
+        </div>
+      )}
       {view === 'jobs' && projectId && (
         <div className="sts-pane sts-pane-status sts-pane-jobs">
           <JobsPane projectId={projectId} />
@@ -218,6 +226,22 @@ export function BrainDock({ agent, children }: { agent: Agent; children: ReactNo
       )}
     </>
   );
+}
+
+/**
+ * Opening a long-term project's Waykeeper shows its Dashboard (P15-06), whatever view was stored;
+ * the user can still pick another tab while it stays selected (`setView`). Another brain keeps
+ * the stored view. Not applied when a view was already picked for this selection (an area moon's
+ * click selects the Waykeeper and then picks Jobs).
+ */
+function useOpenOnDashboard(agent: Agent, longTerm: boolean): void {
+  const selected = useAppStore((s) => selectionKey(s.selection));
+  useEffect(() => {
+    const dock = useDockView.getState();
+    if (agent.role === 'waykeeper' && longTerm) {
+      if (dock.chosenFor !== selected) dock.showTransient('dashboard');
+    } else if (dock.transient === 'dashboard') dock.endTransient();
+  }, [agent.id, agent.role, longTerm, selected]);
 }
 
 /** The Harmonizer's status is the system's; a Waykeeper's is its project's. */

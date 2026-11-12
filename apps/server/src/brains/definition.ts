@@ -8,6 +8,7 @@ import type {
   Id,
   Job,
   JobRun,
+  Panel,
   Project,
   Proposal,
   Question,
@@ -62,6 +63,8 @@ export interface BrainQueries {
   areas(projectId: Id): Area[];
   /** A job's runs, newest first: `limit` of them (1–200). */
   jobRuns(jobId: Id, limit: number): JobRun[];
+  /** The project's dashboard panels, in dashboard order (P15-05). */
+  panels(projectId: Id): Panel[];
 }
 
 /** What a tool handler gets besides its input. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Event, Question } from '@galactic/protocol';
+import { stewardName, type Event, type Question } from '@galactic/protocol';
 import { applyEvent, type WorldState } from '../../state/reduce.js';
 import {
   beaconCard,
@@ -231,7 +231,9 @@ describe('beaconCard', () => {
       heading: 'Permission',
       kind: 'permission',
       text: 'Run rm -rf build?',
-      asker: expect.stringMatching(/^Steward · /) as unknown as string,
+      asker: expect.stringMatching(
+        new RegExp(`^${stewardName(w.tasks['t-in']!)} · `),
+      ) as unknown as string,
       more: 0,
       questionId: 'q-p',
     });

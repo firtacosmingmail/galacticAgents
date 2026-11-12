@@ -184,6 +184,13 @@ describe('jobsModel (P10-07)', () => {
     expect(runLine({ ...run, outcome: 'running', purpose: 'scheduled' }, NOW)).toBe(
       '▶ running since yesterday 11:40',
     );
+    // A refresh (P15-04) says so, and one cut short does not run again.
+    expect(runLine({ ...run, outcome: 'quiet', purpose: 'refresh' }, NOW)).toBe(
+      '✓ yesterday 11:40 (refresh) — 22 messages',
+    );
+    expect(runLine({ ...run, outcome: 'interrupted', purpose: 'refresh' }, NOW)).toBe(
+      '↻ yesterday 11:40 — refresh cut short',
+    );
     expect(dayWord(new Date(2026, 9, 25, 9), NOW)).toBe('Sun');
     expect(dayWord(new Date(2026, 10, 1, 9), NOW)).toBe('Sun');
     expect(dayWord(new Date(2026, 10, 3, 9), NOW)).toBe('Nov 3');

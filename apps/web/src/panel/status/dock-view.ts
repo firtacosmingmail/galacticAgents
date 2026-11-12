@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { useAppStore } from '../../state/store.js';
+import { selectionKey } from '../../state/selection.js';
 
 /**
  * Per browser (P5-02): what the dock shows for the Harmonizer or a Waykeeper — the conversation
@@ -13,18 +15,19 @@ import { create } from 'zustand';
  */
 export const DOCK_VIEW_KEY = 'galactic.panel.dock.view';
 
-export type DockView = 'chat' | 'status' | 'deliverables' | 'jobs';
+export type DockView = 'chat' | 'status' | 'deliverables' | 'jobs' | 'dashboard';
 
 /**
  * The stored choice. `deliverables` (P9-09) is a project's third view ("Chat | Status |
  * Deliverables"); the Harmonizer has no Deliverables view and shows its chat meanwhile
  * (`brainView`). `jobs` (P10-07) is a long-term project's fourth view; a brain without it shows
- * its chat while the stored choice stays `jobs`.
+ * its chat while the stored choice stays `jobs`. `dashboard` (P15-06) is the same kind of view,
+ * and what opening a long-term project's Waykeeper shows first (an effect in `BrainDock`).
  */
 export function readDockView(): DockView {
   try {
     const v = localStorage.getItem(DOCK_VIEW_KEY);
-    return v === 'status' || v === 'deliverables' || v === 'jobs' ? v : 'chat';
+    return v === 'status' || v === 'deliverables' || v === 'jobs' || v === 'dashboard' ? v : 'chat';
   } catch {
     return 'chat';
   }
@@ -40,7 +43,8 @@ function writeDockView(view: DockView): void {
 
 /**
  * What a brain's dock shows for `view`: only a Waykeeper has the Deliverables view, and only the
- * Waykeeper of a long-term project (`longTerm`) has the Jobs view (P10-07).
+ * Waykeeper of a long-term project (`longTerm`) has the Jobs (P10-07) and Dashboard (P15-06)
+ * views.
  */
 export function brainView(
   view: DockView,
@@ -48,7 +52,8 @@ export function brainView(
   longTerm = false,
 ): DockView {
   if (view === 'deliverables' && role !== 'waykeeper') return 'chat';
-  if (view === 'jobs' && !(role === 'waykeeper' && longTerm)) return 'chat';
+  if ((view === 'jobs' || view === 'dashboard') && !(role === 'waykeeper' && longTerm))
+    return 'chat';
   return view;
 }
 
@@ -57,6 +62,12 @@ interface DockViewState {
   view: DockView;
   /** The user's stored choice. */
   stored: DockView;
+  /**
+   * The selection the user last picked a view for (`setView`): opening a long-term Waykeeper
+   * shows its dashboard unless a view was already chosen for that very selection (an area moon's
+   * click selects the Waykeeper and then picks Jobs).
+   */
+  chosenFor: string | undefined;
   /** The transient override, not stored (`undefined`: none). */
   transient: DockView | undefined;
   /** The user's choice: stored, and it ends any transient override. */
@@ -65,6 +76,14 @@ interface DockViewState {
   showTransient: (view: DockView) => void;
   /** Ends the transient override: the stored choice shows again. */
   endTransient: () => void;
+  /**
+   * A panel the dashboard should scroll to and focus (P15-09: a job map's panel chip). Set by
+   * `showPanel`; the panel's frame consumes it once with `clearFocusPanel`.
+   */
+  focusPanelId: string | undefined;
+  /** Switches to the Dashboard view (stored, like a click on its tab) and asks for `panelId`. */
+  showPanel: (panelId: string) => void;
+  clearFocusPanel: () => void;
   /** Reads the stored choice again, dropping any override (tests, another tab's change). */
   reload: () => void;
 }
@@ -75,16 +94,48 @@ export const useDockView = create<DockViewState>((set) => {
     view: stored,
     stored,
     transient: undefined,
+    chosenFor: undefined,
+    focusPanelId: undefined,
+    showPanel: (panelId) => {
+      useDockView.getState().setView('dashboard');
+      set({ focusPanelId: panelId });
+    },
+    clearFocusPanel: () => set({ focusPanelId: undefined }),
     setView: (view) => {
       writeDockView(view);
-      set({ view, stored: view, transient: undefined });
+      set({
+        view,
+        stored: view,
+        transient: undefined,
+        chosenFor: selectionKey(useAppStore.getState().selection),
+      });
     },
     showTransient: (view) => set({ view, transient: view }),
     endTransient: () =>
       set((s) => (s.transient === undefined ? s : { view: s.stored, transient: undefined })),
     reload: () => {
       const view = readDockView();
-      set({ view, stored: view, transient: undefined });
+      set({
+        view,
+        stored: view,
+        transient: undefined,
+        chosenFor: undefined,
+        focusPanelId: undefined,
+      });
     },
   };
+});
+
+/**
+ * A view picked for a selection excuses that selection from opening the dashboard only within the
+ * gesture that selected it (an area moon's click selects, then picks Jobs). Any later change of
+ * the selection, whether or not a dock is mounted for it (a steward's view has none), ends it.
+ * Subscribed here, it runs inside `select`, before the gesture's `setView`.
+ */
+let lastSelection = selectionKey(useAppStore.getState().selection);
+useAppStore.subscribe((s) => {
+  const key = selectionKey(s.selection);
+  if (key === lastSelection) return;
+  lastSelection = key;
+  useDockView.setState({ chosenFor: undefined });
 });

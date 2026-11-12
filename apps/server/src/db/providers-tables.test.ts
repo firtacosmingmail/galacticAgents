@@ -134,13 +134,25 @@ describe('provider columns (P11-02)', () => {
        VALUES ('j-1', 'p-1', 'ar-1', 't-job-1', 'Reviews', 'x', '{"kind":"daily","at":"09:00"}',
          'active', ?, ?)`,
     ).run(fx.NOW, fx.NOW);
-    t.jobRuns.insert(fx.jobRun);
-    const before = { questions: t.questions.all(), runs: t.jobRuns.all() };
+    // The 0016 job_runs table has no dashboard columns (0020): written by hand.
+    db.prepare(
+      `INSERT INTO job_runs (id, job_id, agent_id, purpose, due_at, covers_from, started_at, outcome)
+       VALUES (?, 'j-1', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      fx.jobRun.id,
+      fx.jobRun.agentId,
+      fx.jobRun.purpose,
+      fx.jobRun.dueAt,
+      fx.jobRun.coversFrom,
+      fx.jobRun.startedAt,
+      fx.jobRun.outcome,
+    );
+    const before = { questions: t.questions.all() };
 
-    expect(migrate(db, all).applied).toEqual([17, 18, 19]);
+    expect(migrate(db, all).applied).toEqual([17, 18, 19, 20]);
     const after = tables(db);
     expect(after.questions.all()).toEqual(before.questions);
-    expect(after.jobRuns.all()).toEqual(before.runs);
+    expect(after.jobRuns.all()).toEqual([fx.jobRun]);
     expect(indexNames(db, 'questions')).toEqual(
       expect.arrayContaining(['questions_status', 'questions_history', 'questions_origin']),
     );

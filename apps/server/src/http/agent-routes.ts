@@ -422,7 +422,9 @@ export function registerAgentRoutes(
             ? { decision: 'edit', changes: compact(body.changes) }
             : body.decision === 'reject'
               ? { decision: 'reject', ...(body.reason ? { reason: body.reason } : {}) }
-              : body;
+              : body.decision === 'approve'
+                ? { decision: 'approve', ...(body.removePanels ? { removePanels: true } : {}) }
+                : body;
         try {
           const { value } = await commands.decideProposal(
             (req.params as { id: string }).id,

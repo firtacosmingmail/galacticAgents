@@ -66,6 +66,12 @@ import {
   type CreateJobInput,
   type EndJobRunInput,
   type Job,
+  type Panel,
+  type PanelChanges,
+  type PanelDraft,
+  type PanelPlacement,
+  type Proposal,
+  type ProposePanelInput,
   type JobRun,
   type OpenFindingInput,
   type ReportJobRunInput,
@@ -148,7 +154,22 @@ import {
 } from './waykeeper-approvals.js';
 import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
-import { createProposal, decideProposal, proposeJob, proposePlan } from './proposals.js';
+import {
+  arrangePanels,
+  clearJobValues,
+  clearPanelHistory,
+  createPanel,
+  removePanel,
+  suggestPanelRemoval,
+  updatePanel,
+} from './panels.js';
+import {
+  createProposal,
+  decideProposal,
+  proposeJob,
+  proposePanel,
+  proposePlan,
+} from './proposals.js';
 import {
   endAgentQuestions,
   holderFor,
@@ -1678,6 +1699,33 @@ export class Commands implements DomainCommands {
   }
   setJobState(input: SetJobStateInput): Promise<CommandResult<Job>> {
     return this.run((ctx) => setJobState(ctx, input));
+  }
+
+  // -- the project dashboard (P15-03) ----------------------------------------------------------
+
+  createPanel(projectId: Id, draft: PanelDraft, by: Actor): Promise<CommandResult<Panel>> {
+    return this.run((ctx) => createPanel(ctx, projectId, draft, by));
+  }
+  updatePanel(panelId: Id, changes: PanelChanges, by: Actor): Promise<CommandResult<Panel>> {
+    return this.run((ctx) => updatePanel(ctx, panelId, changes, by));
+  }
+  removePanel(panelId: Id, by: Actor, reason: string): Promise<CommandResult<void>> {
+    return this.run((ctx) => removePanel(ctx, panelId, by, reason));
+  }
+  arrangePanels(projectId: Id, layouts: PanelPlacement[], by: Actor): Promise<CommandResult<void>> {
+    return this.run((ctx) => arrangePanels(ctx, projectId, layouts, by));
+  }
+  clearPanelHistory(panelId: Id, by: Actor): Promise<CommandResult<Panel>> {
+    return this.run((ctx) => clearPanelHistory(ctx, panelId, by));
+  }
+  clearJobValues(jobId: Id, by: Actor): Promise<CommandResult<{ upTo: string; panels: Id[] }>> {
+    return this.run((ctx) => clearJobValues(ctx, jobId, by));
+  }
+  suggestPanelRemoval(panelId: Id): Promise<CommandResult<void>> {
+    return this.run((ctx) => suggestPanelRemoval(ctx, panelId));
+  }
+  proposePanel(input: ProposePanelInput): Promise<CommandResult<Proposal>> {
+    return this.run((ctx) => proposePanel(ctx, input));
   }
   startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>> {
     return this.run((ctx) => startJobRun(ctx, input));

@@ -4,6 +4,7 @@ import { PermissionRule } from './domain.js';
 import { RequestOrigin } from './enums.js';
 import { LONG_TERM_LIMITS, PublishContext } from './long-term-questions.js';
 import { Provider } from './providers.js';
+import { JobDataMap, PanelDraft, RunData, UsedSource } from './dashboard.js';
 import { Id, Meta, Timestamp } from './primitives.js';
 
 /**
@@ -90,7 +91,7 @@ export type JobRunOutcome = z.infer<typeof JobRunOutcome>;
  * Why a run started: on time, late (`catch_up`: due more than two ticks before it started), after
  * a failure was fixed (`retry`), or to carry out an approved send or spend (`follow_up`).
  */
-export const JobRunPurpose = z.enum(['scheduled', 'catch_up', 'retry', 'follow_up']);
+export const JobRunPurpose = z.enum(['scheduled', 'catch_up', 'retry', 'follow_up', 'refresh']);
 export type JobRunPurpose = z.infer<typeof JobRunPurpose>;
 
 /** An approved send or spend, queued on its job until a follow-up run carries it out. */
@@ -162,6 +163,8 @@ export const Job = z.object({
   runningRunId: Id.optional(),
   /** Approved sends and spends waiting for a follow-up run, oldest first. */
   followUps: z.array(FollowUp).default([]),
+  /** Where the job's data comes from and what it does with it (absent on older jobs). */
+  dataMap: JobDataMap.optional(),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -184,6 +187,10 @@ export const JobRun = z.object({
   summary: z.string().optional(),
   /** Named numbers the run reported (kept for the dashboard, project 3). */
   numbers: z.record(z.string(), z.number()).optional(),
+  /** Tables, lists, calendars, status boards and text the run reported. */
+  data: RunData.optional(),
+  /** What the run actually read from. */
+  sources: z.array(UsedSource).optional(),
   followUp: FollowUp.optional(),
   /** What the user wrote when answering the failure question (a retry run). */
   note: z.string().optional(),
@@ -205,6 +212,7 @@ export const JobDraft = Job.pick({
   followUpProvider: true,
   followUpModel: true,
   limitQuestionId: true,
+  dataMap: true,
 }).extend({
   unattendedRules: z
     .array(
@@ -283,6 +291,63 @@ export function proposalJobOf(
   proposal: Pick<Proposal, 'meta'> | undefined,
 ): ProposalJob | undefined {
   const parsed = ProposalJob.safeParse(proposal?.meta?.['job']);
+  return parsed.success ? parsed.data : undefined;
+}
+
+/**
+ * The placeholder `source.jobId` of a panel card's draft whose job part creates the job: the
+ * approval puts the new job's id in its place (P15-03).
+ */
+export const NEW_JOB_ID = '$new';
+
+/**
+ * A Waykeeper's panel card (`Proposal.meta.panel`, P15-03; SPEC decision 156): add, change or
+ * remove one panel of its long-term project's dashboard. The panel is filled by an existing job
+ * (`job.use`: no job changes) or by a job the same card creates or changes (`job.propose`, a job
+ * card's create or change part, approved with the panel as one). A panel card never grants
+ * anything itself: only its job part may widen what a job may do. Lives here, not in
+ * `dashboard.ts`, because it carries a `ProposalJob` (dashboard.ts is imported by this file).
+ */
+export const ProposalPanel = z
+  .object({
+    projectId: Id,
+    /** The Waykeeper that proposed; it owns the card like a job card. */
+    waykeeperId: Id,
+    action: z.enum(['create', 'change', 'remove']),
+    /** The panel a change or removal is about. */
+    panelId: Id.optional(),
+    /** The new panel (`create`), or the panel as the change leaves it (`change`). */
+    draft: PanelDraft.optional(),
+    /** `change` and `remove`: the panel as it was when proposed, so the card shows before → after. */
+    before: PanelDraft.optional(),
+    job: z.union([z.object({ use: Id }), z.object({ propose: ProposalJob })]).optional(),
+  })
+  .superRefine((card, ctx) => {
+    const source = card.draft?.source;
+    const createsJob =
+      card.job !== undefined && 'propose' in card.job && card.job.propose.action === 'create';
+    if (source?.kind === 'job' && source.jobId === NEW_JOB_ID && !createsJob) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['draft', 'source', 'jobId'],
+        message: `"${NEW_JOB_ID}" names the job the card creates; this card creates none`,
+      });
+    }
+    if (card.job && 'propose' in card.job && card.job.propose.action === 'stop') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['job', 'propose', 'action'],
+        message: 'a panel card creates or changes a job, never stops one',
+      });
+    }
+  });
+export type ProposalPanel = z.infer<typeof ProposalPanel>;
+
+/** The panel card a proposal carries, when it is one. */
+export function proposalPanelOf(
+  proposal: Pick<Proposal, 'meta'> | undefined,
+): ProposalPanel | undefined {
+  const parsed = ProposalPanel.safeParse(proposal?.meta?.['panel']);
   return parsed.success ? parsed.data : undefined;
 }
 

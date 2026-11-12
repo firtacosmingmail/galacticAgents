@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import {
+  affectedPanels,
+  panelsOf,
   scheduleText,
+  type JobDataMap,
   type JobDraft,
+  type Panel,
   type Proposal,
   type ProposalDecisionBody,
   type ProposalJob,
@@ -125,31 +129,46 @@ function Instructions({ text }: { text: string }) {
   );
 }
 
-export function JobCard({ proposal: p, job }: { proposal: Proposal; job: ProposalJob }) {
-  const api = useApi();
+/** The data map a job card shows: where the data comes from, what is collected, the steps. */
+function DataMapView({ map }: { map: JobDataMap }) {
+  return (
+    <div className="job-datamap">
+      <p>Where its data comes from:</p>
+      <ul className="items" aria-label="sources">
+        {map.sources.map((src) => (
+          <li key={src.id}>
+            <strong>{src.label}</strong> <span className="muted">({src.kind})</span> {src.target}
+          </li>
+        ))}
+      </ul>
+      <p>What it collects:</p>
+      <ul className="items" aria-label="collected values">
+        {map.collects.map((c) => (
+          <li key={c.name}>
+            <strong>{c.name}</strong> <span className="muted">({c.kind})</span> {c.description}
+          </li>
+        ))}
+      </ul>
+      <p>What it does:</p>
+      <ol className="items" aria-label="steps">
+        {map.steps.map((step, i) => (
+          <li key={i}>{step.text}</li>
+        ))}
+      </ol>
+    </div>
+  );
+}
+
+/**
+ * What a job proposal says about the job — its facts, the changed fields, what it may do without
+ * asking and its data map — shared by the job card and the panel card that proposes a job.
+ */
+export function JobDetails({ job }: { job: ProposalJob }) {
   const world = useAppStore((s) => s.world);
-  const { run, error, busy: running } = useAction();
-  // Card decisions are not queued offline (P7-05): they wait for the connection.
-  const offline = useStreamDown();
-  const busy = running || offline;
-  const decide = (d: ProposalDecisionBody) => run(() => api.decide(p.id, d));
   const shown = job.draft ?? job.before?.draft;
   const changes = jobChanges(world, job);
-  const project = world.projects[job.projectId];
-  // Unattended rules are a lasting grant: like "Allow similar", the Mac's (decision 138).
-  const macOnly = !useClientRules().edit && jobGrantsNewRules(job);
   return (
-    <article
-      className={`card proposal job-card proposal-${p.state}`}
-      aria-label={`job card ${p.requestText}`}
-    >
-      <header>
-        <StatePill state={p.state} />
-        <strong>{JOB_CARD_TITLES[job.action]}</strong>
-        <span className="muted">
-          {project ? `${project.name} · ` : ''}by <AgentRef agentId={job.waykeeperId} />
-        </span>
-      </header>
+    <>
       {shown && (
         <dl className="facts">
           <div>
@@ -206,11 +225,98 @@ export function JobCard({ proposal: p, job }: { proposal: Proposal; job: Proposa
         ) : (
           <p className="muted">Nothing — it asks for anything outside the project&apos;s rules</p>
         ))}
+      {shown?.dataMap && <DataMapView map={shown.dataMap} />}
+    </>
+  );
+}
+
+/** Whether approving the job part of a card is for the Mac only (new rules, no local client). */
+export function useMacOnly(job: ProposalJob | undefined): boolean {
+  const mayEdit = useClientRules().edit;
+  return !mayEdit && job !== undefined && jobGrantsNewRules(job);
+}
+
+/**
+ * The panels a stop or a change that drops collected values leaves without data, as the server
+ * works them out when the card is approved with `removePanels` (`removeJobPanels`). A panel card
+ * passes its job part and the panel it is about (`except`), which is never listed.
+ */
+export function usePanelsAffected(job: ProposalJob | undefined, except?: string): Panel[] {
+  const world = useAppStore((s) => s.world);
+  if (!job?.jobId || (job.action !== 'stop' && job.action !== 'change')) return [];
+  const panels = panelsOf(world, job.projectId).filter((p) => p.id !== except);
+  if (job.action === 'stop') return affectedPanels(panels, job.jobId);
+  const after = job.draft?.dataMap;
+  if (!after || JSON.stringify(after) === JSON.stringify(job.before?.draft.dataMap)) return [];
+  return affectedPanels(panels, job.jobId, after);
+}
+
+/** "Panels affected:" and the unticked "Also remove these panels" (P15-08, ruling R18). */
+export function PanelsAffected({
+  panels,
+  checked,
+  onChange,
+}: {
+  panels: Panel[];
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+}) {
+  return (
+    <div className="job-panels">
+      <p>Panels affected:</p>
+      <ul className="items" aria-label="Panels affected">
+        {panels.map((panel) => (
+          <li key={panel.id}>{panel.title}</li>
+        ))}
+      </ul>
+      <label>
+        <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />{' '}
+        Also remove these panels
+      </label>
+    </div>
+  );
+}
+
+export function JobCard({ proposal: p, job }: { proposal: Proposal; job: ProposalJob }) {
+  const api = useApi();
+  const world = useAppStore((s) => s.world);
+  const { run, error, busy: running } = useAction();
+  const offline = useStreamDown();
+  const busy = running || offline;
+  const [alsoRemove, setAlsoRemove] = useState(false);
+  const affected = usePanelsAffected(job);
+  const decide = (d: ProposalDecisionBody) => run(() => api.decide(p.id, d));
+  const project = world.projects[job.projectId];
+  const macOnly = useMacOnly(job);
+  return (
+    <article
+      className={`card proposal job-card proposal-${p.state}`}
+      aria-label={`job card ${p.requestText}`}
+    >
+      <header>
+        <StatePill state={p.state} />
+        <strong>{JOB_CARD_TITLES[job.action]}</strong>
+        <span className="muted">
+          {project ? `${project.name} · ` : ''}by <AgentRef agentId={job.waykeeperId} />
+        </span>
+      </header>
+      <JobDetails job={job} />
+      {affected.length > 0 && p.state !== 'rejected' && (
+        <PanelsAffected panels={affected} checked={alsoRemove} onChange={setAlsoRemove} />
+      )}
       {p.rationale && <p className="muted">{p.rationale}</p>}
       {offline && <OfflineDecisionNote />}
       {p.state !== 'rejected' && (
         <div className="controls">
-          <button disabled={busy || macOnly} onClick={() => decide({ decision: 'approve' })}>
+          <button
+            disabled={busy || macOnly}
+            onClick={() =>
+              decide({
+                decision: 'approve',
+                ...(alsoRemove && affected.length > 0 ? { removePanels: true as const } : {}),
+              })
+            }
+          >
             Approve
           </button>
         </div>

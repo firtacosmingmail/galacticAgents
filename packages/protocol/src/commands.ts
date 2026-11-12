@@ -15,6 +15,14 @@ import type {
   Task,
   TrustLevel,
 } from './domain.js';
+import type {
+  Panel,
+  PanelChanges,
+  PanelDraft,
+  PanelLayout,
+  RunData,
+  UsedSource,
+} from './dashboard.js';
 import type { StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
@@ -47,6 +55,7 @@ import type {
   JobRunOutcome,
   JobRunPurpose,
   JobState,
+  ProposalPanel,
 } from './long-term.js';
 
 // ---------------------------------------------------------------------------
@@ -75,6 +84,8 @@ export interface CreateProjectInput {
 
 export interface CreateTaskInput {
   description: string;
+  /** A short name for lists (2–5 words), kept as the task's title (`meta.title`, P15-11). */
+  title?: string;
   priority?: TaskPriority;
   /** Absent for a standalone task, which gets a fresh asteroid. */
   projectId?: Id;
@@ -162,6 +173,8 @@ export interface CreateProposalInput {
 /** One task of a Waykeeper's plan (P2-10). */
 export interface PlanTaskInput {
   description: string;
+  /** A short name for lists (2–5 words), kept as the task's title (`meta.title`, P15-11). */
+  title?: string;
   priority?: TaskPriority;
   /** Earlier tasks of the same plan (0-based positions) or existing task ids. */
   blockedBy?: (number | Id)[];
@@ -187,7 +200,15 @@ export interface ProposePlanInput {
 }
 
 export type ProposalDecision =
-  | { decision: 'approve' }
+  | {
+      decision: 'approve';
+      /**
+       * A job stop or change card (P15-03), or a panel card whose job part changes a job: also
+       * remove the dashboard panels the job no longer fills (`affectedPanels`; never the panel
+       * card's own panel), as "job stopped" / "no longer reported".
+       */
+      removePanels?: true;
+    }
   | {
       decision: 'edit';
       /**
@@ -484,6 +505,22 @@ export type ProposeJobInput = {
   | { action: 'stop'; jobId: Id }
 );
 
+/**
+ * A Waykeeper's panel card (P15-03; SPEC decision 156): the card as `ProposalPanel` describes it.
+ * The server builds what the card shows from it — the panel as it is (`before`, any given one is
+ * ignored) and the job part, checked like `proposeJob` (its `moonId` and `before` too).
+ */
+export type ProposePanelInput = Omit<ProposalPanel, 'waykeeperId' | 'before'> & {
+  waykeeperId: Id;
+  rationale?: string;
+};
+
+/** One panel's place in `arrangePanels`. */
+export interface PanelPlacement {
+  panelId: Id;
+  layout: PanelLayout;
+}
+
 export interface SetJobStateInput {
   jobId: Id;
   state: JobState;
@@ -511,6 +548,10 @@ export interface EndJobRunInput {
   outcome: Exclude<JobRunOutcome, 'running'>;
   summary?: string;
   numbers?: Record<string, number>;
+  /** The tables, lists, calendars, statuses and texts the run reported (P15-02). */
+  data?: RunData;
+  /** What the run actually used, recorded by Mission Control (P15-02). */
+  sources?: UsedSource[];
   /** For `failed`: the reason the failure question gives. */
   failureReason?: string;
   /**
@@ -539,6 +580,8 @@ export interface JobRunReport {
   outcome: 'quiet' | 'findings' | 'failed';
   summary: string;
   numbers?: Record<string, number>;
+  /** The tables, lists, calendars, statuses, texts and source problems the run reported (P15-02). */
+  data?: RunData;
   /** For `failed`: why. */
   failureReason?: string;
 }
@@ -758,6 +801,21 @@ export interface DomainCommands {
    */
   proposeJob(input: ProposeJobInput): Promise<CommandResult<Proposal>>;
   setJobState(input: SetJobStateInput): Promise<CommandResult<Job>>;
+
+  // the project dashboard (P15-03; SPEC decision 156)
+  /** Refused unless the project is long-term and open (`invalid`), or at 24 panels (`limit`). */
+  createPanel(projectId: Id, draft: PanelDraft, by: Actor): Promise<CommandResult<Panel>>;
+  updatePanel(panelId: Id, changes: PanelChanges, by: Actor): Promise<CommandResult<Panel>>;
+  removePanel(panelId: Id, by: Actor, reason: string): Promise<CommandResult<void>>;
+  /** The user's alone: every panel of the project, with distinct `order`s. */
+  arrangePanels(projectId: Id, layouts: PanelPlacement[], by: Actor): Promise<CommandResult<void>>;
+  /** The panel ignores runs before now (`historyFrom`). */
+  clearPanelHistory(panelId: Id, by: Actor): Promise<CommandResult<Panel>>;
+  /** Deletes the `numbers` and `data` of the job's runs up to now; lists the panels reading it. */
+  clearJobValues(jobId: Id, by: Actor): Promise<CommandResult<{ upTo: string; panels: Id[] }>>;
+  suggestPanelRemoval(panelId: Id): Promise<CommandResult<void>>;
+  /** A Waykeeper's panel card (`meta.panel`); its approval writes the panel and any job part. */
+  proposePanel(input: ProposePanelInput): Promise<CommandResult<Proposal>>;
   /** Records a run's start; refused while the job has a run going or is not active. */
   startJobRun(input: StartJobRunInput): Promise<CommandResult<JobRun>>;
   attachJobRunAgent(input: AttachJobRunAgentInput): Promise<CommandResult<JobRun>>;

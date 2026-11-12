@@ -5,6 +5,7 @@ import {
   proposalBudget,
   proposalJobOf,
   proposalLongTermOf,
+  proposalPanelOf,
   proposalParking,
   proposalPlan,
   Provider,
@@ -28,6 +29,7 @@ import { OfflineDecisionNote, useStreamDown } from './QueuedAnswer.js';
 import { AgentRef } from './links.js';
 import { choiceText } from '../providers.js';
 import { JOB_CARD_TITLES, JobCard } from './JobCard.js';
+import { PANEL_CARD_TITLES, PanelCard } from './PanelCard.js';
 
 /**
  * Proposal cards (P2-18, extracted for the panel in P25-06; SPEC §3.3): the one card a work
@@ -78,6 +80,8 @@ export function ProposalCard({ proposal }: { proposal: Proposal }) {
   if (proposal.state === 'approved') return <ApprovedCard proposal={proposal} />;
   const job = proposalJobOf(proposal);
   if (job) return <JobCard proposal={proposal} job={job} />;
+  const panel = proposalPanelOf(proposal);
+  if (panel) return <PanelCard proposal={proposal} panel={panel} />;
   return proposalPlan(proposal) ? (
     <PlanCard proposal={proposal} />
   ) : (
@@ -95,6 +99,7 @@ function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
   const world = useAppStore((s) => s.world);
   const plan = proposalPlan(p);
   const job = proposalJobOf(p);
+  const panel = proposalPanelOf(p);
   const jobName = job?.draft?.name ?? job?.before?.draft.name;
   return (
     <article
@@ -108,13 +113,15 @@ function ApprovedCard({ proposal: p }: { proposal: Proposal }) {
             ? `Plan for ${world.projects[plan.projectId]?.name ?? plan.projectId}`
             : job
               ? `${JOB_CARD_TITLES[job.action]}${jobName ? `: ${jobName}` : ''}`
-              : p.requestText}
+              : panel
+                ? `${PANEL_CARD_TITLES[panel.action]}: ${(panel.draft ?? panel.before)?.title ?? ''}`
+                : p.requestText}
         </strong>
         <span className="muted">
           {plan
             ? `${plan.taskIds.length} tasks`
-            : job
-              ? (world.projects[job.projectId]?.name ?? job.projectId)
+            : job || panel
+              ? (world.projects[(job ?? panel)!.projectId]?.name ?? (job ?? panel)!.projectId)
               : `${p.kind} · ${p.proposedBody.name}`}
           {carriedOutLine(p)}
         </span>

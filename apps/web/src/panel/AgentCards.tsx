@@ -1,6 +1,12 @@
 import { useEffect, useState } from 'react';
 import { openQuestionsLabel, questionItems } from './question-count.js';
-import { LAUNCH_FLAGS, launchOf, wallClockLimit, type Agent, taskLabel } from '@galactic/protocol';
+import {
+  LAUNCH_FLAGS,
+  launchOf,
+  wallClockLimit,
+  type Agent,
+  taskShortName,
+} from '@galactic/protocol';
 import { useAppStore } from '../state/store.js';
 import { HARMONIZER } from '../state/selection.js';
 import { agentLabel, StatePill } from '../console/hierarchy/shared.js';
@@ -73,7 +79,7 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
   const name = agent ? agentLabel(agent, world) : work ? workTitle(work) : '—';
   const workName = work
     ? work.kind === 'task'
-      ? taskLabel(work.item)
+      ? taskShortName(work.item)
       : work.item.name
     : undefined;
 
@@ -124,7 +130,12 @@ function AgentCard({ card, now }: { card: AgentCardModel; now: number }) {
                 <span className="muted">{work.item.priority} · </span>
               )}
               {work.item.pinned && <span className="muted">pinned · </span>}
-              <span className="agc-work-name">{workName}</span>
+              <span
+                className="agc-work-name"
+                title={work.kind === 'task' ? work.item.description : undefined}
+              >
+                {workName}
+              </span>
             </dd>
           </div>
         )}

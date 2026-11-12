@@ -51,30 +51,29 @@ function runOf(ctx: Reader, runId: Id): JobRun {
   return must(ctx.tables.jobRuns.get(runId), 'job run', runId);
 }
 
-/** Every run of the job, newest first (by start; the later row first on a tie). */
-function runsOf(ctx: Reader, jobId: Id): JobRun[] {
-  return ctx.tables.jobRuns
-    .all()
-    .filter((r) => r.jobId === jobId)
-    .reverse()
-    .sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+/**
+ * The job's runs, newest first (by start; the later row first on a tie): `limit` of them, or
+ * every one. One indexed query (`job_runs_job`), never a scan of every job's runs.
+ */
+function runsOf(ctx: Reader, jobId: Id, limit?: number): JobRun[] {
+  return ctx.tables.jobRuns.of(jobId, limit);
 }
 
 /** The job's runs, newest first: `limit` of them (default 20, at most 200). */
 export function jobRuns(ctx: Reader, jobId: Id, limit = DEFAULT_RUNS): JobRun[] {
   const n = Math.min(Math.max(1, Math.floor(limit)), LONG_TERM_LIMITS.runsKept);
-  return runsOf(ctx, jobId).slice(0, n);
+  return runsOf(ctx, jobId, n);
 }
 
 /**
  * Where a new run's window starts: the previous run's start — but a run cut short (`interrupted`)
- * is a missed run, not a previous one, so its own `coversFrom` carries forward — else the job's
- * creation.
+ * is a missed run, not a previous one, and a `refresh` run (P15-04) never moves the window, so
+ * their own `coversFrom` carries forward — else the job's creation.
  */
 function coversFromOf(ctx: Reader, job: Job): string {
   const last = job.lastRun;
   if (!last) return job.createdAt;
-  if (last.outcome === 'interrupted') {
+  if (last.outcome === 'interrupted' || last.purpose === 'refresh') {
     const cutShort = ctx.tables.jobRuns.get(last.runId);
     if (cutShort?.coversFrom) return cutShort.coversFrom;
   }
@@ -159,7 +158,8 @@ const cut = (text: string, max: number): string => (text.length > max ? text.sli
  * (summary cut to 500 characters) with `runningRunId` cleared; then only the job's last 200 runs
  * are kept. `failed` pauses the job and opens its one failure question (`openFailure`);
  * `interrupted` (a missed run) makes the job due now, unless `keepSchedule` (the user stopped it)
- * or the run was a follow-up. A job stopped meanwhile stays stopped.
+ * or the run was a follow-up or a refresh. A job stopped meanwhile stays stopped. The report the
+ * Steward kept on the running run (`meta.report`) is dropped: its values now live on the run once.
  */
 export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
   const current = runOf(ctx, input.runId);
@@ -170,13 +170,19 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
     );
   }
   const keptSchedule = input.outcome === 'interrupted' && input.keepSchedule === true;
+  // The report `report_run` kept on the running run is now the run itself: stored once.
+  const { report: _report, ...otherMeta } = current.meta ?? {};
+  const meta = { ...otherMeta, ...(keptSchedule ? { keptSchedule: true } : {}) };
+  const { meta: _meta, ...row } = current;
   const run = ctx.tables.jobRuns.upsert({
-    ...current,
+    ...row,
     outcome: input.outcome,
     endedAt: ctx.now,
     ...(input.summary !== undefined ? { summary: input.summary } : {}),
     ...(input.numbers !== undefined ? { numbers: input.numbers } : {}),
-    ...(keptSchedule ? { meta: { ...(current.meta ?? {}), keptSchedule: true } } : {}),
+    ...(input.data !== undefined ? { data: input.data } : {}),
+    ...(input.sources !== undefined && input.sources.length > 0 ? { sources: input.sources } : {}),
+    ...(Object.keys(meta).length > 0 ? { meta } : {}),
   });
   ctx.emit({
     type: 'job_run.ended',
@@ -201,8 +207,14 @@ export function endJobRun(ctx: CommandContext, input: EndJobRunInput): JobRun {
   if (job.runningRunId === run.id) changes.runningRunId = null;
   if (job.state !== 'stopped') {
     // A missed run is due again at once — unless the user stopped it (it keeps its schedule,
-    // ruling R9) or it was a follow-up (it never moved the schedule; its follow-up is re-queued).
-    if (input.outcome === 'interrupted' && !keptSchedule && run.purpose !== 'follow_up') {
+    // ruling R9), or it was a follow-up (it never moved the schedule; its follow-up is re-queued)
+    // or a refresh (P15-04: a refresh never changes `nextRunAt`).
+    if (
+      input.outcome === 'interrupted' &&
+      !keptSchedule &&
+      run.purpose !== 'follow_up' &&
+      run.purpose !== 'refresh'
+    ) {
       changes.nextRunAt = ctx.now;
     }
     if (input.outcome === 'failed') Object.assign(changes, failureChanges(ctx, job, run, input));

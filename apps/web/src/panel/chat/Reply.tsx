@@ -1,6 +1,7 @@
 import {
   excerpt,
   proposalJobOf,
+  proposalPanelOf,
   proposalPlan,
   type Actor,
   type Id,
@@ -86,6 +87,7 @@ export function draftOfCard(
       id:
         proposalPlan(card.proposal)?.waykeeperId ??
         proposalJobOf(card.proposal)?.waykeeperId ??
+        proposalPanelOf(card.proposal)?.waykeeperId ??
         agentId,
     },
     text: card.proposal.requestText,

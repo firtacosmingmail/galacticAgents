@@ -2,6 +2,7 @@
 import { act, cleanup, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AgentState, ControlBody } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { FakeWebSocket } from '../client/fake-socket.js';
 import { useAppStore } from '../state/store.js';
@@ -42,8 +43,8 @@ vi.mock('../scene/webgl.js', () => ({ webglAvailable: () => true }));
 
 const HARMONIZER = 'Harmonizer';
 const WAYKEEPER = 'Waykeeper · Auth refactor';
-const STEWARD = 'Steward · Replace the session middleware';
-const ASTEROID_STEWARD = 'Steward · Fix the flaky date test';
+const STEWARD = `${stewardName(fx.task)} · ${taskShortName(fx.task)}`;
+const ASTEROID_STEWARD = `${stewardName(fx.asteroidTask)} · ${taskShortName(fx.asteroidTask)}`;
 
 let fetchMock: PanelFetch;
 afterEach(() => {

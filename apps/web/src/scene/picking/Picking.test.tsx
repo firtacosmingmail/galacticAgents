@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { act, cleanup, fireEvent, render } from '@testing-library/react';
 import { createRef } from 'react';
 import { Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Quaternion, Vector3 } from 'three';
@@ -18,6 +19,8 @@ import { question } from '../beacons/fixtures.js';
 import { hoverAt, usePickingStore } from './store.js';
 import { useDetailStore } from '../detail/mode.js';
 import { registerStandIn } from '../detail/stand-ins.js';
+
+const AST_TASK = pickingWorld().tasks['t-ast']!;
 
 /**
  * `Picking` and `OutlineSync` without WebGL: R3F's hooks are replaced by a fake canvas state and a
@@ -371,7 +374,7 @@ describe('satellites as pick targets (P4-08)', () => {
       bodies: [{ bodyId: 'b-mars', name: 'Mars' }],
       satellites: [
         { agentId: 'a-wk-old', name: 'Waykeeper · Big project' },
-        { agentId: 'a-st', name: 'Steward · Fix the date test' },
+        { agentId: 'a-st', name: `${stewardName(AST_TASK)} · ${taskShortName(AST_TASK)}` },
       ],
     });
     expect(selected()).toBe('harmonizer');

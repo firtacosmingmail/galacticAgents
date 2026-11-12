@@ -1337,6 +1337,69 @@ describe('job scheduler (P10-04)', () => {
   });
 });
 
+describe('what a run used (P15-02)', () => {
+  it('a run that ends holds the deduplicated sources its allowed calls used', async () => {
+    const { c, clock } = boot({
+      scenario: () => ({
+        steps: [
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/a' } },
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://api.posthog.com/b' } },
+          { kind: 'tool_call', toolName: 'Read', input: { file_path: '/data/notes/a.md' } },
+          { kind: 'tool_call', toolName: 'Bash', input: { command: 'git status' } },
+          {
+            kind: 'tool_call',
+            toolName: 'report_run',
+            input: {
+              outcome: 'quiet',
+              summary: 'Done.',
+              texts: { note: 'hi' },
+              sourceProblems: [{ sourceId: 'crm', problem: 'down' }],
+            },
+          },
+          { kind: 'output', text: 'Done.' },
+        ],
+      }),
+    });
+    const { job } = await longTermJob(
+      c,
+      {},
+      { permissionPolicy: PERMISSION_POLICY_PRESETS.trusted },
+    );
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the run to end');
+    const run = runsOf(c, job.id)[0]!;
+    expect(run.outcome).toBe('quiet');
+    expect(run.data).toEqual({
+      texts: { note: 'hi' },
+      sourceProblems: [{ sourceId: 'crm', problem: 'down' }],
+    });
+    expect(run.sources).toEqual(
+      expect.arrayContaining([
+        { kind: 'site', target: 'api.posthog.com' },
+        { kind: 'files', target: '/data/notes' },
+      ]),
+    );
+    expect(run.sources).toHaveLength(2);
+  });
+
+  it('a call the gate asks about is not noted', async () => {
+    const { c, clock } = boot({
+      scenario: () => ({
+        steps: [
+          { kind: 'tool_call', toolName: 'WebFetch', input: { url: 'https://asked.example.com/' } },
+        ],
+      }),
+    });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    const stewardId = runsOf(c, job.id)[0]!.agentId!;
+    await until(() => c.statuses.get(stewardId)?.state === 'waiting_for_input', 'the question');
+    expect(c.runSources.take(stewardId)).toEqual([]);
+  });
+});
+
 describe("a run's end wakes no one (P10-04)", () => {
   it("the Steward's final turn ends the run quiet with its last text; the Waykeeper hears nothing", async () => {
     const clock = tickingClock(oct(1, 8).getTime());
@@ -1390,5 +1453,175 @@ describe("a run's end wakes no one (P10-04)", () => {
     expect(h.composed.reports.sent).toEqual([]);
     expect(wk.prompts().slice(turnsBefore).join('\n')).not.toContain(stewardId);
     expect(wk.prompts()).toHaveLength(turnsBefore);
+  });
+});
+
+describe('refresh: a run now (P15-04)', () => {
+  it('pressed twice gives one run: the second returns its id; the end leaves nextRunAt and the window alone (Review Focus 2)', async () => {
+    let spawns = 0;
+    const { c, clock, errors } = boot({ scenario: () => (spawns++ === 0 ? ASKS : ECHO) });
+    const { job } = await longTermJob(c);
+    const nextRunAt = jobNow(c, job.id).nextRunAt;
+    expect(nextRunAt).toBe(oct(1, 9).toISOString());
+    setTo(clock, oct(1, 8, 10));
+
+    const first = await c.jobs.runNow(job.id, USER);
+    expect(first.started).toBe(true);
+    expect(c.log.tables.jobRuns.get(first.runId)).toMatchObject({
+      purpose: 'refresh',
+      coversFrom: job.createdAt,
+    });
+    expect(stewardsOf(c, job.taskId)).toHaveLength(1);
+    expect(await c.jobs.runNow(job.id, USER)).toEqual({ runId: first.runId, started: false });
+    expect(stewardsOf(c, job.taskId)).toHaveLength(1);
+
+    const asked = c.log.tables.questions.all().find((q) => q.status === 'open')!;
+    await c.commands.answerQuestion({ questionId: asked.id, answer: 'the new ones', by: USER });
+    await until(ended(c, job.id), 'the refresh run to end');
+    expect(jobNow(c, job.id)).toMatchObject({
+      nextRunAt,
+      lastRun: { runId: first.runId, purpose: 'refresh', outcome: 'quiet' },
+    });
+
+    // The scheduled run is still for 09:00 and covers from where it did before the refresh.
+    setTo(clock, oct(1, 9));
+    expect((await c.jobs.tick()).started).toHaveLength(1);
+    expect(runsOf(c, job.id)[1]).toMatchObject({ purpose: 'scheduled', coversFrom: job.createdAt });
+    expect(errors).toEqual([]);
+  });
+
+  it('a refresh cut short does not make the job due', async () => {
+    const { c, clock } = boot({ scenario: () => ASKS });
+    const { job } = await longTermJob(c);
+    const nextRunAt = jobNow(c, job.id).nextRunAt;
+    setTo(clock, oct(1, 8, 10));
+    const { runId } = await c.jobs.runNow(job.id, USER);
+    const steward = c.log.tables.jobRuns.get(runId)!.agentId!;
+    await c.runtime.stop(steward, SYSTEM);
+    clock.advance(60_000);
+    const report = await c.jobs.tick();
+    expect(report).toMatchObject({ started: [], interrupted: [runId] });
+    expect(jobNow(c, job.id).nextRunAt).toBe(nextRunAt);
+    clock.advance(60_000);
+    expect((await c.jobs.tick()).started).toEqual([]);
+  });
+
+  it('is refused while the job is paused or stopped, or its project paused', async () => {
+    const { c, errors } = boot();
+    const { job, project } = await longTermJob(c);
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'pause' }, USER);
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await c.commands.control({ kind: 'project', id: project.id }, { action: 'resume' }, USER);
+
+    await c.commands.setJobState({ jobId: job.id, state: 'paused', by: USER });
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await c.commands.setJobState({ jobId: job.id, state: 'stopped', by: USER });
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(c.jobs.runNow('j-nope', USER)).rejects.toMatchObject({ code: 'not_found' });
+    expect(runsOf(c, job.id)).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('is refused for an agent: a refresh is the user’s', async () => {
+    const { c, errors } = boot();
+    const { job, wk } = await longTermJob(c);
+    await expect(c.jobs.runNow(job.id, { type: 'agent', id: wk.id })).rejects.toMatchObject({
+      code: 'invalid',
+    });
+    expect(runsOf(c, job.id)).toEqual([]);
+    expect(errors).toEqual([]);
+  });
+
+  it('is refused while the job waits on its usage-limit question', async () => {
+    const LIMITED: FakeScenario = {
+      steps: [
+        {
+          kind: 'fail',
+          error: 'usage limit reached',
+          reason: 'limit',
+          resetsAt: oct(1, 14).toISOString(),
+        },
+      ],
+    };
+    const { c, clock, errors } = boot({ scenario: () => LIMITED });
+    const { job } = await longTermJob(c);
+    setTo(clock, oct(1, 9));
+    await c.jobs.tick();
+    await until(() => jobNow(c, job.id).limitQuestionId !== undefined, 'the limit question');
+    expect(jobNow(c, job.id).state).toBe('active');
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'invalid' });
+    expect(runsOf(c, job.id)).toHaveLength(1);
+    expect(errors).toEqual([]);
+  });
+
+  it('is refused with `limit` when the caps leave no slot; no run row is written', async () => {
+    const { c } = boot({
+      caps: { maxConcurrentAgents: 1 },
+      scenario: (spawn) => (spawn.prompt === 'blocker' ? ASKS : ECHO),
+    });
+    const { job } = await longTermJob(c);
+    const spawned = await c.runtime.spawn({
+      role: 'steward',
+      runtime: 'fake',
+      prompt: 'blocker',
+      cwd: '/w/other',
+    });
+    expect(spawned.ok).toBe(true);
+    await expect(c.jobs.runNow(job.id, USER)).rejects.toMatchObject({ code: 'limit' });
+    expect(runsOf(c, job.id)).toEqual([]);
+  });
+});
+
+describe('the unchanged-panel nudge (P15-05)', () => {
+  it('a run that ends nudges the Waykeeper once for a panel unchanged for 29 days, and not on the next run', async () => {
+    const { c, clock, errors } = boot();
+    const { project, job, wk } = await longTermJob(c);
+    await c.commands.createPanel(
+      project.id,
+      {
+        type: 'tile',
+        title: 'Sales',
+        source: { kind: 'job', jobId: job.id, values: ['sales'] },
+        display: {},
+        limits: [],
+      },
+      USER,
+    );
+    // Two old runs that reported nothing the panel reads: its value has not changed for 29 days.
+    for (const [i, days] of [29, 15].entries()) {
+      const at = new Date(oct(30, 8).getTime() - days * 86_400_000).toISOString();
+      c.log.tables.jobRuns.insert({
+        id: `old-${i}`,
+        jobId: job.id,
+        purpose: 'scheduled',
+        dueAt: at,
+        startedAt: at,
+        endedAt: at,
+        outcome: 'quiet',
+      });
+    }
+    setTo(clock, oct(30, 9));
+    await c.jobs.tick();
+    await until(ended(c, job.id), 'the run to end');
+    const nudges = () =>
+      events(c).filter(
+        (e) => e.type === 'message.sent' && e.fromPanel !== undefined && e.agentId === wk.id,
+      );
+    await until(() => nudges().length > 0, 'the nudge');
+    expect(nudges()).toHaveLength(1);
+    expect(nudges()[0]).toMatchObject({
+      text: expect.stringMatching(/^Panel 'Sales' has not changed since 2026-10-01/),
+    });
+
+    setTo(clock, oct(31, 9));
+    await c.jobs.tick();
+    await until(
+      () => runsOf(c, job.id).filter((r) => r.startedAt >= oct(31, 0).toISOString()).length === 1,
+      'the second run',
+    );
+    await until(ended(c, job.id), 'the second run to end');
+    await c.jobs.tick(); // the queue is serial: the second run's check has been made
+    expect(nudges()).toHaveLength(1);
+    expect(errors).toEqual([]);
   });
 });

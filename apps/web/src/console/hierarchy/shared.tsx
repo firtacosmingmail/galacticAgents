@@ -1,4 +1,4 @@
-import { taskLabel } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { createContext, useContext, useState } from 'react';
 import type { Actor, Agent, Id, Project, Task } from '@galactic/protocol';
 import type { WorldState } from '../../state/reduce.js';
@@ -50,8 +50,6 @@ export function StatePill({ state }: { state: string | undefined }) {
   return <span className={`pill state-${s}`}>{s.replace(/_/g, ' ')}</span>;
 }
 
-const short = (text: string, n = 48) => (text.length > n ? `${text.slice(0, n - 1)}…` : text);
-
 /** "Harmonizer", "Waykeeper · CSV tool", "Steward · write the parser". */
 export function agentLabel(
   agent: Agent | undefined,
@@ -69,7 +67,8 @@ export function agentLabel(
     }
     case 'steward': {
       const task: Task | undefined = agent.taskId ? world.tasks[agent.taskId] : undefined;
-      return `Steward · ${task ? short(taskLabel(task)) : agent.id}`;
+      // a Steward is called by its task's star name and short name (P15-11): "Vega · Prospect list"
+      return task ? `${stewardName(task)} · ${taskShortName(task)}` : `Steward · ${agent.id}`;
     }
   }
 }

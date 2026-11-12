@@ -336,5 +336,13 @@ export function touches(event: Event, m: Members): boolean {
     case 'job_run.started':
     case 'job_run.ended':
       return false; // areas and jobs are not tracked as members yet (P10-01)
+    case 'panel.created':
+      return m.projects.has(event.panel.projectId);
+    case 'panel.removed':
+    case 'panels.arranged':
+      return m.projects.has(event.projectId);
+    case 'panel.updated':
+    case 'job.values_cleared':
+      return false; // panels and jobs are not tracked as members yet (P15-01)
   }
 }

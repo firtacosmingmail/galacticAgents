@@ -138,6 +138,16 @@ const plansOf = (ctx: BrainToolContext, projectId: Id) =>
   ctx.queries.proposals().filter((p) => proposalPlan(p)?.projectId === projectId);
 
 /** The provider, model and flags a task of a plan names (P11-08); each name is typed. */
+/** The short name a task is listed by (P15-11): its Steward shows as "Vega · <title>". */
+const TITLE_PROPERTY = {
+  title: {
+    type: 'string',
+    description:
+      'A short name for the task, 2–5 words (e.g. "Prospect list"), shown in lists next to its ' +
+      "Steward's name. Always give one; the description stays the Steward's full brief.",
+  },
+};
+
 const PROVIDER_PROPERTIES = {
   provider: {
     enum: ['claude', 'chatgpt', 'gemini'],
@@ -215,6 +225,7 @@ export const planTasksTool: BrainTool = {
         minItems: 1,
         items: obj(
           {
+            ...TITLE_PROPERTY,
             description: { type: 'string' },
             priority: { enum: PRIORITIES },
             blockedBy: {
@@ -246,8 +257,10 @@ export const planTasksTool: BrainTool = {
         throw new DomainError('invalid', `tasks[${i}].blockedBy must be a list of positions`);
       }
       const priority = optPriority(task);
+      const title = optStr(task, 'title');
       planned.push({
         description: str(task, 'description'),
+        ...(title ? { title } : {}),
         ...(priority ? { priority } : {}),
         ...(Array.isArray(blockedBy) && blockedBy.length > 0
           ? { blockedBy: blockedBy as number[] }
@@ -280,6 +293,7 @@ export const createTaskTool: BrainTool = {
     'It is approved at once; spawn a Steward for it when it is ready.',
   inputSchema: obj(
     {
+      ...TITLE_PROPERTY,
       description: { type: 'string' },
       priority: { enum: PRIORITIES },
       blockedBy: {
@@ -314,9 +328,11 @@ export const createTaskTool: BrainTool = {
     }
     for (const id of (blockedBy ?? []) as Id[]) taskOf(ctx, id);
     const priority = optPriority(input);
+    const title = optStr(input, 'title');
     const providers = await providerOfTask(ctx, input, project, '');
     const { value } = await ctx.commands.createTask({
       description: str(input, 'description'),
+      ...(title ? { title } : {}),
       projectId: project.id,
       ...(priority ? { priority } : {}),
       ...providers,

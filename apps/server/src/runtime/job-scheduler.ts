@@ -8,24 +8,30 @@ import {
   type Agent,
   type Event,
   type EventEnvelope,
+  type FollowUp,
   type Id,
   type Job,
   type JobChanges,
   type JobRun,
   type JobRunOutcome,
+  type ModelChoice,
+  type RunData,
   type PermissionAction,
 } from '@galactic/protocol';
 import { jobRunPrompt } from '../brains/job-prompt.js';
 import type { Commands } from '../domain/commands.js';
+import { DomainError } from '../domain/errors.js';
 import type { CommandContext, EventLog } from '../domain/event-log.js';
 import { RETRY_NOTE } from '../domain/findings.js';
 import { JOB_TICK_MS, endJobRun, jobMemory, runPurpose, startJobRun } from '../domain/job-runs.js';
 import { jobOf, writeJob } from '../domain/jobs.js';
+import { nudgeUnchangedPanels } from '../domain/panel-nudge.js';
 import { reaskInterruptedPublish } from '../domain/publish.js';
 import { FINISHED_WORK } from '../domain/states.js';
 import { storedSwitchOf, switchAppliesTo } from '../domain/usage-limits.js';
 import type { AgentRuntime, TurnEnd } from './agent-runtime.js';
 import type { Timers } from './archival.js';
+import type { RunSourceRecorder } from './run-sources.js';
 import { stewardChooser, type ChooseSteward } from './steward-choice.js';
 import { stewardDeclares } from './tool-runtimes.js';
 
@@ -54,6 +60,15 @@ export { JOB_TICK_MS };
  * Steward reported (`run.meta.report`, written by `report_run`) or `quiet` with its last text, and
  * the Steward is stopped; a failed Steward fails its run. Job-run Stewards report to no one and
  * wake no one (`steward-reports.ts`, `wake.ts`).
+ *
+ * **Refresh** (P15-04; SPEC decision 156): `runNow` starts a `refresh` run of an active job at once,
+ * through the same queue, or returns the run already going. It is the user's, refused while the
+ * job or its project is paused (or the job stopped, or waiting on a usage limit) and when the caps
+ * leave no slot (`limit`); a refresh run never moves the job's `nextRunAt` nor its catch-up window
+ * (`job-runs.ts`).
+ *
+ * **The panel nudge** (P15-05): after any run ends, the project's panels are checked
+ * (`nudgeUnchangedPanels`): one unchanged for 28 days sends the Waykeeper one system message, once.
  *
  * A Steward stopped by its provider's usage limit (P11-07, decision 148) ends its run `limited`:
  * the job stays active, nothing pauses, no failure question — `limits.askForRun` opens the one
@@ -91,6 +106,8 @@ export interface JobSchedulerOptions {
   chooseSteward?: ChooseSteward;
   /** Default: the log's clock. */
   now?: () => Date;
+  /** What each run used (P15-02), noted by the runtime; absent: runs end with no `sources`. */
+  runSources?: RunSourceRecorder;
   timers?: Timers;
   onError: (e: unknown) => void;
 }
@@ -100,6 +117,8 @@ interface RunReport {
   outcome?: unknown;
   summary?: unknown;
   numbers?: unknown;
+  /** The run's tables, lists, calendars, statuses, texts and source problems (P15-02). */
+  data?: unknown;
   failureReason?: unknown;
 }
 
@@ -208,6 +227,72 @@ export class JobScheduler {
     );
   }
 
+  /**
+   * Refresh (P15-04): runs the job now, as purpose `refresh`, or returns the run already going
+   * (`started: false`) — one run per job at a time. Refused (`invalid`) for an agent, a job that
+   * is not active, a project that is paused or finished, and a job waiting on its usage-limit
+   * question; refused (`limit`) when the caps leave no slot (no run row is written). Hard caps
+   * apply to the run's Steward as to any run's. A refresh runs on the job's own provider and
+   * model: a provider switch answered on the job's usage-limit question (which a scheduled run
+   * would take) is ignored here.
+   */
+  async runNow(jobId: Id, by: Actor): Promise<{ runId: Id; started: boolean }> {
+    const outcome = await this.enqueue<{ runId: Id; started: boolean } | DomainError>(
+      async () => {
+        try {
+          return await this.refresh(jobId, by);
+        } catch (error) {
+          // A refusal goes back to whoever asked, never to `onError`.
+          if (error instanceof DomainError) return error;
+          throw error;
+        }
+      },
+      () => new DomainError('conflict', 'the job scheduler has stopped'),
+    );
+    if (outcome instanceof DomainError) throw outcome;
+    return outcome;
+  }
+
+  private async refresh(jobId: Id, by: Actor): Promise<{ runId: Id; started: boolean }> {
+    const { log, runtime } = this.opts;
+    const { tables } = log;
+    if (by.type === 'agent') {
+      throw new DomainError('invalid', 'a refresh is the user’s: an agent cannot ask for one');
+    }
+    const job = tables.jobs.get(jobId);
+    if (!job) throw new DomainError('not_found', `no job ${jobId}`);
+    if (job.state !== 'active') {
+      throw new DomainError('invalid', `job ${job.name} is ${job.state}; it cannot be refreshed`);
+    }
+    const owner = tables.projects.get(job.projectId);
+    if (!owner || FINISHED_WORK.has(owner.state) || owner.state === 'paused') {
+      throw new DomainError(
+        'invalid',
+        `the project is ${owner?.state ?? 'gone'}; job ${job.name} cannot be refreshed`,
+      );
+    }
+    if (job.runningRunId) return { runId: job.runningRunId, started: false };
+    const limit = job.limitQuestionId ? tables.questions.get(job.limitQuestionId) : undefined;
+    if (limit && (limit.status === 'open' || limit.answer === LIMIT_WAIT)) {
+      throw new DomainError(
+        'invalid',
+        `job ${job.name} waits for its usage limit; answer its question first`,
+      );
+    }
+    const supervisor = this.waykeeperOf(job.projectId);
+    const slot = runtime.caps.canSpawn({
+      role: 'steward',
+      ...(supervisor ? { supervisorId: supervisor.id, supervisorRole: 'waykeeper' as const } : {}),
+    });
+    if (!slot.ok) throw new DomainError('limit', slot.reason);
+    const now = this.now();
+    const run = log.runCommand((ctx) =>
+      startJobRun(ctx, { jobId: job.id, purpose: 'refresh', dueAt: now.toISOString() }),
+    ).value;
+    await this.spawnRun(job, run, supervisor, emptyReport(), {});
+    return { runId: run.id, started: true };
+  }
+
   private enqueue<T>(fn: () => Promise<T>, idle: () => T): Promise<T> {
     const next = this.chain.then(() => (this.disposed ? idle() : fn()));
     this.chain = next.catch((error: unknown) => this.opts.onError(error));
@@ -254,9 +339,14 @@ export class JobScheduler {
     if (!job.nextRunAt) return undefined;
     let due = new Date(job.nextRunAt);
     // A run cut short is run again for the occurrence it was for (its lateness makes it a
-    // catch-up run), not for the moment it was found cut short.
+    // catch-up run), not for the moment it was found cut short. A follow-up or a refresh was for
+    // no occurrence: the schedule stands as it is.
     const last = job.lastRun;
-    if (last?.outcome === 'interrupted' && last.purpose !== 'follow_up') {
+    if (
+      last?.outcome === 'interrupted' &&
+      last.purpose !== 'follow_up' &&
+      last.purpose !== 'refresh'
+    ) {
       const cutShort = this.opts.log.tables.jobRuns.get(last.runId);
       // A run the user stopped kept its schedule (ruling R9): nothing to run again.
       const kept = cutShort?.meta?.['keptSchedule'] === true;
@@ -279,7 +369,7 @@ export class JobScheduler {
   }
 
   private async startIfDue(jobId: Id, report: JobTickReport): Promise<void> {
-    const { log, commands, runtime } = this.opts;
+    const { log, runtime } = this.opts;
     const { tables } = log;
     const job = tables.jobs.get(jobId);
     if (!job || job.state !== 'active') return;
@@ -350,7 +440,26 @@ export class JobScheduler {
       return started;
     }).value;
     report.started.push(run.id);
+    await this.spawnRun(job, run, supervisor, report, {
+      ...(followUp ? { followUp } : {}),
+      ...(switchTo ? { switchTo } : {}),
+    });
+  }
 
+  /**
+   * Spawns the Steward of a run just started (a due run or a refresh): on the job's hidden task,
+   * supervised by the project's Waykeeper row. A run that cannot get one ends `failed` (no
+   * Waykeeper, a refusal), or `interrupted` when the caps refused it after all.
+   */
+  private async spawnRun(
+    job: Job,
+    run: JobRun,
+    supervisor: Agent | undefined,
+    report: JobTickReport,
+    { followUp, switchTo }: { followUp?: FollowUp; switchTo?: ModelChoice },
+  ): Promise<void> {
+    const { log, commands, runtime } = this.opts;
+    const { tables } = log;
     if (!supervisor) {
       this.fail(run.id, 'the project has no Waykeeper to supervise its runs');
       report.ended.push(run.id);
@@ -535,6 +644,23 @@ export class JobScheduler {
         );
         return;
       }
+      case 'job_run.ended': {
+        // The project's panels may have gone unchanged for long (P15-05): nudge its Waykeeper.
+        const jobId = event.jobId;
+        void this.enqueue(
+          async () => {
+            const { log, runtime } = this.opts;
+            const job = log.tables.jobs.get(jobId);
+            if (!job) return;
+            const live = new Set(runtime.liveAgents().map((a) => a.id));
+            log.runCommand((ctx) => {
+              nudgeUnchangedPanels(ctx, job.projectId, (id) => live.has(id));
+            });
+          },
+          () => undefined,
+        );
+        return;
+      }
       case 'job.updated': {
         // Paused, stopped, its project closed: a run going on stops (never a failure).
         const state = event.changes.state;
@@ -593,12 +719,17 @@ export class JobScheduler {
         : undefined;
     const failureReason =
       typeof reported?.failureReason === 'string' ? reported.failureReason : undefined;
+    const data =
+      reported?.data && typeof reported.data === 'object' ? (reported.data as RunData) : undefined;
+    const sources = this.opts.runSources?.take(agentId) ?? [];
     this.opts.log.runCommand((ctx) =>
       endJobRun(ctx, {
         runId: run.id,
         outcome,
         ...(summary !== undefined ? { summary } : {}),
         ...(numbers ? { numbers } : {}),
+        ...(data ? { data } : {}),
+        ...(sources.length > 0 ? { sources } : {}),
         ...(outcome === 'failed' && failureReason ? { failureReason } : {}),
       }),
     );
@@ -619,7 +750,14 @@ export class JobScheduler {
     return undefined;
   }
 
+  /** A run that ends without a report keeps no sources: what the runtime noted is dropped. */
+  private forgetSources(runId: Id): void {
+    const agentId = this.opts.log.tables.jobRuns.get(runId)?.agentId;
+    if (agentId) this.opts.runSources?.take(agentId);
+  }
+
   private fail(runId: Id, reason: string): void {
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) =>
       endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason }),
     );
@@ -627,6 +765,7 @@ export class JobScheduler {
 
   /** Fails a publish follow-up run that could not start, putting its follow-up back on the job. */
   private failPublish(runId: Id, reason: string): void {
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       const run = endJobRun(ctx, { runId, outcome: 'failed', failureReason: reason });
       const job = jobOf(ctx, run.jobId);
@@ -652,6 +791,7 @@ export class JobScheduler {
   ): boolean {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return false;
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       endJobRun(ctx, { runId, outcome: 'interrupted', ...(byUser ? { keepSchedule: true } : {}) });
       if (!byUser) this.carryOver(ctx, run, spawned);
@@ -667,6 +807,7 @@ export class JobScheduler {
   private limited(runId: Id): void {
     const run = this.opts.log.tables.jobRuns.get(runId);
     if (!run || run.outcome !== 'running') return;
+    this.forgetSources(runId);
     this.opts.log.runCommand((ctx) => {
       endJobRun(ctx, { runId, outcome: 'limited' });
       this.carryOver(ctx, run, true);
