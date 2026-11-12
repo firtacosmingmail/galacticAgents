@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { stewardName } from '@galactic/protocol';
 import { act, cleanup, render, screen } from '@testing-library/react';
 import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,6 +11,7 @@ import { useCameraStore } from '../camera/store.js';
 import { PickingOverlay } from '../picking/PickingOverlay.js';
 import { activateBeacon } from './activate.js';
 import { BeaconHoverCard } from './BeaconHoverCard.js';
+import { pickingWorld } from '../picking/fixtures.js';
 import { question, worldWith } from './fixtures.js';
 
 /** The inbox as `Panel.tsx` renders it: the section and one card per question id. */
@@ -156,7 +158,7 @@ describe('the beacon hover card', () => {
     expect(card.textContent).toContain('Question:');
     expect(card.textContent).toContain('question q-c');
     expect(card.textContent).not.toContain('q-p');
-    expect(card.textContent).toMatch(/Steward · /);
+    expect(card.textContent).toContain(`${stewardName(pickingWorld().tasks['t-in']!)} · `);
     expect(card.textContent).not.toContain('more on');
     expect(card.textContent).toContain('click to go there and open it in the inbox');
   });

@@ -11,7 +11,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
-import { PERMISSION_POLICY_PRESETS } from '@galactic/protocol';
+import { PERMISSION_POLICY_PRESETS, stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { useAppStore } from '../../state/store.js';
 import { HierarchyConsole } from './HierarchyConsole.js';
@@ -30,6 +30,7 @@ let replies: Record<string, { status: number; body: unknown }> = {};
 const subscribed: string[] = [];
 
 const NOW = fx.NOW;
+const STEWARD_LABEL = `${stewardName(fx.task)} · ${taskShortName(fx.task)}`;
 const later = (s: number) => new Date(Date.parse(NOW) + s * 1000).toISOString();
 
 const { taskId: _taskId, ...agentBase } = fx.agent;
@@ -144,7 +145,7 @@ describe('project/task tree (P2-18)', () => {
     expect(project.querySelector('.node-head')?.textContent).toMatch(/^in progressAuth refactor/);
     expect(within(project).getByText(/Waykeeper · Auth refactor/)).toBeTruthy();
     const task = within(project).getByLabelText('task Replace the session middleware');
-    expect(within(task).getByText(/Steward · Replace the session middleware/)).toBeTruthy();
+    expect(within(task).getByText(new RegExp(STEWARD_LABEL))).toBeTruthy();
     const standalone = screen.getByLabelText('task Fix the flaky date test');
     expect(within(standalone).getByText('blocked on user')).toBeTruthy();
     expect(within(standalone).getByText(/asteroid Ceres-1/)).toBeTruthy();
@@ -465,7 +466,7 @@ describe('question inbox (P2-18)', () => {
       'clarification question Keep the legacy cookie name?',
     );
     expect(within(card).getByText('held by you')).toBeTruthy();
-    expect(within(card).getByText(/from Steward · Replace the session middleware/)).toBeTruthy();
+    expect(within(card).getByText(new RegExp(`from ${STEWARD_LABEL}`))).toBeTruthy();
     expect(within(card).getByText(/project Auth refactor/)).toBeTruthy();
     await click(within(card).getByText('yes'));
     await flush();
@@ -681,9 +682,9 @@ describe('Steward view (P2-18, decision 13)', () => {
     seed();
     ui();
     await flush();
-    await click(screen.getByRole('button', { name: /Steward · Replace the session middleware/ }));
+    await click(screen.getByRole('button', { name: new RegExp(STEWARD_LABEL) }));
     await flush();
-    const view = screen.getByLabelText('view of Steward · Replace the session middleware');
+    const view = screen.getByLabelText(`view of ${STEWARD_LABEL}`);
     expect(subscribed).toContain('a-steward-1');
     expect(within(view).queryByRole('textbox')).toBeNull();
     expect(within(view).getByText(/Read-only/)).toBeTruthy();
@@ -710,9 +711,9 @@ describe('Steward view (P2-18, decision 13)', () => {
     seed({ questions: [{ ...fx.question, holder: { type: 'user' }, version: 2 }] });
     ui();
     await flush();
-    await click(screen.getByRole('button', { name: /Steward · Replace the session middleware/ }));
+    await click(screen.getByRole('button', { name: new RegExp(STEWARD_LABEL) }));
     await flush();
-    const view = screen.getByLabelText('view of Steward · Replace the session middleware');
+    const view = screen.getByLabelText(`view of ${STEWARD_LABEL}`);
     expect(within(view).queryByText(/Read-only/)).toBeNull();
     fireEvent.change(within(view).getByLabelText('answer'), { target: { value: 'keep it' } });
     await click(within(view).getByText('Answer'));
@@ -743,9 +744,9 @@ describe('question sets in the ops console (P8-21)', () => {
     seed({ questions: stewardSet });
     ui();
     await flush();
-    await click(screen.getByRole('button', { name: /Steward · Replace the session middleware/ }));
+    await click(screen.getByRole('button', { name: new RegExp(STEWARD_LABEL) }));
     await flush();
-    const view = screen.getByLabelText('view of Steward · Replace the session middleware');
+    const view = screen.getByLabelText(`view of ${STEWARD_LABEL}`);
     expect(within(view).getAllByRole('article', { name: setName })).toHaveLength(1);
     expect(within(view).queryByRole('article', { name: /^clarification question/ })).toBeNull();
   });

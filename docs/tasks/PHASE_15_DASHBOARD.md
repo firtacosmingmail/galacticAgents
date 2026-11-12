@@ -1,7 +1,7 @@
 # Phase 15 — Project dashboard
 
-**Current task:** P15-10 · **Task status:** P15-10 in progress — waiting for Cosmin's real run (`docs/tasks/notes/P15-10-real-run.md`)
-**Phase status:** in progress (9/10)
+**Current task:** P15-10 · **Task status:** P15-10 in progress — waiting for Cosmin's real run (`docs/tasks/notes/P15-10-real-run.md`); P15-11 done
+**Phase status:** in progress (10/11)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,6 +33,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 8 | P15-08 | Phone layout and the cards (Task 8). |
 | 9 | P15-09 | Job map (Task 9). |
 | 10 | P15-10 | Docs, task board and the real run (Task 10). |
+| 11 | P15-11 | Steward names (added 2026-11-12, during the real run). |
 
 All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so none run in parallel.
 
@@ -78,3 +79,7 @@ All run in order, one wave each. Tasks 6–9 all touch the dashboard pane, so no
 - **Status:** in progress · **Depends on:** P15-09 · **Parallel with:** —
 - Plan Task 10.
 - Docs, decision 156 and the checklist are written; waiting for Cosmin's real run (`docs/tasks/notes/P15-10-real-run.md`). The phase is not done until its Result is recorded.
+
+### P15-11 — Steward names (added 2026-11-12)
+- **Status:** done (2026-11-12) · **Depends on:** — · **Parallel with:** P15-10
+- Found during the real run: the managed-agents list named each Steward by its whole brief. Every Steward is now called by a star name kept with its task, plus the task's short name (SPEC decision 157): `packages/protocol/src/steward-names.ts`, `createTask` and job tasks store `meta.stewardName`, the Waykeeper's `plan_tasks` and `create_task` take a `title`.

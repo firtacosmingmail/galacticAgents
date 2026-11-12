@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, Project, ServerMessage, StatusRecord, Task } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
@@ -125,7 +126,7 @@ describe('panel shell and selection (P25-02)', () => {
     expect(window.location.pathname).toBe('/steward/a-steward-1');
     expect(
       within(main()).getByRole('region', {
-        name: 'view of Steward · Replace the session middleware',
+        name: `view of ${stewardName(fx.task)} · ${taskShortName(fx.task)}`,
       }),
     ).toBeTruthy();
     expect(within(main()).queryByRole('textbox')).toBeNull(); // no message box (decision 13)
@@ -150,7 +151,11 @@ describe('panel shell and selection (P25-02)', () => {
     const managed = screen.getByRole('region', { name: 'managed agents' });
     expect(within(managed).getByText('Waykeeper · Auth refactor')).toBeTruthy();
     expect(within(managed).getByText('Waykeeper · Billing export')).toBeTruthy();
-    expect(within(managed).getByText('Steward · Fix the flaky date test')).toBeTruthy();
+    expect(
+      within(managed).getByText(
+        `${stewardName(fx.asteroidTask)} · ${taskShortName(fx.asteroidTask)}`,
+      ),
+    ).toBeTruthy();
     expect(within(managed).queryByText(/Replace the session middleware/)).toBeNull();
     fireEvent.click(within(managed).getByText('Waykeeper · Billing export'));
     expect(useAppStore.getState().selection).toEqual({ kind: 'waykeeper', id: 'a-waykeeper-2' });
@@ -169,7 +174,9 @@ describe('panel shell and selection (P25-02)', () => {
   it('restores a Steward deep link and says so when the agent is unknown', async () => {
     await open('/steward/a-steward-2');
     expect(
-      within(main()).getByRole('region', { name: 'view of Steward · Fix the flaky date test' }),
+      within(main()).getByRole('region', {
+        name: `view of ${stewardName(fx.asteroidTask)} · ${taskShortName(fx.asteroidTask)}`,
+      }),
     ).toBeTruthy();
     cleanup();
     FakeWebSocket.instances = [];
@@ -186,7 +193,7 @@ describe('panel shell and selection (P25-02)', () => {
     expect(main().dataset['selection']).toBe('steward:a-steward-1');
     expect(
       within(main()).getByRole('region', {
-        name: 'view of Steward · Replace the session middleware',
+        name: `view of ${stewardName(fx.task)} · ${taskShortName(fx.task)}`,
       }),
     ).toBeTruthy();
     // Replaced, not pushed: back does not return to the wrong URL.

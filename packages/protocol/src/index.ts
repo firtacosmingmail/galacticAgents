@@ -10,6 +10,7 @@ export const PROTOCOL_VERSION = 1 as const;
 export * from './primitives.js';
 export * from './enums.js';
 export * from './domain.js';
+export * from './steward-names.js';
 export * from './events.js';
 export * from './ws.js';
 export * from './rest.js';

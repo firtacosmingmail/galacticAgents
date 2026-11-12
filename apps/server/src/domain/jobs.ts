@@ -29,6 +29,7 @@ import type { CommandContext } from './event-log.js';
 import { unattendedRuleLabel, unattendedRuleRefusal } from './permission-rules.js';
 import { cancelQuestion } from './questions.js';
 import { FINISHED_WORK } from './states.js';
+import { newStewardName } from './tasks.js';
 
 /**
  * Areas and recurring jobs (P10-03; SPEC decisions 143, 144). A long-term project's business
@@ -339,8 +340,9 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
       ? areaOf(ctx, project.id, input.area.areaId)
       : createArea(ctx, project.id, input.area.name);
   const jobId = `j-${randomUUID()}`;
+  const taskId = `t-${randomUUID()}`;
   const task: Task = {
-    id: `t-${randomUUID()}`,
+    id: taskId,
     projectId: project.id,
     bodyId: area.bodyId,
     description: taskDescription(draft.name),
@@ -349,7 +351,8 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     state: 'approved',
     createdAt: ctx.now,
     updatedAt: ctx.now,
-    meta: { jobId },
+    // its run Stewards are named like any task's (P15-11)
+    meta: { jobId, stewardName: newStewardName(ctx, taskId, project.id) },
   };
   ctx.tables.tasks.insert(task);
   ctx.emit({ type: 'task.created', task });

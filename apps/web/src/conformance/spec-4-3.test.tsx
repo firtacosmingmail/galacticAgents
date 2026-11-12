@@ -2,6 +2,7 @@
 import { act, cleanup, fireEvent, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Proposal, Question, Task } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { activateBody } from '../scene/picking/store.js';
 import {
@@ -39,7 +40,7 @@ vi.mock('../scene/webgl.js', () => ({ webglAvailable: () => true }));
 
 const HARMONIZER = 'Harmonizer';
 const WAYKEEPER = 'Waykeeper · Auth refactor';
-const ASTEROID_STEWARD = 'Steward · Fix the flaky date test';
+const ASTEROID_STEWARD = `${stewardName(fx.asteroidTask)} · ${taskShortName(fx.asteroidTask)}`;
 const NOW = fx.NOW;
 
 let fetchMock: PanelFetch;

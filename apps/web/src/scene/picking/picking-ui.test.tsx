@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { Profiler } from 'react';
 import { Object3D } from 'three';
@@ -23,6 +24,9 @@ import {
 import { setDeepLinkForTest, useSelectionSync } from './sync.js';
 import { useDockView } from '../../panel/status/dock-view.js';
 import { useJobsFilter } from '../../panel/jobs/jobs-model.js';
+
+const AST_TASK = pickingWorld().tasks['t-ast']!;
+const AST_STEWARD = `${stewardName(AST_TASK)} · ${taskShortName(AST_TASK)}`;
 
 const AT = { x: 120, y: 80 };
 let unregister: (() => void)[] = [];
@@ -203,7 +207,7 @@ describe("a satellite's hover card (P4-08)", () => {
     render(<PickingOverlay />);
     hoverSatellite('a-st');
     const card = screen.getByRole('tooltip');
-    expect(card.querySelector('.pick-sat-name')?.textContent).toBe('Steward · Fix the date test');
+    expect(card.querySelector('.pick-sat-name')?.textContent).toBe(AST_STEWARD);
     expect(card.querySelector('.pill')?.textContent).toBe('working');
     expect(card.querySelector('.pill')?.className).toContain('state-working');
     expect(card.querySelector('.pick-sat-activity')?.textContent).toBe('Reading src/date.ts');
@@ -273,8 +277,8 @@ describe("a satellite's hover card (P4-08)", () => {
       within(list)
         .getAllByRole('listitem')
         .map((li) => li.textContent),
-    ).toEqual(['Steward · Fix the date test', 'Waykeeper · Big project', '7 Iris']);
-    fireEvent.click(within(list).getByRole('button', { name: 'Steward · Fix the date test' }));
+    ).toEqual([AST_STEWARD, 'Waykeeper · Big project', '7 Iris']);
+    fireEvent.click(within(list).getByRole('button', { name: AST_STEWARD }));
     expect(selected()).toBe('steward:a-st');
     expect(camera().focusedId).toBe('b-ast-7');
     expect(screen.queryByRole('dialog')).toBeNull();

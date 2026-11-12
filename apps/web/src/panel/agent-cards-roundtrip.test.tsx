@@ -6,7 +6,7 @@
 // committed event, status diffs).
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Agent, Task } from '@galactic/protocol';
+import { stewardName, taskShortName, type Agent, type Task } from '@galactic/protocol';
 import {
   FakeAdapter,
   buildApp,
@@ -104,6 +104,7 @@ async function asteroidSteward(): Promise<{ harmonizer: Agent; steward: Agent; t
     })
   ).value;
   await waitFor(() => expect(statuses.get(steward.id)?.state).toBe('working'));
+  CARD = `card of ${stewardName(task)} · ${taskShortName(task)}`;
   return { harmonizer, steward, task };
 }
 
@@ -115,7 +116,7 @@ function show(harmonizer: Agent) {
   );
 }
 
-const CARD = 'card of Steward · Fix the flaky date test';
+let CARD = '';
 const controls = (scope: 'agent' | 'task') =>
   within(screen.getByRole('article', { name: CARD })).getByRole('group', {
     name: new RegExp(`^${scope} controls of`),

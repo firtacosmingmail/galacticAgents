@@ -84,6 +84,8 @@ export interface CreateProjectInput {
 
 export interface CreateTaskInput {
   description: string;
+  /** A short name for lists (2–5 words), kept as the task's title (`meta.title`, P15-11). */
+  title?: string;
   priority?: TaskPriority;
   /** Absent for a standalone task, which gets a fresh asteroid. */
   projectId?: Id;
@@ -171,6 +173,8 @@ export interface CreateProposalInput {
 /** One task of a Waykeeper's plan (P2-10). */
 export interface PlanTaskInput {
   description: string;
+  /** A short name for lists (2–5 words), kept as the task's title (`meta.title`, P15-11). */
+  title?: string;
   priority?: TaskPriority;
   /** Earlier tasks of the same plan (0-based positions) or existing task ids. */
   blockedBy?: (number | Id)[];

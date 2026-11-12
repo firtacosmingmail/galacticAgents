@@ -7,7 +7,8 @@ import {
   type StatusRecord,
   type Task,
   type WorkState,
-  taskLabel,
+  stewardName,
+  taskShortName,
 } from '@galactic/protocol';
 import type { WorldState } from '../state/reduce.js';
 
@@ -93,9 +94,11 @@ function agentsOfWork(world: WorldState, work: CardWork): Agent[] {
     .sort(byAge);
 }
 
-/** A work-only card's title: "Task · <description>", "Project · <name>". */
+/** A work-only card's title: its Steward-to-be ("Vega · <short name>", P15-11), "Project · <name>". */
 export function workTitle(work: CardWork): string {
-  return work.kind === 'task' ? `Task · ${taskLabel(work.item)}` : `Project · ${work.item.name}`;
+  return work.kind === 'task'
+    ? `${stewardName(work.item)} · ${taskShortName(work.item)}`
+    : `Project · ${work.item.name}`;
 }
 
 /** A card's age: its agent's, or for a work-only card the work's. */

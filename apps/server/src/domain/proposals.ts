@@ -263,6 +263,7 @@ export function proposePlan(
     tasks.push(
       createTask(ctx, {
         description: t.description,
+        ...(t.title ? { title: t.title } : {}),
         projectId: project.id,
         state: 'proposed',
         ...(t.priority ? { priority: t.priority } : {}),

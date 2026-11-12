@@ -1,3 +1,4 @@
+import { stewardName } from '@galactic/protocol';
 import { describe, expect, it } from 'vitest';
 import { pickingWorld } from './fixtures.js';
 import { ACTIVITY_CHARS, oneLine, satelliteCard, satelliteSelection } from './satellite-card.js';
@@ -27,9 +28,10 @@ describe('satelliteCard (what hovering a satellite says, P4-08)', () => {
       description: 'Fix the date test that fails around midnight in every timezone east of UTC',
     };
     const card = satelliteCard(world, 'a-st', { bodyId: 'b-ast-7', mode: 'orbiting' });
-    expect(card.name.startsWith('Steward · Fix the date test')).toBe(true);
+    const prefix = `${stewardName(world.tasks['t-ast']!)} · `;
+    expect(card.name.startsWith(`${prefix}Fix the date test`)).toBe(true);
     expect(card.name.endsWith('…')).toBe(true);
-    expect(card.name.length).toBeLessThanOrEqual('Steward · '.length + 48);
+    expect(card.name.length).toBeLessThanOrEqual(prefix.length + 48);
   });
 
   it('puts the activity on one line and cuts it at a word', () => {

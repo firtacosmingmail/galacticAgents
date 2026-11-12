@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Agent, ServerMessage, ServerMessage as Msg } from '@galactic/protocol';
+import { stewardName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
@@ -367,7 +368,9 @@ describe('the docked conversation (P4-10)', () => {
     await reload('/waykeeper/a-waykeeper-1');
     expect(screen.getByRole('main', { name: /^Conversation with Waykeeper · / })).toBe(main());
     await reload('/steward/a-steward-1');
-    expect(screen.getByRole('main', { name: /^Steward · / })).toBe(main());
+    expect(screen.getByRole('main', { name: new RegExp(`^${stewardName(fx.task)} · `) })).toBe(
+      main(),
+    );
   });
 
   it('keeps a draft when the chat remounts (a reload of the view, the breakpoint)', async () => {

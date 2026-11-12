@@ -2,7 +2,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { Object3D } from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent, Question, ServerMessage, StatusRecord } from '@galactic/protocol';
+import {
+  stewardName,
+  type Agent,
+  type Question,
+  type ServerMessage,
+  type StatusRecord,
+} from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
@@ -142,7 +148,11 @@ describe('panel → scene: every panel path selects, rewrites the URL and flies 
   it("an inbox card's agent link", async () => {
     await open();
     const inbox = screen.getByRole('region', { name: 'inbox' });
-    fireEvent.click(within(inbox).getAllByRole('link', { name: /^open Steward/ })[0]!);
+    fireEvent.click(
+      within(inbox).getAllByRole('link', {
+        name: new RegExp(`^open ${stewardName(fx.asteroidTask)} · `),
+      })[0]!,
+    );
     expect(selected()).toBe('steward:a-steward-2');
     expect(window.location.pathname).toBe('/steward/a-steward-2');
     expect(focused()).toBe('b-ast-1');
@@ -221,7 +231,11 @@ describe('scene → panel: a pick changes the main view and the URL (P5-01)', ()
     expect(focused()).toBe('b-earth');
 
     act(() => void activateBody('b-ast-1', { x: 0, y: 0 }));
-    expect(within(main()).getByRole('region', { name: /view of Steward/ })).toBeTruthy();
+    expect(
+      within(main()).getByRole('region', {
+        name: new RegExp(`view of ${stewardName(fx.asteroidTask)} · `),
+      }),
+    ).toBeTruthy();
     const seq = flights();
     act(() => void deselectFromScene());
     expect(main().dataset['selection']).toBe('harmonizer');

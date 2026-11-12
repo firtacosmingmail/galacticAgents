@@ -9,6 +9,7 @@ import type {
   StatusRecord,
   Task,
 } from '@galactic/protocol';
+import { stewardName, taskShortName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { App } from '../App.js';
 import { FakeWebSocket } from '../client/fake-socket.js';
@@ -119,7 +120,7 @@ const settled = (name: string) =>
     ).toBeNull(),
   );
 const WAYKEEPER = 'Waykeeper · Auth refactor';
-const STEWARD = 'Steward · Replace the session middleware';
+const STEWARD = `${stewardName(fx.task)} · ${taskShortName(fx.task)}`;
 
 describe('controls strip in a Waykeeper’s conversation (P4-09)', () => {
   it('offers the project’s and the Waykeeper’s controls with the cards hidden', async () => {

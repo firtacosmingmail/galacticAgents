@@ -10,6 +10,7 @@ import type {
   Proposal,
   ServerMessage,
 } from '@galactic/protocol';
+import { stewardName } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import type { Api } from '../../console/api.js';
 import { ApiContext } from '../../console/hierarchy/shared.js';
@@ -339,7 +340,9 @@ describe('the panel chat (P25-03)', () => {
     expect(within(thread()).queryByLabelText(`proposal ${fx.proposal.requestText}`)).toBeNull();
     const report = within(thread()).getByLabelText('status report');
     expect(
-      within(report).getByRole('link', { name: /Steward · Replace the session/ }),
+      within(report).getByRole('link', {
+        name: new RegExp(`${stewardName(fx.task)} · Replace the session`),
+      }),
     ).toBeTruthy();
 
     // Approved: the card shows its compact approved card.
