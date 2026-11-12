@@ -50,6 +50,20 @@ describe('JobMap', () => {
       expect(await screen.findByRole('heading', { name: t })).toBeTruthy();
   });
 
+  it('renders inside the panel root, where its colour tokens (background) are defined', async () => {
+    const root = document.createElement('div');
+    root.className = 'pnl';
+    document.body.appendChild(root);
+    try {
+      open();
+      const dialog = await screen.findByRole('dialog');
+      expect(root.contains(dialog)).toBe(true);
+    } finally {
+      cleanup();
+      root.remove();
+    }
+  });
+
   it('a panel chip switches to the Dashboard view and asks for that panel', async () => {
     const onClose = open();
     fireEvent.click(await screen.findByRole('button', { name: /Churn tile/ }));

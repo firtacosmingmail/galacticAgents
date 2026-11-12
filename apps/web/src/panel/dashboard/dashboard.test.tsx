@@ -130,6 +130,8 @@ async function renderPane(extra?: ReactNode) {
 
 beforeEach(() => {
   vi.useRealTimers();
+  // the clock is pinned to the fixtures' day: ages ("2 h ago") must not depend on when tests run
+  vi.useFakeTimers({ toFake: ['Date'], now: new Date('2026-11-11T12:00:00.000Z') });
   localStorage.clear();
   useAppStore.getState().reset();
   panels = [];

@@ -434,6 +434,7 @@ export function JobMap({ jobId, onClose }: { jobId: Id; onClose: () => void }) {
         </div>
       </div>
     </div>,
-    document.body,
+    // inside the panel root, not the body: the overlay's colour tokens (--pnl-*) live on `.pnl`
+    document.querySelector<HTMLElement>('.pnl') ?? document.body,
   );
 }
