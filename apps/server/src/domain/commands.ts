@@ -4,6 +4,7 @@ import {
   AgentEvent,
   DISMISSED_BY_USER,
   QUESTION_SET_LIMITS,
+  RELAYS_QUESTION_ID,
   SetAnswer,
   SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
@@ -812,7 +813,7 @@ export class Commands implements DomainCommands {
    * the same command, so no supervisor holds it on the way and none is woken by it.
    */
   openQuestion(input: OpenQuestionInput) {
-    const { toUser, ...rest } = input;
+    const { toUser, relays, ...rest } = input;
     if (toUser && rest.kind !== 'clarification') {
       return Promise.reject(
         new DomainError('invalid', 'only a clarification is opened for the user explicitly'),
@@ -824,7 +825,11 @@ export class Commands implements DomainCommands {
         {
           ...rest,
           id: `q-${randomUUID()}`,
-          meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+          meta: {
+            source: COMMAND_SOURCE,
+            ...(toUser ? { toUser: true } : {}),
+            ...(relays ? { [RELAYS_QUESTION_ID]: relays } : {}),
+          },
         },
         this.questions,
         toUser ? { type: 'user' } : undefined,

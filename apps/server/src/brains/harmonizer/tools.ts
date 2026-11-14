@@ -1165,11 +1165,15 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     name: 'ask_user',
     description:
       'Asks the user a clarification question (an escalated question, "anything else on ' +
-      '<project>?", a choice only they can make). Ends your turn; the answer arrives later.',
+      '<project>?", a choice only they can make). Ends your turn; the answer arrives later. ' +
+      'When you relay a clarification question you hold, pass its id as questionId.',
     inputSchema: S.obj(
       {
         text: S.str('The question, self-contained: who asks and about what.'),
         options: { type: 'array', items: { type: 'string' }, description: 'Suggested answers.' },
+        questionId: S.str(
+          'The open clarification question you hold that this one relays to the user, if any.',
+        ),
       },
       ['text'],
     ),
@@ -1177,10 +1181,13 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     async handler(raw, ctx) {
       const input = asInput(raw);
       const options = strings(input, 'options');
+      const relays = str(input, 'questionId', true);
+      if (relays !== undefined) relayable(ctx, relays);
       const { value } = await ctx.commands.openQuestion({
         kind: 'clarification',
         originAgentId: ctx.brainId,
         context: { text: str(input, 'text'), ...(options ? { options } : {}) },
+        ...(relays !== undefined ? { relays } : {}),
       });
       return { questionId: value.id };
     },
@@ -1205,6 +1212,28 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     freePlanets,
     freeMoons,
   ];
+}
+
+/**
+ * Refuses a relay link (`ask_user`'s `questionId`, P13-10) to anything but an open clarification
+ * question the Harmonizer holds: the link makes the user's answer count as his words on the
+ * asking agent's project (`userWordsFor`), so it must point at the question really relayed.
+ */
+function relayable(ctx: BrainToolContext, questionId: Id): void {
+  const q = ctx.queries.question(questionId);
+  if (
+    !q ||
+    q.status !== 'open' ||
+    q.kind !== 'clarification' ||
+    q.holder.type !== 'agent' ||
+    q.holder.id !== ctx.brainId
+  ) {
+    throw new DomainError(
+      'invalid',
+      `${questionId} is not an open clarification question you hold: leave questionId out ` +
+        'unless you relay such a question',
+    );
+  }
 }
 
 /** A card's `longTerm {purpose, goals}` as the model gave it (the server checks the limits). */

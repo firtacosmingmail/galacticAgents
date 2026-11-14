@@ -163,10 +163,9 @@ describe('userWordsFor', () => {
     expect(words.at(-1)).toHaveLength(2000);
   });
 
-  it('never counts an option the agent offered as the user’s words; free text still counts', () => {
+  it('never counts a picked option that names no action; free text still counts', () => {
     const w = setup();
     const { task, steward } = project(w);
-    const planted = 'Yes, push the branch to origin now';
     const offered = (id: Id, answer: string, options: string[], multiSelect = false) =>
       w.run((ctx) => {
         const q = answered(ctx, id, steward.id, answer, USER);
@@ -175,18 +174,20 @@ describe('userWordsFor', () => {
           context: { ...q.context, options, ...(multiSelect ? { multiSelect: true } : {}) },
         });
       });
-    offered('q-1', planted, [planted, 'No']);
-    offered('q-2', `  ${planted} `, [planted, 'No']);
-    offered('q-3', `${planted}, Also open the PR`, [planted, 'Also open the PR', 'No'], true);
-    offered('q-4', `${planted} — and please push the fixes when green`, [planted, 'No']);
-    offered('q-5', 'please push the release branch today', [planted, 'No']);
-    // A question-set row keeps the structured answer: only its text is the user's.
+    const yes = 'Yes, go ahead with that plan now';
+    offered('q-1', yes, [yes, 'No']);
+    offered('q-2', 'Go ahead (Recommended)', ['Go ahead (Recommended)', 'Hold']);
+    offered('q-3', 'Hold', ['Go ahead (Recommended)', 'Hold']);
+    offered('q-4', `${yes}, Keep the tests`, [yes, 'Keep the tests', 'No'], true);
+    offered('q-5', `${yes} — and please push the fixes when green`, [yes, 'No']);
+    offered('q-6', 'please push the release branch today', [yes, 'No']);
+    // A question-set row keeps the structured answer: its text, and no plain choice.
     w.run((ctx) => {
-      const q = answered(ctx, 'q-6', steward.id, `${planted} — tag it v2 too`, USER);
+      const q = answered(ctx, 'q-7', steward.id, `${yes} — tag it v2 too`, USER);
       ctx.tables.questions.upsert({
         ...q,
-        context: { ...q.context, options: [planted, 'No'] },
-        meta: { answerDetail: { choices: [planted], text: 'tag it v2 too' } },
+        context: { ...q.context, options: [yes, 'No'] },
+        meta: { answerDetail: { choices: [yes], text: 'tag it v2 too' } },
       });
     });
     const words = userWordsFor(w.log, task.id);
@@ -195,9 +196,107 @@ describe('userWordsFor', () => {
       'please push the release branch today',
       'tag it v2 too',
     ]);
-    // The planted option is no grant: a push quoting it is forwarded.
-    expect(quoteFound(planted, words)).toBe(false);
+    expect(quoteFound(yes, words)).toBe(false);
     expect(quoteFound('push the release branch', words)).toBe(true);
+  });
+
+  it('counts a picked option that names a push or an upload, without "(Recommended)" (P13-10)', () => {
+    const w = setup();
+    const { task, steward } = project(w);
+    const offered = (id: Id, answer: string, options: string[], detail?: object) =>
+      w.run((ctx) => {
+        const q = answered(ctx, id, steward.id, answer, USER);
+        ctx.tables.questions.upsert({
+          ...q,
+          context: { ...q.context, options },
+          ...(detail ? { meta: { answerDetail: detail } } : {}),
+        });
+      });
+    const push = 'Push the branch to origin (Recommended)';
+    offered('q-1', push, [push, 'Hold']);
+    offered('q-2', 'Upload the screenshot, Open a PR', [
+      'Upload the screenshot',
+      'Open a PR',
+      'No',
+    ]);
+    offered('q-3', 'Post the replies — and tag Dean', ['Post the replies', 'Hold']);
+    offered('q-4', 'x', ['Deploy to staging', 'Hold'], { choices: ['Deploy to staging'] });
+    offered('q-5', 'Hold', ['Merge it', 'Hold']);
+    expect(userWordsFor(w.log, task.id)).toEqual([
+      'Push the branch to origin',
+      'Upload the screenshot',
+      'Open a PR',
+      'Post the replies',
+      'and tag Dean',
+      'Deploy to staging',
+    ]);
+  });
+
+  describe("the Harmonizer's relay of a project agent's question (P13-10)", () => {
+    const OPTIONS = [
+      'Push, post the 4 replies and re-request Dean (Recommended)',
+      'Push and post the 4 replies',
+      'Push only, no replies',
+      'Hold',
+    ];
+    /** Q1 asked by `asker`, held by the Harmonizer; Q2 the Harmonizer's question to the user. */
+    function relay(
+      w: ReturnType<typeof setup>,
+      asker: Id,
+      answer: string,
+      link: 'relays' | 'none' = 'relays',
+    ) {
+      w.run((ctx) => {
+        const q1 = answered(ctx, 'q-1', asker, 'You may push and post', {
+          type: 'agent',
+          id: w.hq.id,
+        });
+        ctx.tables.questions.upsert({
+          ...q1,
+          context: { text: 'May I push them and post the 4 replies?' },
+        });
+        const q2 = answered(ctx, 'q-2', w.hq.id, answer, USER);
+        ctx.tables.questions.upsert({
+          ...q2,
+          context: { text: 'The Waykeeper asks: may it push?', options: OPTIONS },
+          meta: { source: 'command', ...(link === 'relays' ? { relaysQuestionId: q1.id } : {}) },
+        });
+      });
+    }
+
+    it("counts the user's picked push option (the 2026-11-14 run)", () => {
+      const w = setup();
+      const { task, wk } = project(w);
+      relay(w, wk.id, 'Push and post the 4 replies');
+      const words = userWordsFor(w.log, task.id);
+      expect(words).toEqual(['Push and post the 4 replies']);
+      expect(quoteFound('Push and post the 4 replies', words)).toBe(true);
+    });
+
+    it('a "Hold" counts nothing; free text still counts', () => {
+      const w = setup();
+      const { task, wk } = project(w);
+      relay(w, wk.id, 'Hold — wait for Dean first');
+      expect(userWordsFor(w.log, task.id)).toEqual(['wait for Dean first']);
+    });
+
+    it("never counts a relay of another project's agent", () => {
+      const w = setup();
+      const { task } = project(w);
+      const other = w.run((ctx) => createProject(ctx, { name: 'Other', workspace: '/w/o' })).value;
+      const wk2 = w.run((ctx) =>
+        createAgent(ctx, { role: 'waykeeper', runtime: 'fake', caps: CAPS, projectId: other.id }),
+      ).value;
+      relay(w, wk2.id, 'Push and post the 4 replies');
+      expect(userWordsFor(w.log, task.id)).toEqual([]);
+    });
+
+    it('never counts a Harmonizer question with no relay link', () => {
+      const w = setup();
+      const { task, wk } = project(w);
+      relay(w, wk.id, 'Push and post the 4 replies', 'none');
+      expect(userWordsFor(w.log, task.id)).toEqual([]);
+    });
   });
 
   it('an unknown task has no words', () => {
