@@ -80,8 +80,9 @@ export function markFromApproval(
   if (part === undefined) return { kind: 'tool', toolName: toolCall.toolName };
 
   const category = FOLDER_CATEGORY[whole];
-  if (category !== undefined) {
-    const placed = placeOf(part.text, ctx, cwdOf(ctx));
+  const from = category !== undefined ? approvedCwd(toolCall, parts, part, ctx) : undefined;
+  if (category !== undefined && from !== undefined) {
+    const placed = placeOf(part.text, ctx, from);
     if (!placed.unplaceable && placed.paths.length > 0) {
       return folderMark(
         category,
@@ -99,10 +100,49 @@ export function markFromApproval(
 }
 
 /**
+ * The cwd the approved `part` ran from: the approval's own, moved by the `cd`s before it. Only when
+ * that cwd is certain — every `cd` of the line runs in the line's own shell, unconditionally and in
+ * order (`ownShell`: not in `( … )`, `$(…)`, a nested shell or after `&&`/`||`), and each can be
+ * followed; otherwise `undefined` (no folder mark: the line may have been at more than one cwd).
+ */
+function approvedCwd(
+  toolCall: ToolCall,
+  parts: CommandPart[],
+  part: CommandPart,
+  ctx: PolicyContext,
+): string | undefined {
+  let cwd = cwdOf(ctx);
+  const before = parts.slice(0, parts.indexOf(part));
+  const cds = before.map((p) => cdTarget(p.text)).filter((t) => t !== undefined);
+  if (cds.length === 0) return cwd;
+  const input = toolCall.input as { command?: unknown } | null;
+  const line = typeof input?.command === 'string' ? lexCommand(input.command) : undefined;
+  const lineCds = line?.commands.filter((c) => {
+    const name = c.words[commandHead(c.words)]?.toLowerCase();
+    return name === 'cd' || name === 'pushd';
+  });
+  if (
+    line === undefined ||
+    line.opaque.length > 0 ||
+    lineCds === undefined ||
+    lineCds.length !== parts.filter((p) => cdTarget(p.text) !== undefined).length ||
+    lineCds.some((c) => !c.ownShell)
+  ) {
+    return undefined;
+  }
+  for (const target of cds) {
+    if (target === null || (target === '~' && ctx.home === undefined)) return undefined;
+    cwd = target === '~' ? ctx.home! : resolvePath(target, ctx, cwd);
+  }
+  return cwd;
+}
+
+/**
  * Whether a request implies the mark `match`: any of its parts (or the non-Bash call itself) does.
  * - `folder`: the part has `match.category` and one of its targets is a mark path or inside one —
  *   or cannot be placed (a variable, a substitution, `~user`, a `cd` it cannot follow): it asks.
- *   A glob target matches when it may reach into a mark path.
+ *   A glob target matches when it may reach into a mark path; for a delete mark, so does a target
+ *   that contains a mark path (deleting a parent deletes the marked folder).
  * - `site`: a host the part visibly reaches is the mark's host or a subdomain of it.
  * - `prefix`: a command of the part starts with the mark's words (its wrapper or assignments in
  *   front skipped too).
@@ -124,7 +164,7 @@ export function markCovers(
         if (files.some((p) => /^~[^/]/.test(p))) return true;
         const cwd = cwdOf(ctx);
         return files.some((p) =>
-          inMark({ path: resolvePath(p, ctx, cwd), glob: false }, match.paths, ctx),
+          inMark({ path: resolvePath(p, ctx, cwd), glob: false }, match, ctx),
         );
       }
       case 'site':
@@ -172,7 +212,7 @@ function foldersCover(
       for (const from of seen) {
         const placed = placeOf(part.text, ctx, from);
         if (placed.unplaceable) return true;
-        if (placed.paths.some((p) => inMark(p, match.paths, ctx))) return true;
+        if (placed.paths.some((p) => inMark(p, match, ctx))) return true;
       }
     }
     const moved = cdTarget(part.text);
@@ -209,10 +249,49 @@ interface Placed {
   glob: boolean;
 }
 
+/** Commands whose plain arguments are the files they act on. */
+const FILE_COMMANDS: ReadonlySet<string> = new Set([
+  'rm',
+  'rmdir',
+  'unlink',
+  'mv',
+  'cp',
+  'shred',
+  'trash',
+]);
+
 /**
- * The targets a part names, resolved from `cwd`: every argument after the command's name that is
- * not an option, every file it redirects to, and what the gate reads as a path (`pathsInCommand`:
- * option values such as `--out=/x`). `unplaceable` when one of them uses a variable other than
+ * The words of one simple command that name its targets: every non-option argument of a command
+ * whose arguments are files (`FILE_COMMANDS`); `find`'s start paths (`.` when it names none);
+ * `git clean`'s pathspecs (the cwd when it names none). Any other command: none here — its targets
+ * are what the gate reads as paths (`pathsInCommand`).
+ */
+function targetWords(words: readonly string[]): string[] {
+  const h = commandHead([...words]);
+  const name = words[h]?.split('/').pop()?.toLowerCase();
+  const args = words.slice(h + 1);
+  if (name !== undefined && FILE_COMMANDS.has(name)) return args.filter((w) => !w.startsWith('-'));
+  if (name === 'find') {
+    const end = args.findIndex((w) => w.startsWith('-') || w === '(' || w === '!');
+    const starts = end < 0 ? args : args.slice(0, end);
+    return starts.length > 0 ? starts : ['.'];
+  }
+  if (name === 'git' && args[0] === 'clean') {
+    const specs: string[] = [];
+    for (let k = 1; k < args.length; k++) {
+      const a = args[k]!;
+      if (a === '-e' || a === '--exclude') k++;
+      else if (!a.startsWith('-')) specs.push(a);
+    }
+    return specs.length > 0 ? specs : ['.'];
+  }
+  return [];
+}
+
+/**
+ * The targets a part names, resolved from `cwd`: its commands' `targetWords` and what the gate
+ * reads as a path (`pathsInCommand`: absolute, `~`, `..` paths, option values such as `--out=/x`,
+ * redirect targets). `unplaceable` when an argument or redirect target uses a variable other than
  * `$HOME`/`$PWD`, a substitution or `~user`, or the part cannot be read at all.
  */
 function placeOf(
@@ -222,22 +301,24 @@ function placeOf(
 ): { paths: Placed[]; unplaceable: boolean } {
   const lexed = lexCommand(text);
   if (lexed.opaque.length > 0) return { paths: [], unplaceable: true };
-  const words: string[] = [];
-  for (const c of lexed.commands) {
-    words.push(...c.words.slice(commandHead(c.words) + 1).filter((w) => !w.startsWith('-')));
-    for (const r of c.redirects) {
-      if (r.op === '<<' || r.op === '<<-' || r.op === '<<<') continue;
-      if ((r.op === '>&' || r.op === '<&') && /^(?:\d+-?|-)$/.test(r.target)) continue;
-      words.push(r.target);
-    }
-  }
   const gate = pathsInCommand(text);
   if (gate.unresolvable.length > 0) return { paths: [], unplaceable: true };
+  const words: string[] = [];
+  for (const c of lexed.commands) {
+    const shown = [
+      ...c.words.slice(commandHead(c.words) + 1),
+      ...c.redirects.filter((r) => !HEREDOC_OPS.has(r.op)).map((r) => r.target),
+    ];
+    if (shown.some((w) => unplaceable(expandKnown(w, cwd)))) {
+      return { paths: [], unplaceable: true };
+    }
+    words.push(...targetWords(c.words));
+  }
   const paths: Placed[] = [];
   for (const raw of [...words, ...gate.paths]) {
     if (raw === '' || HARMLESS_DEVICES.has(raw)) continue;
-    const word = raw.replace(/^\$(?:HOME\b|\{HOME\})/, '~').replace(/^\$(?:PWD\b|\{PWD\})/, cwd);
-    if (/[$`]/.test(word) || /^~[^/]/.test(word)) return { paths: [], unplaceable: true };
+    const word = expandKnown(raw, cwd);
+    if (unplaceable(word)) return { paths: [], unplaceable: true };
     const segments = word.split('/');
     const g = segments.findIndex((s) => /[*?[\]{}]/.test(s));
     const plain =
@@ -247,14 +328,34 @@ function placeOf(
   return { paths, unplaceable: false };
 }
 
-/** Whether a target is a mark path or inside one; a glob also when a mark path is inside it. */
-function inMark(p: Placed, markPaths: readonly string[], ctx: PolicyContext): boolean {
+const HEREDOC_OPS: ReadonlySet<string> = new Set(['<<', '<<-', '<<<']);
+
+/** `$HOME`/`$PWD` at the start of a word, as `~` and the cwd. */
+function expandKnown(word: string, cwd: string): string {
+  return word.replace(/^\$(?:HOME\b|\{HOME\})/, '~').replace(/^\$(?:PWD\b|\{PWD\})/, cwd);
+}
+
+/** A word with an expansion the engine cannot read, or someone else's home (`~user`). */
+function unplaceable(word: string): boolean {
+  return /[$`]/.test(word) || /^~[^/]/.test(word);
+}
+
+/**
+ * Whether a target implies the folder mark: it is a mark path or inside one; a glob, or any target
+ * of a delete mark, also when a mark path is inside it.
+ */
+function inMark(
+  p: Placed,
+  match: Extract<ApprovalMarkMatch, { kind: 'folder' }>,
+  ctx: PolicyContext,
+): boolean {
   const path = unalias(p.path, ctx);
-  return markPaths.some((raw) => {
+  const contains = p.glob || match.category === 'destructive';
+  return match.paths.some((raw) => {
     const m = unalias(raw, ctx);
     return (
       isInsideWorkspace(path, { ...ctx, workspace: m, cwd: m }) ||
-      (p.glob && isInsideWorkspace(m, { ...ctx, workspace: path, cwd: path }))
+      (contains && isInsideWorkspace(m, { ...ctx, workspace: path, cwd: path }))
     );
   });
 }
@@ -290,9 +391,14 @@ function hostsOf(c: Classification): string[] {
     .map((h) => h.toLowerCase());
 }
 
-/** The words of a part's first command, empty words left out, at most `MAX_PREFIX_WORDS`. */
+/**
+ * The words of a part's first command from its name on (assignments and wrappers in front left
+ * out, as `markCovers` also matches from there), empty words left out, at most `MAX_PREFIX_WORDS`.
+ */
 function partWords(text: string): string[] {
-  const first = lexCommand(text).commands[0]?.words ?? text.trim().split(/\s+/);
+  const all = lexCommand(text).commands[0]?.words ?? text.trim().split(/\s+/);
+  const h = commandHead(all);
+  const first = h < all.length ? all.slice(h) : all;
   return first.filter((w) => w !== '').slice(0, MAX_PREFIX_WORDS);
 }
 

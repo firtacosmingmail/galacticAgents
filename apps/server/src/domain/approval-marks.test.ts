@@ -78,6 +78,94 @@ describe('markFromApproval and markCovers', () => {
     });
   });
 
+  describe('fix round 1', () => {
+    const t1 = '/w/.worktrees/t1';
+    const nm = markFromApproval({ toolCall: bash('rm -rf node_modules') }, ctx);
+
+    it('follows a cd before the approved delete', () => {
+      const mark = markFromApproval({ toolCall: bash('cd node_modules && rm -rf .cache') }, ctx);
+      expect(mark).toEqual({
+        kind: 'folder',
+        category: 'destructive',
+        paths: [`${t1}/node_modules/.cache`],
+      });
+      expect(covers(mark, bash('rm -rf node_modules/.cache'))).toBe(true);
+      expect(covers(mark, bash('rm -rf node_modules/other'))).toBe(false);
+    });
+
+    it.each(['cd "$D" && rm -rf .cache', 'cd - && rm -rf .cache', '(cd a); rm -rf .cache'])(
+      'falls back to the prefix when the cwd is not certain: %s',
+      (command) => {
+        expect(markFromApproval({ toolCall: bash(command) }, ctx)).toEqual({
+          kind: 'prefix',
+          words: ['rm'],
+        });
+      },
+    );
+
+    it('reads plain arguments as targets only for file commands', () => {
+      expect(markFromApproval({ toolCall: bash('git branch -D feat') }, ctx)).toEqual({
+        kind: 'prefix',
+        words: ['git', 'branch'],
+      });
+      expect(markFromApproval({ toolCall: bash('git clean -fdx') }, ctx)).toEqual({
+        kind: 'folder',
+        category: 'destructive',
+        paths: [t1],
+      });
+      expect(
+        markFromApproval({ toolCall: bash('find node_modules -name x -delete') }, ctx),
+      ).toEqual({ kind: 'folder', category: 'destructive', paths: [`${t1}/node_modules`] });
+    });
+
+    it.each(['rm -rf .', 'rm -rf /w/.worktrees/t1', 'git clean -fdx', 'find . -name x -delete'])(
+      'a delete mark covers a delete of a folder that contains it: %s',
+      (command) => {
+        expect(covers(nm, bash(command))).toBe(true);
+      },
+    );
+
+    it.each(['rm -rf dist', 'git branch -D feat', 'find dist -delete'])(
+      'a delete mark does not cover %s',
+      (command) => {
+        expect(covers(nm, bash(command))).toBe(false);
+      },
+    );
+
+    it('a read or edit mark does not cover its parent', () => {
+      const mark = markFromApproval(
+        { toolCall: { toolName: 'Read', input: { file_path: `${t1}/src/a.ts` } } },
+        ctx,
+      );
+      expect(mark).toEqual({
+        kind: 'folder',
+        category: 'read_workspace',
+        paths: [`${t1}/src/a.ts`],
+      });
+      expect(covers(mark, { toolName: 'Read', input: { file_path: `${t1}/src` } })).toBe(false);
+    });
+
+    it('starts the fallback prefix at the command name', () => {
+      const mark = markFromApproval({ toolCall: bash('FOO=1 pnpm test') }, ctx);
+      expect(mark).toEqual({ kind: 'prefix', words: ['pnpm', 'test'] });
+      expect(covers(mark, bash('pnpm test'))).toBe(true);
+    });
+
+    it('a delete of an unplaceable target gives a prefix mark', () => {
+      expect(markFromApproval({ toolCall: bash('rm -rf $X') }, ctx)).toEqual({
+        kind: 'prefix',
+        words: ['rm'],
+      });
+    });
+
+    it("a file tool on someone else's home gives a tool mark, which asks for that tool", () => {
+      const call: ToolCall = { toolName: 'Read', input: { file_path: '~bob/x' } };
+      const mark = markFromApproval({ toolCall: call }, ctx);
+      expect(mark).toEqual({ kind: 'tool', toolName: 'Read' });
+      expect(covers(mark, call)).toBe(true);
+    });
+  });
+
   describe('a network call: the same site and its subdomains', () => {
     const mark = markFromApproval({ toolCall: bash('curl https://api.posthog.com/api/x') }, ctx);
 
