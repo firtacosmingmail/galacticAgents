@@ -1,3 +1,6 @@
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import type {
   AgentEvent,
@@ -6,6 +9,7 @@ import type {
   PermissionPolicy,
   RequestJudgeInput,
   RequestVerdict,
+  SpawnOptions,
 } from '@galactic/protocol';
 import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { createFakeRequestJudge } from '../adapters/fake/fake-request-judge.js';
@@ -294,5 +298,189 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     await until(() => h.ofType('question.opened').length === 1);
     expect(h.ofType('agent.needs_input')[0]!.question.waykeeper).toBeUndefined();
     expect(h.log.tables.questions.all()[0]!.context.waykeeper).toBeUndefined();
+  });
+});
+
+describe("a project Steward's scratch folder (P13-09)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
+  });
+
+  it('is its temp folder, created before spawn, and a delete in it reaches the judge', async () => {
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-scratch-')));
+    dirs.push(workspace);
+    const scripts: Record<string, FakeScenario> = { ...SCENARIOS };
+    const adapter = new FakeAdapter({ speed: 0, scenarios: scripts });
+    const spawned: SpawnOptions[] = [];
+    const spawn = adapter.spawn.bind(adapter);
+    adapter.spawn = (o) => {
+      spawned.push(o);
+      return spawn(o);
+    };
+    const seen: RequestJudgeInput[] = [];
+    const c = composeRuntime(openDatabase(':memory:'), {
+      adapters: [adapter],
+      flushMs: 10,
+      requestJudge: scriptedJudge(seen),
+    });
+    lives.push(c);
+    const { commands } = c;
+    const harmonizer = (
+      await commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        cwd: '/hq',
+      })
+    ).value;
+    const project = (
+      await commands.createProject(
+        { name: 'Site', workspace, permissionPolicy: POLICY },
+        { origin: 'local' },
+      )
+    ).value;
+    c.log.runCommand((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER));
+    const waykeeper = (
+      await commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        projectId: project.id,
+        supervisorId: harmonizer.id,
+      })
+    ).value;
+    const task = (await commands.createTask({ description: 'tidy logs', projectId: project.id }))
+      .value;
+    // The Steward works in its own worktree (made by hand here: no git).
+    const worktree = join(workspace, '.galactic', 'worktrees', task.id);
+    mkdirSync(worktree, { recursive: true });
+    await commands.updateTask(task.id, { worktreePath: worktree });
+    const scratch = join(workspace, '.galactic', 'scratch', task.id);
+    const command = `SD=${scratch}; rm -f $SD/*.log`;
+    scripts['tidy'] = {
+      steps: [
+        {
+          kind: 'permission',
+          toolName: 'Bash',
+          input: { command },
+          permissionAction: 'destructive',
+        },
+        { kind: 'finish', result: 'tidied' },
+      ],
+    };
+    const steward = (
+      await commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:tidy',
+        taskId: task.id,
+        supervisorId: waykeeper.id,
+      })
+    ).value;
+    await until(() => seen.length === 1);
+    const opened = spawned.find((o) => o.agentId === steward.id)!;
+    expect(opened.tempDir).toBe(scratch);
+    expect(existsSync(scratch)).toBe(true);
+    // The Waykeeper and the Harmonizer get none.
+    expect(spawned.filter((o) => o.tempDir !== undefined)).toHaveLength(1);
+    expect(opened.cwd).toBe(worktree);
+    expect(seen[0]!.request.parts.find((p) => p.text.startsWith('rm'))).toMatchObject({
+      categories: expect.arrayContaining(['destructive']),
+    });
+    expect(seen[0]!.request.parts.some((p) => p.outsideCwd)).toBe(false);
+    await until(() =>
+      c.log
+        .eventsSince(0, Number.MAX_SAFE_INTEGER)
+        .some(
+          (e) =>
+            e.event.type === 'permission.decided' &&
+            e.event.agentId === steward.id &&
+            e.event.decision === 'allow',
+        ),
+    );
+  });
+
+  it('a project Steward working in the workspace itself (no worktree) gets no temp folder', async () => {
+    const workspace = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-plain-')));
+    dirs.push(workspace);
+    const adapter = new FakeAdapter({ speed: 0, scenarios: SCENARIOS });
+    const spawned: SpawnOptions[] = [];
+    const spawn = adapter.spawn.bind(adapter);
+    adapter.spawn = (o) => {
+      spawned.push(o);
+      return spawn(o);
+    };
+    const c = composeRuntime(openDatabase(':memory:'), { adapters: [adapter], flushMs: 10 });
+    lives.push(c);
+    const harmonizer = (
+      await c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        cwd: '/hq',
+      })
+    ).value;
+    const project = (
+      await c.commands.createProject({ name: 'Plain', workspace }, { origin: 'local' })
+    ).value;
+    const waykeeper = (
+      await c.commands.spawnAgent({
+        role: 'waykeeper',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        projectId: project.id,
+        supervisorId: harmonizer.id,
+      })
+    ).value;
+    const task = (await c.commands.createTask({ description: 'x', projectId: project.id })).value;
+    const steward = (
+      await c.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        taskId: task.id,
+        supervisorId: waykeeper.id,
+      })
+    ).value;
+    await until(() => spawned.some((o) => o.agentId === steward.id));
+    expect(spawned.every((o) => o.tempDir === undefined)).toBe(true);
+    expect(existsSync(join(workspace, '.galactic'))).toBe(false);
+  });
+
+  it("an asteroid's Steward gets no temp folder", async () => {
+    const cwd = realpathSync(mkdtempSync(join(tmpdir(), 'galactic-asteroid-')));
+    dirs.push(cwd);
+    const adapter = new FakeAdapter({ speed: 0, scenarios: SCENARIOS });
+    const spawned: SpawnOptions[] = [];
+    const spawn = adapter.spawn.bind(adapter);
+    adapter.spawn = (o) => {
+      spawned.push(o);
+      return spawn(o);
+    };
+    const c = composeRuntime(openDatabase(':memory:'), { adapters: [adapter], flushMs: 10 });
+    lives.push(c);
+    const harmonizer = (
+      await c.commands.spawnAgent({
+        role: 'harmonizer',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        cwd: '/hq',
+      })
+    ).value;
+    const task = (await c.commands.createTask({ description: 'a small fix' })).value;
+    const steward = (
+      await c.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:echo',
+        taskId: task.id,
+        supervisorId: harmonizer.id,
+        cwd,
+      })
+    ).value;
+    await until(() => spawned.some((o) => o.agentId === steward.id));
+    expect(spawned.every((o) => o.tempDir === undefined)).toBe(true);
+    expect(existsSync(join(cwd, '.galactic'))).toBe(false);
   });
 });

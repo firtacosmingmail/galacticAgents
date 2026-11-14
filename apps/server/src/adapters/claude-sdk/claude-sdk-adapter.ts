@@ -184,6 +184,19 @@ export function sessionSettings(
   };
 }
 
+/**
+ * The variables that move the CLI's temporary files into `dir` (P13-09): `CLAUDE_CODE_TMPDIR`
+ * is where Claude Code keeps its own per-uid temp folder (`<dir>/claude-<uid>`; `/tmp` when
+ * unset — it does not read `TMPDIR` for that), and `TMPDIR` is what the commands it runs inherit
+ * (`mktemp`, a test runner's temp files) and what the CLI's own `os.tmpdir()` returns. Checked
+ * against the bundled CLI of @anthropic-ai/claude-agent-sdk 0.3.285. With Claude Code's sandbox
+ * on, the commands it runs get the per-uid folder as `TMPDIR` instead, or `/tmp/claude-<uid>`
+ * when that path is too long for a socket (over 44 bytes).
+ */
+export function tempDirEnv(dir: string): Record<string, string> {
+  return { CLAUDE_CODE_TMPDIR: dir, TMPDIR: dir };
+}
+
 /** Credentials and routing the CLI needs that the supervisor's allow-list does not carry. */
 export const CLAUDE_PASS_ENV: readonly string[] = [
   'ANTHROPIC_BASE_URL',
@@ -275,6 +288,8 @@ class Session {
   settlePending(): void {
     for (const q of [...this.pending.values()]) q.resolve(undefined);
   }
+  /** The CLI's temp-folder variables (`tempDirEnv`), when the spawn names a temp folder. */
+  tempEnv: Record<string, string> = {};
   lastCost: Cost | undefined;
   lastResult: string | undefined;
   /** The reset time (unix seconds) the last `rate_limit_event` reported. */
@@ -413,6 +428,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       resume !== undefined,
       opts.role === 'steward',
     );
+    if (opts.tempDir) session.tempEnv = tempDirEnv(opts.tempDir);
     this.ended.delete(sessionId);
     this.sessions.set(sessionId, session);
     this.byAgent.set(opts.agentId, session);
@@ -478,7 +494,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
           }
         : {}),
       ...(extraArgs ? { extraArgs } : {}),
-      env: this.env(),
+      env: { ...this.env(), ...session.tempEnv },
       // No SDK `stderr` callback: the supervisor captures the CLI's stderr (`onStderr`), so
       // every line is reported once.
       hooks: { PreToolUse: [{ hooks: [(input) => this.preToolUse(session, input)] }] },
@@ -540,7 +556,7 @@ export class ClaudeSdkAdapter implements AgentAdapter {
       command: o.command,
       args: o.args,
       cwd: o.cwd ?? process.cwd(),
-      env: { ...this.env(), ...added },
+      env: { ...this.env(), ...added, ...session.tempEnv },
       meta: { runtime: 'claude-sdk', sessionRef: session.sessionId },
       onStderr: (chunk) => {
         const line = chunk.trim();

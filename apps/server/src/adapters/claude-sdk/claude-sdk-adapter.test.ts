@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type {
   AgentEvent,
   GateVerdict,
@@ -700,6 +700,26 @@ describe('ClaudeSdkAdapter — brains, bare, tools', () => {
     expect(withKey.sdk.calls[0]!.options.env?.['ANTHROPIC_API_KEY']).toBe(
       'sk-ant-test-0000000000000000000000',
     );
+  });
+
+  it("a spawn's temp folder becomes the CLI's CLAUDE_CODE_TMPDIR and TMPDIR (P13-09)", async () => {
+    const dir = '/work/proj/.galactic/scratch/t1';
+    const rig = make(() => [{ text: 'x' }]);
+    const adopt = vi.spyOn(rig.supervisor, 'adopt');
+    await rig.adapter.spawn(spawnOpts('x', { tempDir: dir }));
+    await rig.events.waitFor(has('agent.idle'));
+    expect(rig.sdk.calls[0]!.options.env).toMatchObject({ CLAUDE_CODE_TMPDIR: dir, TMPDIR: dir });
+    // The process the supervisor starts gets them too.
+    expect(adopt.mock.calls[0]![0].env).toMatchObject({ CLAUDE_CODE_TMPDIR: dir, TMPDIR: dir });
+
+    const plain = make(() => [{ text: 'x' }]);
+    const plainAdopt = vi.spyOn(plain.supervisor, 'adopt');
+    await plain.adapter.spawn(spawnOpts('x'));
+    await plain.events.waitFor(has('agent.idle'));
+    expect(plain.sdk.calls[0]!.options.env?.['CLAUDE_CODE_TMPDIR']).toBeUndefined();
+    // Without one, the supervisor's allow-list decides (the server's own TMPDIR).
+    expect(plainAdopt.mock.calls[0]![0].env?.['CLAUDE_CODE_TMPDIR']).toBeUndefined();
+    expect(plainAdopt.mock.calls[0]![0].env?.['TMPDIR']).toBeUndefined();
   });
 
   it('passes catalogued launch flags as extraArgs, merged with bare; every other session gets --no-chrome', async () => {
