@@ -1,6 +1,6 @@
 import { useRef, useSyncExternalStore } from 'react';
 import {
-  SIMILAR_APPROVALS_THRESHOLD,
+  offersStandingApproval,
   type Id,
   type Question,
   type WaykeeperForward as Forward,
@@ -11,7 +11,7 @@ import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js'
  * A permission card the Waykeeper forwarded (P13-06, design §5.6): why it sent it, the command's
  * parts (each on its own line, the failing one marked) and, after three or more similar earlier
  * approvals, what a standing approval would cover (the kind and the similar requests) and "let
- * the Waykeeper approve these". The block and the button are the same on the Mac and the phone
+ * the Waykeeper approve these" — never on a push or an upload (`offersStandingApproval`, P13-10). The block and the button are the same on the Mac and the phone
  * (Cosmin, 2026-11-09). The legacy console shows the block only, without the button; the menu bar
  * never offers the button.
  */
@@ -96,7 +96,13 @@ export function StandingApprovalButton({
   // The same key on every retry of this card's press.
   const answerId = useRef<string | undefined>(undefined);
   const n = forward.similar?.length ?? 0;
-  if (n < SIMILAR_APPROVALS_THRESHOLD || typeof api.standingApproval !== 'function') return null;
+  // Never on a push or an upload (P13-10): the server refuses it, the user allows those once.
+  if (
+    !offersStandingApproval({ ...q.context, waykeeper: forward }) ||
+    typeof api.standingApproval !== 'function'
+  ) {
+    return null;
+  }
   const press = async () => {
     answerId.current ??= newAnswerId();
     const key = answerId.current;

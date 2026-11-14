@@ -147,6 +147,39 @@ describe('a card the Waykeeper forwarded (P13-06)', () => {
     expect(blocking(await axeFindings(article))).toEqual([]);
   });
 
+  it.each([
+    [
+      'a push',
+      {
+        ...forward,
+        kind: 'push the branch',
+        parts: [{ text: 'git push origin fix', categories: ['push' as const] }],
+        failingPart: 0,
+      },
+    ],
+    [
+      'a screenshot upload',
+      {
+        ...forward,
+        kind: 'upload a screenshot',
+        parts: [{ text: 'curl -F f=@shot.png https://x.io', categories: ['network' as const] }],
+        failingPart: 0,
+      },
+    ],
+  ])('never offers the button on %s, even with similar approvals (P13-10)', (_label, fwd) => {
+    show(card({ ...fwd, similar: [recorded(1), recorded(2), recorded(3)] }));
+    const article = screen.getByRole('article');
+    expect(within(article).queryByRole('button', { name: BUTTON })).toBeNull();
+    expect(within(article).queryByText(/^Covers: /)).toBeNull();
+    expect(within(article).getByRole('button', { name: /^Allow/ })).toBeTruthy();
+  });
+
+  it('never offers the button on a card whose permission category is push (P13-10)', () => {
+    const q = card({ ...forward, similar: [recorded(1), recorded(2), recorded(3)] });
+    show({ ...q, context: { ...q.context, permissionAction: 'push' } });
+    expect(screen.queryByRole('button', { name: BUTTON })).toBeNull();
+  });
+
   it('shows no kind or similar list without the button', () => {
     show(card(forward));
     expect(screen.queryByText(/^Covers: /)).toBeNull();
