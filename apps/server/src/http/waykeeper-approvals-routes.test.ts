@@ -220,7 +220,17 @@ describe('DELETE /api/projects/:id/standing-approvals/:approvalId', () => {
 });
 
 /** A Steward of `p` and a `permission.decided` of it, logged now; returns the event's seq. */
-async function decided(p: Project, over: { waykeeperApproval?: boolean } = {}): Promise<number> {
+async function decided(
+  p: Project,
+  over: {
+    waykeeperApproval?: boolean;
+    /** The event's cwd from the task id; `null` logs none (an approval from before P13-16). */
+    cwd?: (taskId: Id) => string | null;
+    command?: (taskId: Id) => string;
+    /** Sets the task's worktree path. */
+    worktreePath?: (taskId: Id) => string;
+  } = {},
+): Promise<number> {
   const task = (await composed.commands.createTask({ projectId: p.id, description: 'clean up' }))
     .value;
   const spawned = await composed.runtime.spawn({
@@ -232,7 +242,12 @@ async function decided(p: Project, over: { waykeeperApproval?: boolean } = {}): 
     taskId: task.id,
   });
   if (!spawned.ok) throw new Error(spawned.reason);
-  const command = 'rm -rf node_modules';
+  const command = over.command?.(task.id) ?? 'rm -rf node_modules';
+  const cwd = over.cwd ? over.cwd(task.id) : p.workspace;
+  if (over.worktreePath) {
+    const row = composed.log.tables.tasks.get(task.id)!;
+    composed.log.tables.tasks.upsert({ ...row, worktreePath: over.worktreePath(task.id) });
+  }
   composed.log.runCommand((ctx) =>
     ctx.emit({
       type: 'permission.decided',
@@ -243,7 +258,7 @@ async function decided(p: Project, over: { waykeeperApproval?: boolean } = {}): 
       decidedBy: { type: 'agent', id: 'a-waykeeper' },
       ...(over.waykeeperApproval === false ? {} : { waykeeperApproval: true as const }),
       parts: [{ text: command, categories: ['destructive'] }],
-      cwd: p.workspace,
+      ...(cwd !== null ? { cwd } : {}),
     }),
   );
   return composed.log
@@ -319,6 +334,53 @@ describe('approval marks (P13-16)', () => {
     expect((await post('x')).status).toBe(400);
     expect(project(p.id).approvalMarks).toBeUndefined();
     expect(types()).not.toContain('approval_mark.removed');
+  });
+
+  it('refuses a fresh approval that is not the Waykeeper’s', async () => {
+    await setup();
+    const p = await newProject();
+    const plain = await decided(p, { waykeeperApproval: false });
+    now += 1 * DAY;
+    const res = await call('POST', `/api/projects/${p.id}/approval-marks`, { seq: plain });
+    expect(res.status).toBe(400);
+    expect(res.body['error']).toBe('invalid');
+    expect(project(p.id).approvalMarks).toBeUndefined();
+  });
+
+  const pathsOf = (body: Record<string, unknown>) =>
+    (body['mark'] as { match: { paths?: string[] } }).match.paths;
+
+  it('an approval logged without a cwd falls back to the task’s worktree, kept as a token', async () => {
+    await setup();
+    const p = await newProject();
+    const wt = (id: Id) => join(p.workspace, '.galactic', 'worktrees', id);
+    const seq = await decided(p, { cwd: () => null, worktreePath: wt });
+    const made = await call('POST', `/api/projects/${p.id}/approval-marks`, { seq });
+    expect(made.status).toBe(200);
+    expect(pathsOf(made.body)).toEqual(['{worktree}/node_modules']);
+  });
+
+  it('without a cwd or a worktree, the project workspace is the root, kept as a token', async () => {
+    await setup();
+    const p = await newProject();
+    const seq = await decided(p, { cwd: () => null });
+    const made = await call('POST', `/api/projects/${p.id}/approval-marks`, { seq });
+    expect(made.status).toBe(200);
+    expect(pathsOf(made.body)).toEqual(['{worktree}/node_modules']);
+  });
+
+  it('derives the scratch folder from the approval’s cwd, not the project’s spelling', async () => {
+    await setup();
+    const p = await newProject();
+    // Another spelling of the workspace (a symlink, /private/var for /var): the Steward's cwd.
+    const ws = join(root, 'alias');
+    const seq = await decided(p, {
+      cwd: (id) => join(ws, '.galactic', 'worktrees', id),
+      command: (id) => `rm -rf ${join(ws, '.galactic', 'scratch', id, 'out')}`,
+    });
+    const made = await call('POST', `/api/projects/${p.id}/approval-marks`, { seq });
+    expect(made.status).toBe(200);
+    expect(pathsOf(made.body)).toEqual(['{scratch}/out']);
   });
 
   it('is refused to an agent’s process (403 agent_peer)', async () => {

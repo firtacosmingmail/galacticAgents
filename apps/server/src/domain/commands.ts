@@ -164,6 +164,7 @@ import {
 } from './waykeeper-approvals.js';
 import { markFromApproval } from './approval-marks.js';
 import { scratchRoot } from '../workspace/workspaces.js';
+import { workspaceOfCwd } from '../brains/steward-prompt.js';
 import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
 import {
@@ -1612,17 +1613,21 @@ export class Commands implements DomainCommands {
       ...(e.action !== undefined ? { action: e.action } : {}),
     };
     // Folder paths in the Steward's worktree or scratch folder are kept relative to them, so the
-    // mark applies to every Steward of the project.
+    // mark applies to every Steward of the project. An approval logged before the event carried
+    // its cwd ran in the task's worktree (or the workspace): that is the cwd and the worktree
+    // root. The scratch folder is found from that cwd, as the runtime's `scratchOf` does, so a
+    // cwd spelled another way than `project.workspace` still has its scratch folder tokenised.
+    const cwd = e.cwd ?? task?.worktreePath ?? project.workspace;
     let scratch: string | undefined;
     try {
-      scratch = agent?.taskId ? scratchRoot(project.workspace, agent.taskId) : undefined;
+      scratch = agent?.taskId ? scratchRoot(workspaceOfCwd(cwd), agent.taskId) : undefined;
     } catch {
       scratch = undefined;
     }
     const match = markFromApproval(
       approval,
-      { workspace: project.workspace, cwd: e.cwd ?? project.workspace, home: homedir() },
-      { worktree: e.cwd, scratch },
+      { workspace: project.workspace, cwd, home: homedir() },
+      { worktree: cwd, scratch },
     );
     const made = {
       example: markExample(e.toolCall),
