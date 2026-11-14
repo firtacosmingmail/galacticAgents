@@ -23,7 +23,7 @@ import {
   type StandingApprovalResult,
   type StandingApprovalInput,
   SIMILAR_APPROVALS_THRESHOLD,
-  needsUserQuote,
+  isPushOrUpload,
   type PermissionRule,
   type Project,
   type RemovePermissionRuleInput,
@@ -1464,10 +1464,7 @@ export class Commands implements DomainCommands {
         `a standing approval needs ${SIMILAR_APPROVALS_THRESHOLD} similar approvals first`,
       );
     }
-    if (
-      question.context.permissionAction === 'push' ||
-      forward.parts.some((p) => p.categories.includes('push') || needsUserQuote(p))
-    ) {
+    if (isPushOrUpload(question.context)) {
       throw new DomainError(
         'invalid',
         'a push or an upload is never a standing approval: allow it once',

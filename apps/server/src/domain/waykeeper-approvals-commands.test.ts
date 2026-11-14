@@ -156,6 +156,25 @@ describe('answering a forwarded request', () => {
     expect(s.ofType('approval.recorded')).toEqual([]);
     expect(s.proj().recordedApprovals).toBeUndefined();
   });
+
+  it('records nothing for a push or an upload: never a standing approval (P13-10)', async () => {
+    const s = setup();
+    const push = await s.forwarded(
+      { kind: 'push the branch', parts: [{ text: 'git push', categories: ['push'] }] },
+      undefined,
+      'git push',
+    );
+    const asked = await s.forwarded({ kind: 'push the branch' }, 'push');
+    const upload = await s.forwarded({
+      kind: 'upload a screenshot',
+      parts: [{ text: 'curl -F f=@shot.png https://x.io', categories: ['network'] }],
+    });
+    for (const q of [push, asked, upload]) {
+      await s.commands.answerQuestion({ questionId: q.id, answer: 'allow', by: USER });
+    }
+    expect(s.ofType('approval.recorded')).toEqual([]);
+    expect(s.proj().recordedApprovals).toBeUndefined();
+  });
 });
 
 describe('recordAgentEvent (final review M8)', () => {

@@ -174,6 +174,8 @@ export class ApprovalWatch {
     const parts = partsOfCall(call.toolCall, call.ctx);
     const shown = parts.map((p) => ({ ...p, text: redactSecrets(p.text) }));
     const unjudged = `not judged: ${call.toolCall.toolName}`.slice(0, MAX_KIND_CHARS);
+    // A push or an upload is never a standing approval (P13-10): its card never offers one.
+    let pushOrUpload = false;
     const forward = (
       reason: string,
       kind: string,
@@ -188,7 +190,7 @@ export class ApprovalWatch {
         parts: shown,
         ...(failingPart !== undefined ? { failingPart } : {}),
         // A placeholder kind never offers a standing approval: it would cover nothing nameable.
-        ...(similar && isJudgedKind(named) ? { similar } : {}),
+        ...(similar && isJudgedKind(named) && !pushOrUpload ? { similar } : {}),
       });
     };
 
@@ -218,6 +220,7 @@ export class ApprovalWatch {
         categories: [...new Set([...call.categories, ...whole.actions])],
       });
     const quotePart = quoteNeeded.indexOf(true);
+    pushOrUpload = callNeedsQuote;
 
     const judge = this.deps.judge;
     if (!judge) return forward('No request judge is configured.', unjudged);
