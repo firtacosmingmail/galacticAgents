@@ -1,6 +1,6 @@
 import { markLabel, type Project, type StandingApproval } from '@galactic/protocol';
 import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
-import { ApprovalsLog } from './ApprovalsLog.js';
+import { ApprovalsLog, when } from './ApprovalsLog.js';
 
 /**
  * A project's Waykeeper approvals (P13-06, design §5.6; SPEC decision 154), beside its "Allow
@@ -10,9 +10,13 @@ import { ApprovalsLog } from './ApprovalsLog.js';
  * to the switch. Turning it off and removing a standing approval work from anywhere.
  */
 
-export function when(at: string): string {
-  const d = new Date(at);
-  return Number.isNaN(d.getTime()) ? at : d.toLocaleString();
+/** "added <when>", then " by the Waykeeper" and " from a remote client" when so. */
+function added(item: Pick<StandingApproval, 'createdAt' | 'createdBy' | 'origin'>): string {
+  return [
+    `added ${when(item.createdAt)}`,
+    item.createdBy.type === 'user' ? '' : ' by the Waykeeper',
+    item.origin === 'remote' ? ' from a remote client' : '',
+  ].join('');
 }
 
 type Mode = 'off' | 'task' | 'auto';
@@ -48,7 +52,7 @@ function ApprovalMarks({ project }: { project: Project }) {
           <li key={m.id}>
             <strong>{markLabel(m.match)}</strong>
             <span className="muted">from “{m.example}”</span>
-            <span className="muted">added {when(m.createdAt)}</span>
+            <span className="muted">{added(m)}</span>
             <button
               type="button"
               className="secondary"
@@ -113,11 +117,7 @@ export function StandingApprovals({ project }: { project: Project }) {
               <span className="pill">standing</span>
               <strong>{a.kind}</strong>
               <code>{a.examples.join(' · ')}</code>
-              <span className="muted">
-                added {when(a.createdAt)}
-                {a.createdBy.type === 'user' ? '' : ' by the Waykeeper'}
-                {a.origin === 'remote' ? ' from a remote client' : ''}
-              </span>
+              <span className="muted">{added(a)}</span>
               <button
                 type="button"
                 className="secondary"

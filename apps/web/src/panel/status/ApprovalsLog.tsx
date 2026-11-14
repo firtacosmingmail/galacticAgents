@@ -30,7 +30,8 @@ const CATEGORY_NAMES: Record<ApprovalLogCategory, string> = {
 
 const DAY_MS = 86_400_000;
 
-function when(at: string): string {
+/** A timestamp in the viewer's locale; the raw text when it cannot be read. */
+export function when(at: string): string {
   const d = new Date(at);
   return Number.isNaN(d.getTime()) ? at : d.toLocaleString();
 }

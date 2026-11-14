@@ -146,6 +146,19 @@ describe('the "Always asks me" marks (P13-17)', () => {
     expect(api.removeApprovalMark).toHaveBeenCalledWith('p-1', 'm-1');
   });
 
+  it('says when and by whom a mark was added, as standing approvals do', () => {
+    show({
+      ...fx.project,
+      approvalMarks: [mark, { ...mark, id: 'm-2', origin: 'remote' }],
+    });
+    const items = within(screen.getByRole('list', { name: 'always asks me' })).getAllByRole(
+      'listitem',
+    );
+    expect(items[0]!.textContent).toMatch(/added .+/);
+    expect(items[0]!.textContent).not.toContain('from a remote client');
+    expect(items[1]!.textContent).toContain('from a remote client');
+  });
+
   it('shows nothing about marks when there are none', () => {
     show(fx.project);
     expect(screen.queryByText(/Always asks me/)).toBeNull();
