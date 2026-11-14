@@ -26,6 +26,23 @@ const read = { toolName: 'Read', input: { file_path: 'src/a.ts' } };
 const push = { toolName: 'Bash', input: { command: 'git push' } };
 
 describe('createPermissionGate', () => {
+  it('refuses a command that makes a symbolic link, even when the table allows everything (decision 158)', () => {
+    const rules = Object.fromEntries(
+      Object.keys(DEFAULT_PERMISSION_POLICY.rules).map((k) => [k, 'allow']),
+    ) as typeof DEFAULT_PERMISSION_POLICY.rules;
+    const gate = createPermissionGate({
+      ...base,
+      policy: { rules, unclassified: 'allow' },
+      caps: caps(),
+    });
+    const verdict = gate.check({ toolName: 'Bash', input: { command: 'ln -s /etc etc' } });
+    expect(verdict.decision).toBe('deny');
+    expect(verdict.decision === 'deny' && verdict.reason).toMatch(/symbolic links/);
+    expect(gate.check({ toolName: 'Bash', input: { command: 'ln a b' } })).toEqual({
+      decision: 'allow',
+    });
+  });
+
   it("asks before a Steward writes into the project's deliverables folder, read on every check (P9-06)", () => {
     let folders: string[] = [];
     const gate = createPermissionGate({

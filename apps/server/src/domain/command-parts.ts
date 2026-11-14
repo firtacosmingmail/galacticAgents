@@ -216,13 +216,19 @@ class Splitter {
     return out;
   }
 
-  /** Whether `text` uses a variable the line set to something it cannot read. */
+  /**
+   * Whether `text` uses a value the line does not set to a literal (P13-12): a variable it set to
+   * something it cannot read, one it never sets (`$X` from the environment), a positional or
+   * special parameter (`$1`, `$@`, `$*`), an indirect one (`${!X}`), a length or an expression
+   * (`${#X}`, `$[…]`), or a command's output (`$(…)`, a backtick). A delete that uses one cannot
+   * be placed, so it always goes to Cosmin.
+   */
   private usesUnknown(text: string): boolean {
     for (const c of lexCommand(text).commands) {
       for (const w of [...c.words, ...c.redirects.map((r) => r.target)]) {
+        if (UNPLACEABLE_EXPANSION.test(w)) return true;
         for (const m of w.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
-          const v = this.vars.get(m[1]!);
-          if (v === null || (v === undefined && this.anyVar)) return true;
+          if (typeof this.vars.get(m[1]!) !== 'string') return true;
         }
       }
     }
@@ -440,6 +446,11 @@ function assignedBy(command: SimpleCommand): Set<string> | 'all' {
   return out.has('IFS') ? 'all' : out;
 }
 
+/**
+ * An expansion no variable the line sets can stand for: a positional or special parameter, an
+ * indirect reference or a length (`${!X}`, `${#X}`), an arithmetic `$[…]`, a command's output.
+ */
+const UNPLACEABLE_EXPANSION = /\$(?:[0-9@*#?$!-]|\{[!#0-9@*?$-]|\(|\[)|`/;
 /** A line that defines a shell function (`f() {`, `function f`). */
 const DEFINES_FUNCTION = /(?:^|[\s;&|(){}])function\s|[A-Za-z0-9_.:-]\s*\(\s*\)/;
 /** Commands that may set any variable, named in a way the splitter cannot read: forget all. */

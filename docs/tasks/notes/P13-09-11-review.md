@@ -11,10 +11,10 @@ Independent review of branch `agent-waykeeper-approvals-fixes` against `main`.
 
 Also fixed: the judge's prompt used a literal copy of `PICKED_OPTION_PREFIX`.
 
-## Not fixed: already on `main` (P13-12)
+## Already on `main`: fixed in P13-12 (decision 158)
 
-- A bare-variable delete target the line never sets is not marked unplaceable.
-- Paths are compared as text, so a symlink planted inside the worktree or scratch folder can point outside it.
+- A bare-variable delete target the line never sets is not marked unplaceable. Now it is, and the delete goes to Cosmin.
+- Paths are compared as text, so a symlink planted inside the worktree or scratch folder can point outside it. Now no agent may create a symlink: the gate refuses `ln -s`, `cp -s` and link-making calls in unreadable code.
 
 ## Known limits
 

@@ -114,6 +114,12 @@ export interface Classification {
    * (decisions 22, 122): no "Allow similar" rule ever allows it (P9-17, decision 138).
    */
   guarded?: true;
+  /**
+   * Why the call is refused whatever the table, a rule or anyone says (decision 158): it creates
+   * a symbolic link. No agent creates one; a link would make a path outside the worktree look
+   * inside it.
+   */
+  refused?: string;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -282,6 +288,7 @@ export function evaluate(
 ): PolicyVerdict {
   const classification = classifyToolCall(call, ctx);
   if (classification.alwaysAllow) return { ...classification, decision: 'allow' };
+  if (classification.refused) return { ...classification, decision: 'deny' };
   const decision = decide(policy, classification.actions, classification.unclassified === true);
   const merged = resolvePolicy(policy);
   const dominant = classification.actions.find((a) => ruleFor(merged, a) === decision);
@@ -2041,6 +2048,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     }
   };
   let guarded = false;
+  let refused: string | undefined;
   const trimmed = command.trim();
   if (trimmed === '') {
     return { actions: [], reasons: ['empty command'], findings: [], unclassified: true };
@@ -2093,6 +2101,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       opaque = true;
       reasons.push(`env with options the engine does not read: ${shown}`);
     }
+    refused ??= symlinkReason(simple.words);
     const hidden = hiddenProgram(simple) ?? unseenWords(simple.words);
     if (hidden) {
       opaque = true;
@@ -2219,12 +2228,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const why of mentionsPush(trimmed)) {
       note('push', why, { part: why });
     }
+    // A link made in code the engine cannot read is looked for in the raw text, as a push.
+    refused ??= mentionsSymlink(trimmed);
     return {
       actions: [...actions],
-      reasons,
+      reasons: refused ? [refused, ...reasons] : reasons,
       findings,
       unclassified: true,
       ...(guarded ? { guarded: true as const } : {}),
+      ...(refused ? { refused } : {}),
     };
   }
   if (actions.size === 0) {
@@ -2233,10 +2245,57 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   }
   return {
     actions: [...actions],
-    reasons,
+    reasons: refused ? [refused, ...reasons] : reasons,
     findings,
     ...(guarded ? { guarded: true as const } : {}),
+    ...(refused ? { refused } : {}),
   };
+}
+
+/** Why no agent may run a command that makes a symbolic link (decision 158). */
+const SYMLINK_REFUSAL =
+  'agents may not create symbolic links (a link can make a path outside the worktree look inside it): copy the file or name its real path instead';
+
+/**
+ * Why `words` make a symbolic link (decision 158), or `undefined`: `ln` (or coreutils' `gln`)
+ * with `-s` in an option cluster or `--symbolic`, and `cp`/`gcp` with `-s` or
+ * `--symbolic-link`. Options are read up to `--`.
+ */
+export function symlinkReason(words: string[]): string | undefined {
+  const h = commandHead(words);
+  const head = words[h];
+  if (head === undefined) return undefined;
+  const name = baseName(head);
+  const long =
+    name === 'ln' || name === 'gln'
+      ? '--symbolic'
+      : name === 'cp' || name === 'gcp'
+        ? '--symbolic-link'
+        : undefined;
+  if (long === undefined) return undefined;
+  for (const w of words.slice(h + 1)) {
+    if (w === '--') break;
+    if (w === long || w.startsWith(`${long}=`) || /^-[A-Za-z]*s[A-Za-z]*$/.test(w)) {
+      return `${SYMLINK_REFUSAL}: ${words.slice(h).join(' ')}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Raw-text check of a command the engine cannot read (an inline script, `sh -c`, a heredoc body):
+ * `ln -s`/`ln --symbolic`, or a library call that makes a link (`os.symlink(`, `fs.symlinkSync(`,
+ * `File.symlink(`, `.symlink_to(`, `mklink`). Deliberately over-eager, like `mentionsPush`.
+ */
+export function mentionsSymlink(text: string): string | undefined {
+  const bare = text.replace(/["'`\\]/g, '');
+  const found =
+    /\bg?ln[^\S\n]+(?:[^\s;&|]+[^\S\n]+)*?(?:-[A-Za-z]*s[A-Za-z]*|--symbolic)(?:\s|$)/.test(bare) ||
+    /\bg?cp[^\S\n]+(?:[^\s;&|]+[^\S\n]+)*?(?:-[A-Za-z]*s[A-Za-z]*|--symbolic-link)(?:\s|$)/.test(
+      bare,
+    ) ||
+    /\bsymlink(?:Sync)?\s*\(|\.symlink_to\s*\(|\bmklink\b/i.test(bare);
+  return found ? `${SYMLINK_REFUSAL} (inside a command the engine cannot read)` : undefined;
 }
 
 /** `sed -n` with one script that only prints a line or a range (`1,80p`, `120p`, `$p`). */

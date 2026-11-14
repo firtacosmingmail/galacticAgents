@@ -77,7 +77,8 @@ export interface ApprovalWatchCall {
 /** Why a part can never be approved by the judge, or `undefined` (design §5.4a). */
 function hardRule(part: CommandPart): string | undefined {
   if (part.guarded) return 'it writes agent or git configuration, or the deliverables folder';
-  if (part.outsideCwd) return "it deletes outside the Steward's worktree and scratch folder";
+  if (part.outsideCwd)
+    return "it deletes outside the Steward's worktree and scratch folder, or a target it cannot place (a variable the command does not set)";
   if (part.categories.includes('destructive') && /\$\(|`/.test(part.text)) {
     return 'it deletes a target that a command substitution decides';
   }

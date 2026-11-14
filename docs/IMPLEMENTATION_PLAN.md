@@ -247,6 +247,7 @@ Spec: `docs/superpowers/specs/2026-11-09-waykeeper-approvals-design.md`; plan: `
 6. The panel (Mac and phone) and the menu bar: switch, forwarded cards, standing approvals, the count and the list (P13-06).
 7. Docs, task board and the real run (P13-07).
 8. Follow-up from real use (P13-09–P13-11, 2026-11-14): the Steward's scratch folder is its own and its temp folder, literal variables place targets, relayed answers and picked options naming the action count as Cosmin's words, no standing approval is offered for a push, and a `gh --jq` filter is not a path.
+9. Closing the follow-up (P13-12, decision 158): a delete whose target a variable the line does not set decides always asks Cosmin, and the gate refuses any command that makes a symbolic link.
 
 **Exit criteria:** every task done; `runtime/waykeeper-approvals.flow.test.ts` passes; the full gates are green; and one local real run — a real Waykeeper and Steward on a scratch project with the switch on: a review task approved without cards, a `gh pr comment` nobody asked for forwarded, three similar approvals turning into the standing-approval button pressed from the phone — recorded in `docs/tasks/notes/P13-07-real-run.md`, run only with Cosmin's go-ahead (it acts on a real repository). The phase is not marked done before that run.
 

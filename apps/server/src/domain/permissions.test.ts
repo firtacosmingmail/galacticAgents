@@ -1100,3 +1100,53 @@ describe("gh's --jq and --template values are not paths (P13-11)", () => {
     expect(classifyCommand("curl https://x.example -o '.[].a'", ctx).guarded).toBe(true);
   });
 });
+
+describe('symbolic links are refused (decision 158)', () => {
+  const allowAll: PermissionPolicy = {
+    rules: Object.fromEntries(
+      Object.keys(DEFAULT_PERMISSION_POLICY.rules).map((k) => [k, 'allow']),
+    ) as PermissionPolicy['rules'],
+    unclassified: 'allow',
+  };
+  const bash = (command: string) => ({ toolName: 'Bash', input: { command } });
+
+  it('ln -s, ln --symbolic and cp -s are refused whatever the table says', () => {
+    for (const command of [
+      'ln -s ../a b',
+      'ln -sf /etc l',
+      'ln -fns x y',
+      'ln --symbolic a b',
+      'sudo ln -s / l',
+      'gln -s a b',
+      'cp -s a b',
+      'cp -rs a b',
+      'cp --symbolic-link a b',
+      'mkdir x && ln -s /etc x/l',
+      `sh -c 'ln -s / l'`,
+      `python3 -c 'import os; os.symlink("/", "l")'`,
+      `node -e 'require("fs").symlinkSync("/", "l")'`,
+    ]) {
+      const v = evaluate(allowAll, bash(command), ctx);
+      expect(v.decision, command).toBe('deny');
+      expect(v.refused, command).toMatch(/symbolic links/);
+      expect(v.reasons[0], command).toMatch(/symbolic links/);
+    }
+  });
+
+  it('hard links, copies and text that only mentions a link are not refused', () => {
+    for (const command of [
+      'ln a b',
+      'ln -f a b',
+      'cp -r a b',
+      'cp -S .bak a b',
+      'ln -- -s b',
+      'grep -rn "ln -s" docs',
+      'git log --grep symlink',
+      `sh -c 'ln a b; grep -s x f'`,
+    ]) {
+      const v = evaluate(allowAll, bash(command), ctx);
+      expect(v.refused, command).toBeUndefined();
+      expect(v.decision, command).toBe('allow');
+    }
+  });
+});

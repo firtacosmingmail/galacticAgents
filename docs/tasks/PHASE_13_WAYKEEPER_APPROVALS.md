@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-12 · **Task status:** P13-09, P13-10, P13-11 done (2026-11-14, branch `agent-waykeeper-approvals-fixes`); P13-12 todo
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 11/12
+**Current task:** — · **Task status:** P13-09–P13-12 done (2026-11-14, branch `agent-waykeeper-approvals-fixes`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 12/12
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -92,5 +92,6 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Done: the value of `gh`'s `--jq`/`-q`/`--template`/`-t` is never a path, in the gate and the splitter.
 
 ### P13-12 — Unplaceable delete targets and symlinks (added 2026-11-14)
-- **Status:** todo · **Depends on:** P13-09 · **Parallel with:** —
+- **Status:** done (2026-11-14) · **Depends on:** P13-09 · **Parallel with:** —
 - Found in the final review of P13-09–P13-11, already true on `main`: a delete whose target is a bare variable the line never sets (`rm -rf $X` with `X` from the environment, `$1`, `$@`, `${!X}`) is not marked unplaceable, so it reaches the judge instead of Cosmin; and paths are compared as text, so a symlink planted in the worktree or scratch folder (`ln -s / $SD/l; rm -rf $SD/l/etc`) reads as inside. Decide with Cosmin first: forwarding every such delete adds cards (e.g. `git branch -D "$b"`).
+- **Cosmin's decision (2026-11-14):** keep asking for `rm -rf $X`; no agent creates symlinks; topic closed. SPEC decision 158. Done: every variable the line does not set to a literal, and every parameter, indirect name or command output, makes a delete unplaceable (forwarded); the gate refuses any command that makes a symbolic link, whatever the table or a rule says.

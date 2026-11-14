@@ -508,3 +508,40 @@ describe("commandParts: a Steward's scratch folder and its variables (P13-09)", 
     expect(p('rm -f /private/var/w/proj/.galactic/scratch/t2/a.log').outsideCwd).toBe(true);
   });
 });
+
+describe('commandParts: a delete whose target the line does not set (P13-12)', () => {
+  const scratch = '/work/proj/.galactic/scratch/t1';
+  const outsideOf = (command: string) =>
+    commandParts(command, ctx, { scratch })
+      .filter((p) => p.categories.includes('destructive'))
+      .map((p) => p.outsideCwd === true);
+
+  it('a variable from the environment, a parameter or an indirect name cannot be placed', () => {
+    for (const command of [
+      'rm -rf $X',
+      'rm -rf "$X"',
+      'rm -rf ${X}',
+      'rm -rf "$1"',
+      'rm -rf $@',
+      'rm -rf "$*"',
+      'rm -rf ${!X}',
+      'rm -rf ${#X}',
+      'find $X -delete',
+      'git branch -D "$b"',
+      'git worktree remove "$W"',
+      'rm -rf $(cat list)',
+    ]) {
+      expect(outsideOf(command), command).toEqual([true]);
+    }
+  });
+
+  it('a variable the line sets once to a plain path still places its target', () => {
+    expect(outsideOf(`SD=${scratch}; rm -rf $SD/x`)).toEqual([false]);
+    expect(outsideOf('rm -rf ./build')).toEqual([false]);
+  });
+
+  it('a command that deletes nothing may use any variable', () => {
+    const parts = commandParts('echo $X; ls "$1"', ctx);
+    expect(parts.some((p) => p.outsideCwd)).toBe(false);
+  });
+});
