@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** all done (2026-11-11)
-**Phase status:** done (2026-11-11) (8/8) — merged into `main` (PR #12)
+**Current task:** P13-09, P13-10, P13-11 · **Task status:** P13-09, P13-10, P13-11 in progress (follow-up from real use, branch `agent-waykeeper-approvals-fixes`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up in progress (8/11)
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -32,7 +32,9 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 7 | P13-07 | Docs, task board and the real run (Task 7). |
 | 7 | P13-08 | Steward scratch checkouts stay in the workspace (found in the test run; added 2026-11-09). |
 
-P13-01…07 run in order; P13-08 runs beside P13-07.
+| 8 | P13-09, P13-10, P13-11 | Follow-up from real use (added 2026-11-14): the Waykeeper approved none of 14 requests. |
+
+P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
 ## Tasks
 
@@ -70,3 +72,17 @@ P13-01…07 run in order; P13-08 runs beside P13-07.
 - **Status:** done (2026-11-09) · **Depends on:** — · **Parallel with:** P13-07
 - Found in Cosmin's test run: a Steward reviewing a PR ran `git worktree add /tmp/pr83 pr-83` (its prompt forbids switching branches and named no place for another checkout).
 - Done: a project Steward's prompt names its scratch folder `<workspace>/.galactic/scratch/<task-id>` and forbids files, clones and worktrees outside the workspace (other refs are read with `git log`/`git diff`/`git show`); `Workspaces.mergeTask` and `removeWorktree` remove that folder and any git worktree registered in it. SPEC decision 27 amended. Asteroid Stewards get no scratch folder (their folder may be someone's working copy). A `git worktree add` there still writes into `.git`, so it still asks.
+
+### P13-09 — A Steward's own scratch and temp files are its own (added 2026-11-14)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-10, P13-11
+- Found in real use: 8 of the Waykeeper's 14 forwards were "deletes outside the Steward's worktree" for the Steward's own temporary files: `rm -f /tmp/claude-501/t964-*.log` (Claude Code's temp folder), `SD=<its scratch folder>; rm $SD/*.log` (the variable is not resolved, so the target "cannot be placed"), and deletes in its scratch folder, which does not count as its own.
+- Do: a destructive part inside the Steward's scratch folder counts as inside its workspace; a `NAME=<literal path>` assignment earlier in the same command is resolved when placing later parts; the Steward's processes get its scratch folder as their temp folder, so its temp files land there. Never: anything outside both the worktree and the scratch folder.
+
+### P13-10 — Cosmin's picked answers and relayed questions grant a push (added 2026-11-14)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-09, P13-11
+- Found in real use: Cosmin picked "Push and post the 4 replies" on a Harmonizer question relaying the Waykeeper's "May I push?", and the push was still forwarded: a picked option was not his words, and the Harmonizer's question was not one of the project's. 5 of 14 forwards were pushes.
+- Do (amends decision 154, Cosmin's call 2026-11-14): his answer to a question the Harmonizer asked to relay a question of the project's agents counts; an option he picked counts as his words when the option names the action. The server's quote check (15 characters, verbatim) stays. The "Approved 3 times before" button is not offered on a push or an upload (it was offered and then refused).
+
+### P13-11 — A `gh --jq` filter is not a path (added 2026-11-14)
+- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-09, P13-10
+- Found in real use: `gh api …/reviews --jq '.[].user.login'` was classified as "agent or git configuration" (guarded), so it could never be approved. The filter of `--jq`/`-q` and the template of `--template`/`-t` are not paths. This also affects the normal permission table.
