@@ -257,7 +257,7 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     ]);
   });
 
-  it('the user allowing a forwarded card of a live Steward records the approval (P13-05)', async () => {
+  it('the user allowing a forwarded push of a live Steward answers it and records no approval (P13-05, P13-10)', async () => {
     const h = await hierarchy({ switchOn: true, seen: [] });
     await until(() => h.ofType('question.opened').length === 1);
     const q = h.log.tables.questions.all()[0]!;
@@ -267,15 +267,9 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
       .events()
       .map((e) => e.type)
       .filter((t) => t === 'question.answered' || t === 'approval.recorded');
-    expect(types).toEqual(['question.answered', 'approval.recorded']);
-    expect(h.ofType('approval.recorded')[0]!.approval).toMatchObject({
-      kind: 'PR comment',
-      agentId: h.steward.id,
-      questionId: q.id,
-    });
-    expect(
-      h.log.tables.projects.get(h.project.id)!.recordedApprovals?.map((a) => a.questionId),
-    ).toEqual([q.id]);
+    // A PR comment is a push: never a standing approval, so not a repeat to count either.
+    expect(types).toEqual(['question.answered']);
+    expect(h.log.tables.projects.get(h.project.id)!.recordedApprovals).toBeUndefined();
   });
 
   it('with the switch off, the same request opens a plain question; the judge is never called', async () => {
