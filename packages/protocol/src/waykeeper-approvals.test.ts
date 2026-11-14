@@ -2,9 +2,13 @@ import { describe, expect, it } from 'vitest';
 import { Project, relayedQuestionOf } from './domain.js';
 import { project } from './fixtures/domain.js';
 import {
+  APPROVAL_LOG_ORDER,
+  approvalLogCategory,
+  ApprovalMark,
   CommandPart,
   isJudgedKind,
   isPushOrUpload,
+  markLabel,
   MAX_RECORDED_APPROVALS,
   needsUserQuote,
   offersStandingApproval,
@@ -184,5 +188,72 @@ describe('relayedQuestionOf (P13-10)', () => {
     expect(relayedQuestionOf({ meta: { relaysQuestionId: 3 } })).toBeUndefined();
     expect(relayedQuestionOf({ meta: {} })).toBeUndefined();
     expect(relayedQuestionOf(undefined)).toBeUndefined();
+  });
+});
+
+describe('approvalLogCategory (P13-13)', () => {
+  it('takes the first category of the log order over all parts', () => {
+    expect(
+      approvalLogCategory({
+        parts: [
+          { text: 'rm -rf x', categories: ['destructive'] },
+          { text: 'gh pr view', categories: ['network'] },
+        ],
+      }),
+    ).toBe('delete');
+    expect(approvalLogCategory({ parts: [{ text: 'git push', categories: ['push'] }] })).toBe(
+      'push',
+    );
+    expect(APPROVAL_LOG_ORDER[0]).toBe('push');
+    expect(APPROVAL_LOG_ORDER).toHaveLength(8);
+  });
+
+  it('puts a part that runs unreadable code under unreadable', () => {
+    expect(
+      approvalLogCategory({
+        parts: [{ text: 'python -c x', categories: ['run_workspace'], opaque: 'inline_code' }],
+      }),
+    ).toBe('unreadable');
+  });
+
+  it('falls back to the action, then to run', () => {
+    expect(approvalLogCategory({ action: 'network' })).toBe('network');
+    expect(approvalLogCategory({ action: 'edit_workspace' })).toBe('edit');
+    expect(approvalLogCategory({})).toBe('run');
+  });
+});
+
+describe('markLabel and ApprovalMark (P13-13)', () => {
+  it('words each kind of match', () => {
+    expect(markLabel({ kind: 'folder', category: 'destructive', paths: ['/w/node_modules'] })).toBe(
+      'deletes in /w/node_modules',
+    );
+    expect(markLabel({ kind: 'folder', category: 'edit_workspace', paths: ['/w/a', '/w/b'] })).toBe(
+      'edits in /w/a, /w/b',
+    );
+    expect(markLabel({ kind: 'site', host: 'api.posthog.com' })).toBe('calls to api.posthog.com');
+    expect(markLabel({ kind: 'prefix', words: ['pnpm', 'test'] })).toBe('pnpm test …');
+    expect(markLabel({ kind: 'tool', toolName: 'WebFetch' })).toBe('the tool WebFetch');
+  });
+
+  it('parses a mark and refuses an empty folder or prefix', () => {
+    const mark = {
+      id: 'am-1',
+      projectId: 'p-1',
+      match: { kind: 'prefix', words: ['pnpm', 'test'] },
+      example: 'pnpm test',
+      createdBy: { type: 'user' },
+      createdAt: '2026-11-14T10:00:00.000Z',
+      origin: 'local',
+      fromSeq: 4,
+    };
+    expect(ApprovalMark.parse(mark)).toEqual(mark);
+    expect(() =>
+      ApprovalMark.parse({
+        ...mark,
+        match: { kind: 'folder', category: 'destructive', paths: [] },
+      }),
+    ).toThrow();
+    expect(() => ApprovalMark.parse({ ...mark, match: { kind: 'prefix', words: [] } })).toThrow();
   });
 });

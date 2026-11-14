@@ -372,6 +372,8 @@ export interface StandingApprovalResult {
 export interface SetWaykeeperApprovalsInput {
   projectId: Id;
   on: boolean;
+  /** Auto mode (P13-13); absent = false. Needs the Mac to turn on, like `on`. */
+  auto?: boolean;
   by: Actor;
   origin?: RequestOrigin;
 }

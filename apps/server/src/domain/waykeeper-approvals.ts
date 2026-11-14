@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import {
   isJudgedKind,
+  MAX_APPROVAL_MARKS,
   isPushOrUpload,
   MAX_RECORDED_APPROVALS,
   type Actor,
+  type ApprovalMark,
+  type ApprovalMarkMatch,
   type Id,
   type Question,
   type RecordedApproval,
@@ -31,6 +34,7 @@ export function setWaykeeperApprovals(
   projectId: Id,
   on: boolean,
   by: Actor,
+  auto = false,
 ): void {
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (on && RULES_END_IN.has(project.state)) {
@@ -39,9 +43,82 @@ export function setWaykeeperApprovals(
       `project ${projectId} is ${project.state}: it takes no Waykeeper approvals`,
     );
   }
-  const { waykeeperApprovals: _old, ...row } = project;
-  ctx.tables.projects.upsert(on ? { ...row, waykeeperApprovals: true } : row);
-  ctx.emit({ type: 'waykeeper_approvals.set', projectId, on, by });
+  const { waykeeperApprovals: _old, waykeeperAuto: _auto, ...row } = project;
+  const isAuto = on && auto;
+  ctx.tables.projects.upsert(
+    on ? { ...row, waykeeperApprovals: true, ...(isAuto ? { waykeeperAuto: true } : {}) } : row,
+  );
+  ctx.emit({
+    type: 'waykeeper_approvals.set',
+    projectId,
+    on,
+    ...(isAuto ? { auto: true } : {}),
+    by,
+  });
+}
+
+/**
+ * Stores an approval mark for `projectId`; returns it. Refused for a project that ended and when
+ * `MAX_APPROVAL_MARKS` are stored. A mark with an equal match is returned as is, with no event.
+ */
+export function addApprovalMark(
+  ctx: CommandContext,
+  projectId: Id,
+  match: ApprovalMarkMatch,
+  made: { example: string; fromSeq: number; by: Actor; origin: RequestOrigin },
+): ApprovalMark {
+  const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
+  if (RULES_END_IN.has(project.state)) {
+    throw new DomainError(
+      'invalid',
+      `project ${projectId} is ${project.state}: it takes no approval marks`,
+    );
+  }
+  const key = JSON.stringify(match);
+  const same = project.approvalMarks?.find((m) => JSON.stringify(m.match) === key);
+  if (same) return same;
+  if ((project.approvalMarks?.length ?? 0) >= MAX_APPROVAL_MARKS) {
+    throw new DomainError(
+      'invalid',
+      `project ${projectId} already has ${MAX_APPROVAL_MARKS} approval marks`,
+    );
+  }
+  const mark: ApprovalMark = {
+    id: `am-${randomUUID()}`,
+    projectId,
+    match,
+    example: made.example,
+    createdBy: made.by,
+    createdAt: ctx.now,
+    origin: made.origin,
+    fromSeq: made.fromSeq,
+  };
+  ctx.tables.projects.upsert({
+    ...project,
+    approvalMarks: [...(project.approvalMarks ?? []), mark],
+  });
+  ctx.emit({ type: 'approval_mark.added', mark });
+  return mark;
+}
+
+/** Removes one approval mark; `not_found` when the project has no such mark. */
+export function removeApprovalMark(
+  ctx: CommandContext,
+  projectId: Id,
+  markId: Id,
+  by: Actor,
+  reason: string,
+): ApprovalMark {
+  const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
+  const mark = project.approvalMarks?.find((m) => m.id === markId);
+  if (!mark) {
+    throw new DomainError('not_found', `project ${projectId} has no approval mark ${markId}`);
+  }
+  const rest = project.approvalMarks!.filter((m) => m.id !== markId);
+  const { approvalMarks: _old, ...row } = project;
+  ctx.tables.projects.upsert(rest.length > 0 ? { ...row, approvalMarks: rest } : row);
+  ctx.emit({ type: 'approval_mark.removed', projectId, markId, by, reason });
+  return mark;
 }
 
 /**
@@ -128,7 +205,7 @@ export function removeStandingApproval(
 
 /**
  * Ends the standing approvals of a project that ended, as the system, and forgets its recorded
- * approvals (they carry no event of their own: they follow the removals).
+ * approvals and Auto (they carry no event of their own: they follow the removals).
  */
 export function endStandingApprovals(
   ctx: CommandContext,
@@ -143,9 +220,12 @@ export function endStandingApprovals(
         ? 'the project was cancelled'
         : 'the project was archived';
   for (const a of approvals) removeStandingApproval(ctx, projectId, a.id, SYSTEM, why);
+  for (const m of ctx.tables.projects.get(projectId)?.approvalMarks ?? []) {
+    removeApprovalMark(ctx, projectId, m.id, SYSTEM, why);
+  }
   const project = ctx.tables.projects.get(projectId);
-  if (project?.recordedApprovals) {
-    const { recordedApprovals: _old, ...row } = project;
+  if (project?.recordedApprovals || project?.waykeeperAuto) {
+    const { recordedApprovals: _old, waykeeperAuto: _auto, ...row } = project;
     ctx.tables.projects.upsert(row);
   }
 }

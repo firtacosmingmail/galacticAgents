@@ -191,6 +191,26 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     by: user,
     reason: 'removed by the user',
   },
+  'approval_mark.added': {
+    type: 'approval_mark.added',
+    mark: {
+      id: 'am-1',
+      projectId: 'p-1',
+      match: { kind: 'prefix', words: ['pnpm', 'test'] },
+      example: 'pnpm test',
+      createdBy: user,
+      createdAt: '2026-11-14T10:00:00.000Z',
+      origin: 'local',
+      fromSeq: 12,
+    },
+  },
+  'approval_mark.removed': {
+    type: 'approval_mark.removed',
+    projectId: 'p-1',
+    markId: 'am-1',
+    by: user,
+    reason: 'removed by the user',
+  },
   'approval.recorded': {
     type: 'approval.recorded',
     projectId: 'p-1',

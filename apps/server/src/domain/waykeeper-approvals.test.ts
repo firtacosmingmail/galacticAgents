@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   applyEvent,
   applySnapshot,
+  type ApprovalMarkMatch,
   type EventEnvelope,
   type RecordedApproval,
   type Snapshot,
@@ -12,9 +13,11 @@ import { DomainError } from './errors.js';
 import { createProject, closeProject } from './projects.js';
 import { setProjectState } from './states.js';
 import {
+  addApprovalMark,
   addStandingApproval,
   endStandingApprovals,
   recordApproval,
+  removeApprovalMark,
   removeStandingApproval,
   setWaykeeperApprovals,
 } from './waykeeper-approvals.js';
@@ -207,5 +210,88 @@ describe('folding the log matches the rows when a project ends with records', ()
     for (const e of recorded) world = applyEvent(world, e);
     expect(world.projects[w.project.id]).toEqual(w.get());
     expect(w.get().recordedApprovals).toHaveLength(1);
+  });
+});
+
+describe('Auto and approval marks (P13-13)', () => {
+  const folder: ApprovalMarkMatch = {
+    kind: 'folder',
+    category: 'destructive',
+    paths: ['/w/app/node_modules'],
+  };
+  const made = { example: 'rm -rf node_modules', fromSeq: 7, by: USER, origin: 'local' } as const;
+
+  it('stores Auto on the row and reads it back (waykeeper_approvals = 2)', () => {
+    const { run, project, get } = setup();
+    const { events } = run((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER, true));
+    expect(events).toEqual([
+      { type: 'waykeeper_approvals.set', projectId: project.id, on: true, auto: true, by: USER },
+    ]);
+    expect(get()).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
+    run((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER));
+    expect(get().waykeeperApprovals).toBe(true);
+    expect('waykeeperAuto' in get()).toBe(false);
+    const off = run((ctx) => setWaykeeperApprovals(ctx, project.id, false, USER, true));
+    expect(off.events[0]).not.toHaveProperty('auto');
+    expect('waykeeperAuto' in get()).toBe(false);
+  });
+
+  it('adds a mark once: an equal match returns the stored mark without an event', () => {
+    const { run, project, get } = setup();
+    const first = run((ctx) => addApprovalMark(ctx, project.id, folder, made));
+    expect(first.events).toEqual([{ type: 'approval_mark.added', mark: first.value }]);
+    expect(first.value).toMatchObject({ projectId: project.id, match: folder, fromSeq: 7 });
+    const again = run((ctx) => addApprovalMark(ctx, project.id, { ...folder }, made));
+    expect(again.events).toEqual([]);
+    expect(again.value).toEqual(first.value);
+    expect(get().approvalMarks).toEqual([first.value]);
+  });
+
+  it('refuses a mark on a project that ended', () => {
+    const { run, project } = setup();
+    run((ctx) => setProjectState(ctx, project.id, 'completed'));
+    expect(() => run((ctx) => addApprovalMark(ctx, project.id, folder, made))).toThrow(DomainError);
+  });
+
+  it('removes a mark, not_found when absent', () => {
+    const { run, project, get } = setup();
+    const m = run((ctx) => addApprovalMark(ctx, project.id, folder, made)).value;
+    const { events } = run((ctx) => removeApprovalMark(ctx, project.id, m.id, USER, 'no'));
+    expect(events).toEqual([
+      {
+        type: 'approval_mark.removed',
+        projectId: project.id,
+        markId: m.id,
+        by: USER,
+        reason: 'no',
+      },
+    ]);
+    expect('approvalMarks' in get()).toBe(false);
+    expect(() => run((ctx) => removeApprovalMark(ctx, project.id, m.id, USER, 'x'))).toThrow(
+      /no approval mark/,
+    );
+  });
+
+  it('closing the project removes every mark and forgets Auto', () => {
+    const { run, project, get } = setup();
+    run((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER, true));
+    const a = run((ctx) => addApprovalMark(ctx, project.id, folder, made)).value;
+    const b = run((ctx) =>
+      addApprovalMark(ctx, project.id, { kind: 'site', host: 'x.io' }, made),
+    ).value;
+    run((ctx) => setProjectState(ctx, project.id, 'in_progress'));
+    const { events } = run((ctx) => closeProject(ctx, project.id, USER));
+    const removed = events.filter((e) => e.type === 'approval_mark.removed');
+    expect(removed).toEqual(
+      [a, b].map((x) => ({
+        type: 'approval_mark.removed',
+        projectId: project.id,
+        markId: x.id,
+        by: SYSTEM,
+        reason: 'the project was closed',
+      })),
+    );
+    expect('approvalMarks' in get()).toBe(false);
+    expect('waykeeperAuto' in get()).toBe(false);
   });
 });

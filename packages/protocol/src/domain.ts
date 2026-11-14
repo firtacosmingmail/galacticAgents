@@ -10,7 +10,12 @@ import {
   SpendContext,
 } from './long-term-questions.js';
 import { LaunchContext, OffScriptContext } from './launch-flags.js';
-import { RecordedApproval, StandingApproval, WaykeeperForward } from './waykeeper-approvals.js';
+import {
+  ApprovalMark,
+  RecordedApproval,
+  StandingApproval,
+  WaykeeperForward,
+} from './waykeeper-approvals.js';
 import { Provider, UsageLimitContext } from './providers.js';
 import {
   AgentRole,
@@ -210,6 +215,13 @@ export const Project = z.object({
    * off. Changed only by `waykeeper_approvals.set`, never by a project update.
    */
   waykeeperApprovals: z.literal(true).optional(),
+  /**
+   * Auto mode (P13-13): with `waykeeperApprovals` on, the Waykeeper also approves what fits the
+   * task's marks and judge. Changed only by `waykeeper_approvals.set`; absent: off.
+   */
+  waykeeperAuto: z.literal(true).optional(),
+  /** The project's approval marks, oldest first; only `approval_mark.added` / `.removed`. */
+  approvalMarks: z.array(ApprovalMark).optional(),
   /**
    * The project's standing approvals (P13), oldest first; absent: none. Changed only by
    * `standing_approval.added` / `standing_approval.removed`; they end with the project.

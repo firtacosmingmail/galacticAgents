@@ -404,6 +404,47 @@ describe('setWaykeeperApprovals', () => {
     expect(agent.code).toBe('invalid');
   });
 
+  it('turns Auto on only from the Mac, and turns it off from anywhere (P13-13)', async () => {
+    const s = setup();
+    const refused = await s.refusal(
+      s.commands.setWaykeeperApprovals({
+        projectId: s.project.id,
+        on: true,
+        auto: true,
+        by: USER,
+        origin: 'remote',
+      }),
+    );
+    expect(refused.code).toBe('remote_control');
+    const on = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      auto: true,
+      by: USER,
+      origin: 'local',
+    });
+    expect(on.value).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
+    const down = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      auto: false,
+      by: USER,
+      origin: 'remote',
+    });
+    expect(down.value.waykeeperApprovals).toBe(true);
+    expect(down.value.waykeeperAuto).toBeUndefined();
+    const agent = await s.refusal(
+      s.commands.setWaykeeperApprovals({
+        projectId: s.project.id,
+        on: true,
+        auto: true,
+        by: { type: 'agent', id: s.steward.id },
+        origin: 'local',
+      }),
+    );
+    expect(agent.code).toBe('invalid');
+  });
+
   it('turns on from a remote client when autoApproveRemote is set', async () => {
     const s = setup({ autoApproveRemote: true });
     const on = await s.commands.setWaykeeperApprovals({

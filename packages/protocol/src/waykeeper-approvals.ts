@@ -34,6 +34,116 @@ export const CommandPart = z.object({
 });
 export type CommandPart = z.infer<typeof CommandPart>;
 
+/** Days an approval mark counts (design 2026-11-14, §4.1). */
+export const APPROVAL_MARK_DAYS = 10;
+/** Approval marks kept per project. */
+export const MAX_APPROVAL_MARKS = 200;
+
+/**
+ * What an approval mark matches (Auto mode, design 2026-11-14 §4.1): a folder (a category of
+ * action inside these paths), a site (a network host), a command prefix, or a whole tool.
+ */
+export const ApprovalMarkMatch = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('folder'),
+    category: PermissionAction,
+    paths: z.array(z.string().min(1)).min(1),
+  }),
+  z.object({ kind: z.literal('site'), host: z.string().min(1) }),
+  z.object({ kind: z.literal('prefix'), words: z.array(z.string().min(1)).min(1).max(20) }),
+  z.object({ kind: z.literal('tool'), toolName: z.string().min(1) }),
+]);
+export type ApprovalMarkMatch = z.infer<typeof ApprovalMarkMatch>;
+
+/** An approval mark: one request the user approved, kept as a pattern for `APPROVAL_MARK_DAYS`. */
+export const ApprovalMark = z.object({
+  id: Id,
+  projectId: Id,
+  match: ApprovalMarkMatch,
+  /** The request it was made from, redacted. */
+  example: z.string().max(300),
+  createdBy: Actor,
+  createdAt: Timestamp,
+  origin: RequestOrigin,
+  /** The `permission.decided` / question event it was made from. */
+  fromSeq: z.number().int().positive(),
+});
+export type ApprovalMark = z.infer<typeof ApprovalMark>;
+
+/** The categories of the approvals log, most serious first. */
+export type ApprovalLogCategory =
+  'push' | 'delete' | 'outside' | 'network' | 'unreadable' | 'edit' | 'run' | 'read';
+
+export const APPROVAL_LOG_ORDER: readonly ApprovalLogCategory[] = [
+  'push',
+  'delete',
+  'outside',
+  'network',
+  'unreadable',
+  'edit',
+  'run',
+  'read',
+];
+
+const LOG_OF_ACTION: Partial<Record<PermissionAction, ApprovalLogCategory>> = {
+  push: 'push',
+  destructive: 'delete',
+  outside_workspace: 'outside',
+  network: 'network',
+  edit_workspace: 'edit',
+  run_workspace: 'run',
+  read_workspace: 'read',
+};
+
+/**
+ * The approvals-log category of a decision: the first of `APPROVAL_LOG_ORDER` that applies over all
+ * its parts' categories (a part running unreadable code is `unreadable`); without parts, from the
+ * action alone; nothing known is `run`.
+ */
+export function approvalLogCategory(e: {
+  action?: PermissionAction | undefined;
+  parts?: CommandPart[] | undefined;
+}): ApprovalLogCategory {
+  const found = new Set<ApprovalLogCategory>();
+  if (e.parts?.length) {
+    for (const part of e.parts) {
+      if (part.opaque) found.add('unreadable');
+      for (const c of part.categories) {
+        const log = LOG_OF_ACTION[c];
+        if (log) found.add(log);
+      }
+    }
+  } else if (e.action) {
+    const log = LOG_OF_ACTION[e.action];
+    if (log) found.add(log);
+  }
+  return APPROVAL_LOG_ORDER.find((c) => found.has(c)) ?? 'run';
+}
+
+const CATEGORY_WORDS: Partial<Record<PermissionAction, string>> = {
+  destructive: 'deletes',
+  edit_workspace: 'edits',
+  run_workspace: 'runs',
+  read_workspace: 'reads',
+  outside_workspace: 'touches',
+  network: 'network calls',
+  push: 'pushes',
+};
+
+/** A mark in words, for the marks list and the decision lines. */
+export function markLabel(match: ApprovalMarkMatch): string {
+  switch (match.kind) {
+    case 'folder':
+      return `${CATEGORY_WORDS[match.category] ?? match.category} in ${match.paths.join(', ')}`;
+    case 'site':
+      return `calls to ${match.host}`;
+    case 'prefix':
+      return `${match.words.join(' ')} …`;
+    case 'tool':
+      return `the tool ${match.toolName}`;
+  }
+}
+
 /** A standing approval: a kind of request the user approved for the rest of the project. */
 export const StandingApproval = z.object({
   id: Id,

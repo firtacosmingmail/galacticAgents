@@ -1525,7 +1525,9 @@ export class Commands implements DomainCommands {
         new DomainError('invalid', 'only the user switches Waykeeper approvals'),
       );
     }
-    if (input.on && !this.mayWriteRules(input.origin)) {
+    // Turning it on, or Auto on, needs the Mac; lowering Auto to plain approvals does not.
+    const switchOff = !this.log.tables.projects.get(input.projectId)?.waykeeperApprovals;
+    if (input.on && (input.auto || switchOff) && !this.mayWriteRules(input.origin)) {
       return Promise.reject(
         new DomainError(
           'remote_control',
@@ -1534,7 +1536,7 @@ export class Commands implements DomainCommands {
       );
     }
     return this.run((ctx) => {
-      setWaykeeperApprovals(ctx, input.projectId, input.on, input.by);
+      setWaykeeperApprovals(ctx, input.projectId, input.on, input.by, input.auto === true);
       return must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
     });
   }
