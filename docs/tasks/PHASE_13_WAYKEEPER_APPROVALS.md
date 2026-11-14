@@ -1,6 +1,6 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-13 · **Task status:** P13-09–P13-12 done (2026-11-14); auto mode P13-13–P13-18 todo (branch `agent-waykeeper-approvals-fixes`)
+**Current task:** P13-13 · **Task status:** P13-09–P13-12 done (2026-11-14); auto mode P13-13 in progress, P13-14–P13-18 todo (branch `agent-waykeeper-approvals-fixes`)
 **Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 12/18
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
@@ -98,7 +98,7 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Cosmin's decision (2026-11-14):** keep asking for `rm -rf $X`; no agent creates symlinks; topic closed. SPEC decision 158. Done: every variable the line does not set to a literal, and every parameter, indirect name or command output, makes a delete unplaceable (forwarded); the gate refuses any command that makes a symbolic link, whatever the table or a rule says.
 
 ### P13-13 — Auto flag, approval marks and approval parts: protocol and storage (added 2026-11-14)
-- **Status:** todo · **Depends on:** P13-12 · **Parallel with:** —
+- **Status:** in progress · **Depends on:** P13-12 · **Parallel with:** —
 - Plan Task 1. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
 
 ### P13-14 — Approval marks: deriving and matching (added 2026-11-14)
