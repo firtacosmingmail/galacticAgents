@@ -200,6 +200,8 @@ export function isJudgedKind(kind: string): boolean {
 
 /** What the request judge is given (design §5.3). */
 export interface RequestJudgeInput {
+  /** `task`: a Steward's request against its task; `auto`: the Auto policy (design 4.2). */
+  mode: 'task' | 'auto';
   task: { title: string; description: string };
   workspace: string;
   cwd: string;
@@ -230,6 +232,8 @@ export interface RequestVerdict {
   similarTo: number[];
   /** The user's words that grant it, when the verdict leans on them. */
   quote?: string;
+  /** Auto mode: whether any part sends to people or outside services, or spends money. */
+  sendsOrSpends?: boolean;
 }
 
 /** Decides whether a Steward's permission request fits its task. Implementations fail closed. */

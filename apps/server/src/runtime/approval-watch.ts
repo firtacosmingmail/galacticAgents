@@ -245,6 +245,7 @@ export class ApprovalWatch {
     const known = facts;
 
     const input: RequestJudgeInput = {
+      mode: 'task',
       task: known.task,
       workspace: call.ctx.workspace,
       cwd: call.ctx.cwd ?? call.ctx.workspace,
