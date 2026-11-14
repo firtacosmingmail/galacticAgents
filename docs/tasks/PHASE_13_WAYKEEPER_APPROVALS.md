@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-17 · **Task status:** P13-09–P13-16 done (2026-11-14); P13-17 in progress; P13-18 todo (branch `agent-waykeeper-approvals-fixes`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 16/18
+**Current task:** P13-18 · **Task status:** P13-09–P13-17 done (2026-11-14); P13-18 todo (branch `agent-waykeeper-approvals-fixes`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 17/18
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -114,7 +114,7 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Plan Task 4. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
 
 ### P13-17 — Web: three-way switch, approvals log by category, marks (added 2026-11-14)
-- **Status:** in progress · **Depends on:** P13-16 · **Parallel with:** —
+- **Status:** done (2026-11-14) · **Depends on:** P13-16 · **Parallel with:** —
 - Plan Task 5. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
 
 ### P13-18 — Docs and gates (added 2026-11-14)
