@@ -1,8 +1,10 @@
 import {
   isJudgedKind,
+  markLabel,
   needsUserQuote,
   quoteFound,
   SIMILAR_APPROVALS_THRESHOLD,
+  type ApprovalMark,
   type CommandPart,
   type Id,
   type PermissionAction,
@@ -14,6 +16,7 @@ import {
   type ToolCall,
   type WaykeeperForward,
 } from '@galactic/protocol';
+import { markCovers } from '../domain/approval-marks.js';
 import { partsOfCall } from '../domain/command-parts.js';
 import { classifyToolCall, mentionsPush, type PolicyContext } from '../domain/permissions.js';
 import { HeldJudgeCalls } from './held-judge.js';
@@ -41,8 +44,10 @@ export interface WaykeeperApproval {
   reason: string;
   /** The project's standing approval the judge relied on. */
   standingApprovalId?: Id;
-  /** The user's words that grant a push or an upload, found in them by the server. */
+  /** The user's words that grant a push, an upload, a send or a spend, found in them by the server. */
   quote?: string;
+  /** The request's parts, their texts redacted: logged on the approval (P13-16). */
+  parts: CommandPart[];
 }
 
 /**
@@ -70,6 +75,10 @@ export interface ApprovalWatchCall {
   active: () => boolean;
   /** Whether the project's switch is still on: read again when the verdict arrives. */
   switchOn: () => boolean;
+  /** Whether the project is in Auto mode (P13-16): read when the request arrives and again after. */
+  auto: () => boolean;
+  /** The project's "Always asks me" marks (P13-16): read before the judge and again after; may throw. */
+  marks: () => readonly ApprovalMark[];
   approve: (d: WaykeeperApproval) => void;
   forward: (context: WaykeeperForward) => void;
 }
@@ -106,7 +115,14 @@ function hardRule(part: CommandPart): string | undefined {
  * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
  * if every push or upload part is granted by a quote the server finds in the user's own words,
  * any standing approval it names exists on the project (and never covers a push, an upload or an
- * opaque part), and the switch is still on. The judge's reason is cut to `MAX_REASON_CHARS`.
+ * opaque part), and the switch is still on.
+ *
+ * Auto mode and marks (P13-16; design 2026-11-14-waykeeper-auto-mode §4.2, §4.5): after the hard
+ * rules and before the judge, a request one of the project's "Always asks me" marks covers is
+ * forwarded, in either mode. In Auto the judge is asked in `auto` mode and must say whether the
+ * request sends or spends; an approval is kept only if Auto is still on, no mark covers it by
+ * now, and a send or a spend is granted by a quote in the user's own words, like a push. The
+ * judge's reason is cut to `MAX_REASON_CHARS`.
  * Every failure — no judge, an error, a timeout, a malformed answer, a throw anywhere before a
  * callback — forwards. Never throws into the runtime.
  */
@@ -186,7 +202,8 @@ export class ApprovalWatch {
     const shown = parts.map((p) => ({ ...p, text: redactSecrets(p.text) }));
     const unjudged = `not judged: ${call.toolCall.toolName}`.slice(0, MAX_KIND_CHARS);
     // A push or an upload is never a standing approval (P13-10): its card never offers one.
-    let pushOrUpload = false;
+    /** A push, an upload, a send or a spend: its card never offers a standing approval. */
+    let allowOnce = false;
     const forward = (
       reason: string,
       kind: string,
@@ -201,7 +218,7 @@ export class ApprovalWatch {
         parts: shown,
         ...(failingPart !== undefined ? { failingPart } : {}),
         // A placeholder kind never offers a standing approval: it would cover nothing nameable.
-        ...(similar && isJudgedKind(named) && !pushOrUpload ? { similar } : {}),
+        ...(similar && isJudgedKind(named) && !allowOnce ? { similar } : {}),
       });
     };
 
@@ -231,8 +248,17 @@ export class ApprovalWatch {
         categories: [...new Set([...call.categories, ...whole.actions])],
       });
     const quotePart = quoteNeeded.indexOf(true);
-    pushOrUpload = callNeedsQuote;
+    allowOnce = callNeedsQuote;
 
+    let marked: ReturnType<typeof markForward>;
+    try {
+      marked = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", unjudged);
+    }
+    if (marked) return forward(marked.reason, unjudged, marked.part);
+
+    const mode: RequestJudgeInput['mode'] = call.auto() ? 'auto' : 'task';
     const judge = this.deps.judge;
     if (!judge) return forward('No request judge is configured.', unjudged);
     let facts: ApprovalFacts | undefined;
@@ -245,7 +271,7 @@ export class ApprovalWatch {
     const known = facts;
 
     const input: RequestJudgeInput = {
-      mode: 'task',
+      mode,
       task: known.task,
       workspace: call.ctx.workspace,
       cwd: call.ctx.cwd ?? call.ctx.workspace,
@@ -263,9 +289,11 @@ export class ApprovalWatch {
     const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
     if (outcome === 'cancelled' || !call.active()) return;
     if (!outcome.ok) return forward(outcome.reason, unjudged);
-    const verdict = validVerdict(outcome.value, parts.length);
+    const verdict = validVerdict(outcome.value, parts.length, mode);
     if (!verdict) return forward('The check gave a malformed answer: no verdict.', unjudged);
 
+    const sendsOrSpends = mode === 'auto' && verdict.sendsOrSpends === true;
+    if (sendsOrSpends) allowOnce = true;
     const similar = similarOf(verdict.similarTo, known.recordedApprovals);
     const kind = verdict.kind;
     if (verdict.verdict === 'forward') {
@@ -281,11 +309,30 @@ export class ApprovalWatch {
         similar,
       );
     }
+    if (mode === 'auto' && !call.auto()) {
+      return forward(
+        'Auto mode was turned off while the request was judged.',
+        kind,
+        undefined,
+        similar,
+      );
+    }
+    // A mark added while the request was judged still makes it ask.
+    let markedNow: ReturnType<typeof markForward>;
+    try {
+      markedNow = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", kind, undefined, similar);
+    }
+    if (markedNow) return forward(markedNow.reason, kind, markedNow.part, similar);
     const failing = quotePart >= 0 ? quotePart : undefined;
-    if (callNeedsQuote) {
+    const needsQuote = callNeedsQuote || sendsOrSpends;
+    if (needsQuote) {
+      const what = callNeedsQuote ? 'a push or an upload' : 'a send or a spend';
+      const What = callNeedsQuote ? 'A push or an upload' : 'A send or a spend';
       if (verdict.quote === undefined || !quoteFound(verdict.quote, known.userWords)) {
         return forward(
-          `A push or an upload needs the user's own words asking for it. The judge said: ${verdict.reason}`,
+          `${What} needs the user's own words asking for it. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -293,7 +340,7 @@ export class ApprovalWatch {
       }
       if (verdict.standingApprovalId !== undefined) {
         return forward(
-          `A standing approval never covers a push or an upload. The judge said: ${verdict.reason}`,
+          `A standing approval never covers ${what}. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -327,9 +374,31 @@ export class ApprovalWatch {
       ...(verdict.standingApprovalId !== undefined
         ? { standingApprovalId: verdict.standingApprovalId }
         : {}),
-      ...(callNeedsQuote && verdict.quote !== undefined ? { quote: verdict.quote } : {}),
+      ...(needsQuote && verdict.quote !== undefined ? { quote: verdict.quote } : {}),
+      parts: shown,
     });
   }
+}
+
+/**
+ * The first of the project's marks the call implies (P13-16), as a forward: "You asked to be
+ * asked: <mark> (from “<example>”)." and the first part it implies — the shortest run of parts
+ * from the start it covers, so a `cd` before that part still counts. `undefined` when none does;
+ * throws when the marks cannot be read.
+ */
+function markForward(
+  call: ApprovalWatchCall,
+  parts: CommandPart[],
+): { reason: string; part?: number } | undefined {
+  const covers = (match: ApprovalMark['match'], some: CommandPart[]) =>
+    markCovers(match, { toolCall: call.toolCall, parts: some, ctx: call.ctx });
+  const mark = call.marks().find((m) => covers(m.match, parts));
+  if (!mark) return undefined;
+  const part = parts.findIndex((_, n) => covers(mark.match, parts.slice(0, n + 1)));
+  return {
+    reason: `You asked to be asked: ${markLabel(mark.match)} (from “${mark.example}”).`,
+    ...(part >= 0 ? { part } : {}),
+  };
 }
 
 /** The project's standing approvals as of now; none when they cannot be read. */
@@ -362,7 +431,11 @@ const isIndex = (i: unknown, length: number): i is number =>
   typeof i === 'number' && Number.isInteger(i) && i >= 0 && i < length;
 
 /** The judge's answer when it is well formed, else `undefined` (it then forwards). */
-function validVerdict(answer: unknown, partCount: number): RequestVerdict | undefined {
+function validVerdict(
+  answer: unknown,
+  partCount: number,
+  mode: RequestJudgeInput['mode'],
+): RequestVerdict | undefined {
   if (typeof answer !== 'object' || answer === null) return undefined;
   const v = answer as Partial<Record<keyof RequestVerdict, unknown>>;
   if (v.verdict !== 'approve' && v.verdict !== 'forward') return undefined;
@@ -372,6 +445,8 @@ function validVerdict(answer: unknown, partCount: number): RequestVerdict | unde
     return undefined;
   }
   if (v.quote !== undefined && typeof v.quote !== 'string') return undefined;
+  // Auto's one question is whether it sends or spends: an answer without it is no answer.
+  if (mode === 'auto' && typeof v.sendsOrSpends !== 'boolean') return undefined;
   const reason =
     v.reason.length <= MAX_REASON_CHARS ? v.reason : `${v.reason.slice(0, MAX_REASON_CHARS - 1)}…`;
   return {
@@ -385,5 +460,6 @@ function validVerdict(answer: unknown, partCount: number): RequestVerdict | unde
       ? { standingApprovalId: v.standingApprovalId }
       : {}),
     ...(typeof v.quote === 'string' ? { quote: v.quote } : {}),
+    ...(typeof v.sendsOrSpends === 'boolean' ? { sendsOrSpends: v.sendsOrSpends } : {}),
   };
 }

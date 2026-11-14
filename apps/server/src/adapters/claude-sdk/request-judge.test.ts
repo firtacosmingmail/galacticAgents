@@ -319,6 +319,12 @@ describe('SDK request judge: Auto mode', () => {
     ).toEqual(UNREADABLE);
   });
 
+  it('in task mode, a volunteered sendsOrSpends: true needs no quote: the approval stands', async () => {
+    const plain = { ...input, request: { ...input.request, parts: [input.request.parts[0]!] } };
+    const v = await setup(json({ ...answer, sendsOrSpends: true })).judge.judge(plain, signal());
+    expect(v).toMatchObject({ verdict: 'approve', sendsOrSpends: true });
+  });
+
   it('forwards an approved send or spend without a quote of the user words', async () => {
     const sends = { ...answer, sendsOrSpends: true };
     expect((await setup(json(sends)).judge.judge(auto, signal())).verdict).toBe('forward');

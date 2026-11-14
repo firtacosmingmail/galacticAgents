@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
@@ -18,6 +19,11 @@ import {
   type OpenQuestionSetInput,
   type AllowSimilarInput,
   type RemoveStandingApprovalInput,
+  type AddApprovalMarkInput,
+  type ApprovalMark,
+  type RemoveApprovalMarkInput,
+  APPROVAL_MARK_DAYS,
+  isWaykeeperApproval,
   type SetWaykeeperApprovalsInput,
   type StandingApproval,
   type StandingApprovalResult,
@@ -149,10 +155,14 @@ import {
   RULES_END_IN,
 } from './project-rules.js';
 import {
+  addApprovalMark,
   addStandingApproval,
+  markExample,
+  removeApprovalMark,
   removeStandingApproval,
   setWaykeeperApprovals,
 } from './waykeeper-approvals.js';
+import { markFromApproval } from './approval-marks.js';
 import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
 import {
@@ -1556,6 +1566,71 @@ export class Commands implements DomainCommands {
         input.by,
         'removed by the user',
       ),
+    );
+  }
+
+  /**
+   * The user's "Ask me next time" (P13-16, design 2026-11-14 §4.5): a mark made from the
+   * Waykeeper approval logged at `seq`. Refused (`invalid`) unless that event is a Waykeeper
+   * approval of a Steward of `projectId` younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark
+   * only makes the Waykeeper ask.
+   */
+  addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user adds approval marks'));
+    }
+    const { tables } = this.log;
+    const project = tables.projects.get(input.projectId);
+    if (!project) return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    const env = this.log.eventsSince(input.seq - 1, 1)[0];
+    const e = env?.seq === input.seq ? env.event : undefined;
+    if (e?.type !== 'permission.decided' || !isWaykeeperApproval(e)) {
+      return Promise.reject(
+        new DomainError('invalid', `event ${input.seq} is not an approval by the Waykeeper`),
+      );
+    }
+    const agent = tables.agents.get(e.agentId);
+    const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
+    if ((task?.projectId ?? agent?.projectId) !== project.id) {
+      return Promise.reject(
+        new DomainError('invalid', `event ${input.seq} is not an approval of this project`),
+      );
+    }
+    const age = Date.parse(this.log.clock()) - Date.parse(env!.at);
+    if (!(age <= APPROVAL_MARK_DAYS * 24 * 60 * 60 * 1000)) {
+      return Promise.reject(
+        new DomainError(
+          'invalid',
+          `the approval is older than ${APPROVAL_MARK_DAYS} days: it takes no mark`,
+        ),
+      );
+    }
+    const approval = {
+      toolCall: e.toolCall,
+      parts: e.parts,
+      ...(e.action !== undefined ? { action: e.action } : {}),
+    };
+    const match = markFromApproval(approval, {
+      workspace: project.workspace,
+      cwd: e.cwd ?? project.workspace,
+      home: homedir(),
+    });
+    const made = {
+      example: markExample(e.toolCall),
+      fromSeq: input.seq,
+      by: input.by,
+      origin: input.origin ?? ('remote' as const),
+    };
+    return this.run((ctx) => addApprovalMark(ctx, project.id, match, made));
+  }
+
+  /** The user removes a project's approval mark (P13-16), from anywhere. */
+  removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user removes approval marks'));
+    }
+    return this.run((ctx) =>
+      removeApprovalMark(ctx, input.projectId, input.markId, input.by, 'removed by the user'),
     );
   }
 

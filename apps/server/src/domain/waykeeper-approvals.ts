@@ -12,11 +12,13 @@ import {
   type RecordedApproval,
   type RequestOrigin,
   type StandingApproval,
+  type ToolCall,
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { RULES_END_IN } from './project-rules.js';
-import { precedentOf } from '../runtime/scope-watch.js';
+import { redactSecrets } from '../runtime/redact.js';
+import { MAX_PRECEDENT_CHARS, precedentOf } from '../runtime/scope-watch.js';
 
 /**
  * A project's Waykeeper approvals as rows (P13-01, SPEC decision 154), kept on its row like the
@@ -99,6 +101,19 @@ export function addApprovalMark(
   });
   ctx.emit({ type: 'approval_mark.added', mark });
   return mark;
+}
+
+/**
+ * A mark's example (P13-16): the request in one redacted line, at most `MAX_PRECEDENT_CHARS` (the
+ * mark's `example` cap) — a Bash call as its command, any other call as `precedentOf` writes it.
+ */
+export function markExample(call: ToolCall): string {
+  const command = (call.input as { command?: unknown } | undefined)?.command;
+  if (call.toolName !== 'Bash' || typeof command !== 'string' || !command.trim()) {
+    return precedentOf(call);
+  }
+  const line = redactSecrets(command).replace(/\s+/g, ' ').trim();
+  return line.length <= MAX_PRECEDENT_CHARS ? line : `${line.slice(0, MAX_PRECEDENT_CHARS - 1)}…`;
 }
 
 /** Removes one approval mark; `not_found` when the project has no such mark. */

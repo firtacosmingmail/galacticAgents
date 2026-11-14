@@ -15,7 +15,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { createFakeRequestJudge } from '../adapters/fake/fake-request-judge.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase } from '../db/database.js';
-import { setWaykeeperApprovals } from '../domain/waykeeper-approvals.js';
+import { addApprovalMark, setWaykeeperApprovals } from '../domain/waykeeper-approvals.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 
 /**
@@ -67,6 +67,7 @@ function scriptedJudge(seen: RequestJudgeInput[]) {
       kind: push ? 'PR comment' : 'read-only gh query',
       similarTo: [],
       ...(push ? { quote: 'Comment on the PR when the review is done' } : {}),
+      ...(input.mode === 'auto' ? { sendsOrSpends: push } : {}),
     };
   });
 }
@@ -92,6 +93,10 @@ async function hierarchy(opts: {
   forge?: boolean;
   /** The transcript refuses the "Approved by" line. */
   brokenTranscript?: boolean;
+  /** Auto mode (P13-16). */
+  auto?: boolean;
+  /** An "Always asks me" mark on these first words (P13-16). */
+  markWords?: string[];
 }) {
   const adapter = new FakeAdapter({ speed: 0, scenarios: SCRIPTS });
   if (opts.forge) {
@@ -131,7 +136,18 @@ async function hierarchy(opts: {
       { origin: 'local' },
     )
   ).value;
-  c.log.runCommand((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER));
+  c.log.runCommand((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER, opts.auto === true));
+  if (opts.markWords) {
+    const words = opts.markWords;
+    c.log.runCommand((ctx) =>
+      addApprovalMark(
+        ctx,
+        project.id,
+        { kind: 'prefix', words },
+        { example: words.join(' '), fromSeq: 1, by: USER, origin: 'local' },
+      ),
+    );
+  }
   if (!opts.switchOn)
     c.log.runCommand((ctx) => setWaykeeperApprovals(ctx, project.id, false, USER));
   const waykeeper = (
@@ -236,6 +252,42 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     expect(seen.map((s) => s.request.parts.map((p) => p.text))).toEqual([[VIEW], [COMMENT]]);
     expect(seen[0]!.task.description).toBe('review PR 12');
     expect(seen[1]!.recentActions.join('\n')).toContain(VIEW);
+  });
+
+  it('logs the approval with its redacted parts and the Steward’s cwd (P13-16)', async () => {
+    const seen: RequestJudgeInput[] = [];
+    const h = await hierarchy({ switchOn: true, seen });
+    await until(() => h.ofType('question.opened').length === 1);
+    const [approved] = h.ofType('permission.decided');
+    expect(approved).toMatchObject({
+      waykeeperApproval: true,
+      parts: [{ text: VIEW, categories: ['network'] }],
+      cwd: seen[0]!.cwd,
+    });
+    expect(approved!.cwd).toEqual(expect.any(String));
+  });
+
+  it('in Auto, the judge is asked in auto mode; a mark forwards without it (P13-16)', async () => {
+    const seen: RequestJudgeInput[] = [];
+    const h = await hierarchy({
+      switchOn: true,
+      seen,
+      auto: true,
+      markWords: ['gh', 'pr', 'view'],
+    });
+    await until(() => h.ofType('question.opened').length === 1);
+    const [first] = h.log.tables.questions.all();
+    expect(first!.context.waykeeper?.reason).toBe(
+      'You asked to be asked: gh pr view … (from “gh pr view”).',
+    );
+    expect(seen).toHaveLength(0);
+    await h.commands.answerQuestion({ questionId: first!.id, answer: 'allow', by: USER });
+    await until(() => h.ofType('question.opened').length === 2);
+    // The PR comment reached the judge, in Auto mode; a push without the user's words, forwarded.
+    expect(seen.map((s) => [s.mode, s.request.parts.map((p) => p.text)])).toEqual([
+      ['auto', [COMMENT]],
+    ]);
+    expect(h.ofType('permission.decided').filter((e) => e.waykeeperApproval)).toHaveLength(0);
   });
 
   it('leaves "Approved by <Waykeeper>: <reason>" in the Steward’s transcript (P13-06)', async () => {

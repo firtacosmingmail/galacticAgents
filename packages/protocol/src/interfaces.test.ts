@@ -80,6 +80,8 @@ const commands: DomainCommands = {
   standingApproval: notImplemented,
   setWaykeeperApprovals: notImplemented,
   removeStandingApproval: notImplemented,
+  addApprovalMark: notImplemented,
+  removeApprovalMark: notImplemented,
   openQuestionSet: notImplemented,
   answerQuestionSet: notImplemented,
   draftQuestion: notImplemented,

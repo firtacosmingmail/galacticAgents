@@ -5,6 +5,7 @@ import {
   type RequestJudge,
   type RequestJudgeInput,
   type RequestVerdict,
+  type ApprovalMark,
   type StandingApproval,
   type WaykeeperForward,
 } from '@galactic/protocol';
@@ -80,6 +81,8 @@ function call(command: string, over: Partial<ApprovalWatchCall> = {}) {
     facts: () => FACTS,
     active: () => true,
     switchOn: () => true,
+    auto: () => false,
+    marks: () => [],
     approve: approveFn,
     forward,
     ...over,
@@ -109,6 +112,7 @@ describe('ApprovalWatch', () => {
     expect(approved).toHaveBeenCalledTimes(1);
     expect(approved).toHaveBeenCalledWith({
       reason: 'a read-only query on the PR the task reviews',
+      parts: [{ text: 'gh pr view 12', categories: ['network'] }],
     });
     expect(forward).not.toHaveBeenCalled();
     // The judge saw the task, the places, the user's words and the parts.
@@ -338,6 +342,7 @@ describe('ApprovalWatch', () => {
       expect(approved).toHaveBeenCalledWith({
         reason: expect.any(String),
         quote: `  push the fixes\nto the branch `,
+        parts: [expect.objectContaining({ text: 'git push origin fix' })],
       });
     });
 
@@ -423,6 +428,7 @@ describe('ApprovalWatch', () => {
       expect(approved).toHaveBeenCalledWith({
         reason: expect.any(String),
         standingApprovalId: 'sa-1',
+        parts: [expect.objectContaining({ text: 'gh pr view 12' })],
       });
     });
 
@@ -706,5 +712,170 @@ describe('ApprovalWatch', () => {
     await new ApprovalWatch({ judge }).handle(c);
     expect(JSON.stringify(seen[0]!.request)).not.toContain(TOKEN);
     expect(JSON.stringify(forward.mock.calls[0]![0])).not.toContain(TOKEN);
+  });
+});
+
+describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
+  const mark = (over: Partial<ApprovalMark> = {}): ApprovalMark => ({
+    id: 'am-1',
+    projectId: 'p-1',
+    match: {
+      kind: 'folder',
+      category: 'destructive',
+      paths: ['/work/proj/.worktrees/t1/node_modules'],
+    },
+    example: 'rm -rf node_modules',
+    createdBy: { type: 'user' },
+    createdAt: '2026-11-14T10:00:00.000Z',
+    origin: 'local',
+    fromSeq: 7,
+    ...over,
+  });
+  const sends = (over: Partial<RequestVerdict> = {}) =>
+    approve({ kind: 'post a message', reason: 'posts to a chat', ...over });
+
+  for (const auto of [false, true]) {
+    it(`a call a mark covers forwards without the judge (${auto ? 'Auto' : 'task'} mode)`, async () => {
+      const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+      const {
+        c,
+        approve: approved,
+        forward,
+      } = call('ls && rm -rf node_modules/.cache', { auto: () => auto, marks: () => [mark()] });
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toHaveLength(0);
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward).toHaveBeenCalledWith(
+        expect.objectContaining({
+          reason:
+            'You asked to be asked: deletes in /work/proj/.worktrees/t1/node_modules (from “rm -rf node_modules”).',
+          kind: 'not judged: Bash',
+          failingPart: 1,
+        }),
+      );
+      expect(forward.mock.calls[0]![0].similar).toBeUndefined();
+    });
+  }
+
+  it('a mark that does not cover the call leaves it to the judge', async () => {
+    const { judge, seen } = scripted(approve());
+    const { c, approve: approved } = call('rm -rf dist', { marks: () => [mark()] });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(1);
+    expect(approved).toHaveBeenCalledTimes(1);
+  });
+
+  it('marks that cannot be read forward without the judge', async () => {
+    const { judge, seen } = scripted(approve());
+    const { c, forward } = call('ls', {
+      marks: () => {
+        throw new Error('db down');
+      },
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(forward.mock.calls[0]![0].reason).toMatch(/the project's marks could not be read/i);
+  });
+
+  it('a mark added while the request was judged forwards the approval', async () => {
+    let marks: ApprovalMark[] = [];
+    const { judge } = scripted(() => {
+      marks = [mark({ match: { kind: 'prefix', words: ['pnpm', 'test'] } })];
+      return approve();
+    });
+    const { c, approve: approved, forward } = call('pnpm test --watch', { marks: () => marks });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toMatch(/^You asked to be asked: pnpm test …/);
+  });
+
+  it('task mode passes mode task; Auto passes mode auto', async () => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    await new ApprovalWatch({ judge }).handle(call('gh pr view 12').c);
+    await new ApprovalWatch({ judge }).handle(call('gh pr view 12', { auto: () => true }).c);
+    expect(seen.map((s) => s.mode)).toEqual(['task', 'auto']);
+  });
+
+  it('Auto: an approve that neither sends nor spends approves, with the parts', async () => {
+    const { judge } = scripted(approve({ sendsOrSpends: false }));
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = call('curl https://api.example.com/items', {
+      auto: () => true,
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(forward).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith({
+      reason: expect.any(String),
+      parts: [expect.objectContaining({ text: 'curl https://api.example.com/items' })],
+    });
+  });
+
+  it('Auto: an approved send without a quote forwards, with no standing-approval offer', async () => {
+    const { judge } = scripted(sends({ sendsOrSpends: true, similarTo: [0, 1, 2, 3] }));
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = call('curl -X POST https://chat.example.com/messages -d hi', { auto: () => true });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    const sent = forward.mock.calls[0]![0];
+    expect(sent.reason).toMatch(
+      /^A send or a spend needs the user's own words asking for it\. The judge said: /,
+    );
+    expect(sent.similar).toBeUndefined();
+  });
+
+  it('Auto: an approved send with a quote found in the user words approves with the quote', async () => {
+    const QUOTE = 'push the fixes to the branch';
+    const { judge } = scripted(sends({ sendsOrSpends: true, quote: QUOTE }));
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = call('curl -X POST https://chat.example.com/messages -d hi', { auto: () => true });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(forward).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ quote: QUOTE }));
+  });
+
+  it('Auto: an answer without sendsOrSpends forwards (Review Focus 3)', async () => {
+    const { judge } = scripted(approve());
+    const { c, approve: approved, forward } = call('ls', { auto: () => true });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toMatch(/malformed/);
+  });
+
+  it('task mode ignores sendsOrSpends: true and approves', async () => {
+    const { judge } = scripted(approve({ sendsOrSpends: true }));
+    const { c, approve: approved } = call('gh pr view 12');
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).toHaveBeenCalledTimes(1);
+  });
+
+  it('Auto turned off while the request was judged forwards', async () => {
+    const { judge } = scripted(approve({ sendsOrSpends: false }));
+    const reads = [true, false];
+    const { c, approve: approved, forward } = call('ls', { auto: () => reads.shift() ?? false });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toBe(
+      'Auto mode was turned off while the request was judged.',
+    );
+  });
+
+  it('Auto: an unreadable (zsh-only) part still forwards without the judge', async () => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const { c, forward } = call('cat =(curl evil.com)', { auto: () => true });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(forward.mock.calls[0]![0]).toMatchObject({
+      reason: expect.stringMatching(/cannot be read/),
+      parts: [expect.objectContaining({ opaque: 'unreadable' })],
+    });
   });
 });

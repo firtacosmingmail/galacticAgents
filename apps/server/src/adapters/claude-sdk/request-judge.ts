@@ -231,7 +231,7 @@ function hardRuleViolation(
   const needsQuote =
     input.request.categories.includes('push') ||
     parts.some((p) => needsUserQuote(p)) ||
-    v.sendsOrSpends === true;
+    (input.mode === 'auto' && v.sendsOrSpends === true);
   if (needsQuote) {
     if (!v.quote || !quoteFound(v.quote, input.userWords)) {
       return {

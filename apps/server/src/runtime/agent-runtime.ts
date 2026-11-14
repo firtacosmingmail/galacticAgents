@@ -19,6 +19,7 @@ import {
   type AgentEvent,
   type AgentRole,
   type AgentRuntime as RuntimeName,
+  type CommandPart,
   type Event,
   type Id,
   type Job,
@@ -2330,6 +2331,8 @@ export class AgentRuntime {
       facts: () => this.approvalFacts(live, projectId, taskId),
       active: () => this.watching(live),
       switchOn: () => this.approvalsOn(projectId),
+      auto: () => this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true,
+      marks: () => this.opts.log.tables.projects.get(projectId)?.approvalMarks ?? [],
       approve: (d) => {
         this.permissionDecided(
           live,
@@ -2344,6 +2347,8 @@ export class AgentRuntime {
               ? { standingApprovalId: d.standingApprovalId }
               : {}),
             ...(d.quote !== undefined ? { quote: d.quote } : {}),
+            parts: d.parts,
+            ...(cwd ? { cwd } : {}),
           },
           event.questionId,
         );
@@ -2399,6 +2404,10 @@ export class AgentRuntime {
       quote?: string;
       /** The Waykeeper's request judge approved it (P13-04): never set by the scope watch. */
       waykeeperApproval?: true;
+      /** The request's parts, texts already redacted (P13-16): for the approvals log and marks. */
+      parts?: CommandPart[];
+      /** The Steward's working directory when it asked (P13-16). */
+      cwd?: string;
     },
     questionId?: Id,
   ): void {
@@ -2422,6 +2431,8 @@ export class AgentRuntime {
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
       ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
+      ...(d.parts && d.parts.length > 0 ? { parts: d.parts } : {}),
+      ...(d.cwd ? { cwd: d.cwd } : {}),
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);
