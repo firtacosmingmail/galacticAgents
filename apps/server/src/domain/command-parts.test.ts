@@ -447,6 +447,34 @@ describe("commandParts: a Steward's scratch folder and its variables (P13-09)", 
     expect(outsideOf(`f() { SD=/etc; }; SD=${scratch}; f; rm -rf $SD`)).toEqual([true]);
   });
 
+  it('a name assigned more than once anywhere in the line is unknown everywhere (loops)', () => {
+    expect(outsideOf('X=a; while :; do rm -rf $X/y; X=/etc; done')).toEqual([true]);
+    expect(outsideOf('X=a; until false; do rm -rf $X/y; X=/etc; done')).toEqual([true]);
+    expect(outsideOf('X=a; for i in 1 2; do rm -rf $X/y; X=/etc; done')).toEqual([true]);
+    expect(outsideOf('X=a; select i in 1 2; do rm -rf $X/y; X=/etc; done')).toEqual([true]);
+    expect(outsideOf('X=a; while :; do rm -rf $X/y; read X; done')).toEqual([true]);
+    expect(outsideOf('X=a; while :; do rm -rf $X/y; : ${X:=/etc}; done')).toEqual([true]);
+    expect(outsideOf('X=a; X=b; rm -rf $X/y')).toEqual([true]);
+    // Assigned once, used in a loop: still placed.
+    expect(outsideOf('X=a; while :; do rm -rf $X/y; done')).toEqual([false]);
+  });
+
+  it('a value with whitespace, or any assignment to IFS, leaves the names unknown', () => {
+    expect(outsideOf('X="a /etc"; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf("X='a\t/etc'; rm -rf $X/y")).toEqual([true]);
+    expect(outsideOf('IFS=/; X=a/etc; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; IFS=x; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; rm -rf $X/y; IFS=x')).toEqual([true]);
+  });
+
+  it('a nameref or a trap leaves every name unknown', () => {
+    expect(outsideOf('X=a; declare -n Y=X; Y=/etc; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; typeset -gn Y=X; Y=/etc; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; local -n Y=X; Y=/etc; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; trap "X=/etc" DEBUG; rm -rf $X/y')).toEqual([true]);
+    expect(outsideOf('X=a; rm -rf $X/y; trap "X=/etc" DEBUG')).toEqual([true]);
+  });
+
   it('an assignment inside sh -c does not leak out; one outside reaches into it', () => {
     expect(outsideOf(`sh -c 'SD=${scratch}'; rm -rf $SD/x`)).toEqual([true]);
     expect(outsideOf(`sh -c 'SD=${scratch}; rm -rf $SD'`)).toEqual([false]);

@@ -129,8 +129,9 @@ class Splitter {
   /**
    * The variables the line sets (P13-09), used only to place targets (`outside`, a `cd`); what the
    * judge is shown is unchanged. A string: set to that literal value by `NAME=value` run on its
-   * own in the reading shell (`ownShell`), the value with no `$`, backtick, glob or `~`. `null`:
-   * set in any other way, read into or unset — a destructive part that uses it cannot be placed.
+   * own in the reading shell (`ownShell`), the only place the line sets that name, the value with
+   * no whitespace, `$`, backtick, glob or `~`. `null`: set in any other way, set more than once,
+   * read into or unset — a destructive part that uses it cannot be placed.
    * A body a shell runs keeps its own (`nested`).
    */
   private vars = new Map<string, string | null>();
@@ -151,58 +152,60 @@ class Splitter {
     if (lexed.opaque.length > 0) return [this.part(src, 'unreadable')];
     // A function the line defines may set any variable when it is called: nothing is remembered.
     const defines = DEFINES_FUNCTION.test(src);
+    // The whole line is read first (P13-09 review): a loop may run an assignment before a part
+    // that comes earlier in the text, and `IFS`, `trap` or a nameref may change any name. Only a
+    // name the line sets exactly once can keep a literal value.
+    const { all, once } = this.assignedOnce(lexed.commands);
+    if (all) {
+      this.anyVar = true;
+      for (const v of this.vars.keys()) this.vars.set(v, null);
+    }
     const out: CommandPart[] = [];
     for (const command of lexed.commands) {
       this.forget(command);
       out.push(...this.simple(command, depth));
-      if (!defines) this.remember(command);
+      if (!defines && !all) this.remember(command, once);
     }
     return out;
   }
 
   /**
-   * Marks unknown every name `command` may set: all of them after `eval`, `source`, `let` and
-   * the like; else each name it assigns (`x=…`, `${x:=…}`), and each name a builtin that sets
-   * variables is given (`read x`, `for x in`, `unset x`, `printf -v x`, `export x=…`).
+   * Whether any of `commands` may set every name (`all`), and the names exactly one of them sets
+   * (`once`), counted over the whole line, loop and `$(…)` bodies included.
    */
+  private assignedOnce(commands: SimpleCommand[]): { all: boolean; once: Set<string> } {
+    const count = new Map<string, number>();
+    for (const command of commands) {
+      const names = assignedBy(command);
+      if (names === 'all') return { all: true, once: new Set() };
+      for (const n of names) count.set(n, (count.get(n) ?? 0) + 1);
+    }
+    return { all: false, once: new Set([...count].filter(([, c]) => c === 1).map(([n]) => n)) };
+  }
+
+  /** Marks unknown every name `command` may set (`assignedBy`). */
   private forget(command: SimpleCommand): void {
-    const h = commandHead(command.words);
-    const head = command.words[h];
-    const name = head === undefined ? undefined : baseName(head);
-    if (name !== undefined && FORGETS_ALL.has(name)) {
+    const names = assignedBy(command);
+    if (names === 'all') {
       this.anyVar = true;
       for (const v of this.vars.keys()) this.vars.set(v, null);
       return;
     }
-    const names = name !== undefined && SETS_NAMED.has(name);
-    const words = [...command.words, ...command.redirects.map((r) => r.target)];
-    for (const [k, w] of words.entries()) {
-      for (const m of w.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g)) this.vars.set(m[1]!, null);
-      // An assignment before the command (`x=1 cmd`, `then x=1`) or given to `export` and the
-      // like; not an argument of another program (`sh -c 'x=1'` sets nothing here).
-      if (k > h && !names) continue;
-      const leading = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[|\+?=)/.exec(w)?.[1];
-      if (leading !== undefined) this.vars.set(leading, null);
-      if (!names || k <= h) continue;
-      const named = /^-[A-Za-z]*?([A-Za-z_][A-Za-z0-9_]*)$|^([A-Za-z_][A-Za-z0-9_]*)$/.exec(w);
-      if (named) for (const n of [named[1], named[2]]) if (n) this.vars.set(n, null);
-      // An option cluster may end in a name glued to it (`-vx`): any suffix of it.
-      if (/^-[A-Za-z0-9_]+$/.test(w)) {
-        for (let k = 2; k < w.length; k++) {
-          if (/^[A-Za-z_]/.test(w.slice(k))) this.vars.set(w.slice(k), null);
-        }
-      }
-    }
+    for (const n of names) this.vars.set(n, null);
   }
 
-  /** Remembers the literal values a bare assignment sets; any other value is unknown. */
-  private remember(command: SimpleCommand): void {
+  /**
+   * Remembers the literal values a bare assignment sets, for a name the line sets only there
+   * (`once`); any other value — one with whitespace (word splitting), `$`, a backtick, a glob or
+   * `~` — is unknown.
+   */
+  private remember(command: SimpleCommand, once: ReadonlySet<string>): void {
     if (!command.ownShell || command.redirects.length > 0 || command.heredoc) return;
     const pairs = command.words.map((w) => /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/.exec(w));
     if (pairs.length === 0 || pairs.some((p) => p === null)) return;
     for (const p of pairs) {
       const [, name, value] = p!;
-      this.vars.set(name!, /[$`*?[\]{}~]/.test(value!) ? null : value!);
+      this.vars.set(name!, !once.has(name!) || /[$`*?[\]{}~\s]/.test(value!) ? null : value!);
     }
   }
 
@@ -399,10 +402,50 @@ class Splitter {
   }
 }
 
+/**
+ * The names `command` may set: `'all'` after `eval`, `source`, `let`, `trap` and the like, a
+ * nameref (`declare -n`, `local -n`, `typeset -n`) or any assignment to `IFS`; else each name it
+ * assigns (`x=…`, `${x:=…}`), and each name a builtin that sets variables is given (`read x`,
+ * `for x in`, `unset x`, `printf -v x`, `export x=…`).
+ */
+function assignedBy(command: SimpleCommand): Set<string> | 'all' {
+  const h = commandHead(command.words);
+  const head = command.words[h];
+  const name = head === undefined ? undefined : baseName(head);
+  if (name !== undefined && FORGETS_ALL.has(name)) return 'all';
+  const args = command.words.slice(h + 1);
+  if (name !== undefined && NAMEREF.has(name) && args.some((w) => /^-[A-Za-z]*n/.test(w))) {
+    return 'all';
+  }
+  const out = new Set<string>();
+  const names = name !== undefined && SETS_NAMED.has(name);
+  const words = [...command.words, ...command.redirects.map((r) => r.target)];
+  for (const [k, w] of words.entries()) {
+    for (const m of w.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g)) out.add(m[1]!);
+    // An assignment before the command (`x=1 cmd`, `then x=1`) or given to `export` and the
+    // like; not an argument of another program (`sh -c 'x=1'` sets nothing here).
+    if (k > h && !names) continue;
+    const leading = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[|\+?=)/.exec(w)?.[1];
+    if (leading !== undefined) out.add(leading);
+    if (!names || k <= h) continue;
+    const named = /^-[A-Za-z]*?([A-Za-z_][A-Za-z0-9_]*)$|^([A-Za-z_][A-Za-z0-9_]*)$/.exec(w);
+    if (named) for (const n of [named[1], named[2]]) if (n) out.add(n);
+    // An option cluster may end in a name glued to it (`-vx`): any suffix of it.
+    if (/^-[A-Za-z0-9_]+$/.test(w)) {
+      for (let k = 2; k < w.length; k++) {
+        if (/^[A-Za-z_]/.test(w.slice(k))) out.add(w.slice(k));
+      }
+    }
+  }
+  return out.has('IFS') ? 'all' : out;
+}
+
 /** A line that defines a shell function (`f() {`, `function f`). */
 const DEFINES_FUNCTION = /(?:^|[\s;&|(){}])function\s|[A-Za-z0-9_.:-]\s*\(\s*\)/;
 /** Commands that may set any variable, named in a way the splitter cannot read: forget all. */
-const FORGETS_ALL: ReadonlySet<string> = new Set(['eval', 'source', '.', 'let', 'alias']);
+const FORGETS_ALL: ReadonlySet<string> = new Set(['eval', 'source', '.', 'let', 'alias', 'trap']);
+/** Builtins whose `-n` makes a nameref: an assignment to it sets the name it refers to. */
+const NAMEREF: ReadonlySet<string> = new Set(['declare', 'typeset', 'local']);
 /** Builtins that set the variables they are given by name (`read x`, `for x in …`). */
 const SETS_NAMED: ReadonlySet<string> = new Set([
   'read',
