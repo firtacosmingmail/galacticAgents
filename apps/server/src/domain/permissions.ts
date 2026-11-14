@@ -611,6 +611,13 @@ export interface SimpleCommand {
    * command splitter only — the gate itself still treats a body as data).
    */
   heredocBody?: string;
+  /**
+   * It runs in the shell that reads the line, unconditionally and in order (P13-09: for the
+   * judge's command splitter only, which remembers a `NAME=value` it sets): at the top level of
+   * the line — not inside `( … )`, `{ … }`, a substitution or a control structure (`if`, `while`,
+   * `for`, `case`, …) — not piped or put in the background, and not after `&&` or `||`.
+   */
+  ownShell?: true;
 }
 
 export interface LexedLine {
@@ -661,6 +668,11 @@ class ShellLexer {
     let pendingOp: string | null = null;
     let depth = 0;
     let i = start;
+    // For `ownShell` (P13-09): open `{ … }` groups and control structures, and the operator that
+    // ended the previous command (`&&`, `||` and `|` are kept across empty commands: `a ||\n b`).
+    let braces = 0;
+    let control = 0;
+    let lastOp = '';
     // Where an unquoted `)` operator ended: zsh reads a `(` right after it as glob qualifiers (R-m).
     let closedAt = -1;
     // Where the current word starts in the raw text, and where this loop step started.
@@ -689,13 +701,31 @@ class ShellLexer {
       word = null;
       quoted = false;
     };
-    const flushCommand = (nextPiped: boolean) => {
+    const flushCommand = (nextPiped: boolean, op: string) => {
       flushWord();
       if (pendingOp !== null) {
         this.opaque.push(`redirection ${pendingOp} without a target`);
         pendingOp = null;
       }
-      if (cmd.words.length > 0 || cmd.redirects.length > 0) this.commands.push(cmd);
+      if (cmd.words.length > 0 || cmd.redirects.length > 0) {
+        if (
+          this.nesting === 0 &&
+          depth === 0 &&
+          braces === 0 &&
+          control === 0 &&
+          !cmd.piped &&
+          !nextPiped &&
+          op !== '&' &&
+          (lastOp === '' || lastOp === ';' || lastOp === '\n' || lastOp === '&')
+        ) {
+          cmd.ownShell = true;
+        }
+        const first = cmd.words[0];
+        if (first !== undefined && CONTROL_OPENERS.has(first)) control++;
+        else if (first !== undefined && CONTROL_CLOSERS.has(first) && control > 0) control--;
+        this.commands.push(cmd);
+        lastOp = op;
+      } else if (lastOp !== '&&' && lastOp !== '||' && lastOp !== '|') lastOp = op;
       cmd = newCommand(nextPiped);
     };
     const substitute = (from: number): number => {
@@ -716,7 +746,7 @@ class ShellLexer {
         flushWord();
         i++;
       } else if (c === '\n') {
-        flushCommand(false);
+        flushCommand(false, '\n');
         i = this.skipHeredocBodies(i + 1);
       } else if (c === '\\') {
         if (next === '\n') {
@@ -788,19 +818,19 @@ class ShellLexer {
           pendingOp = src[i + 2] === '>' ? '&>>' : '&>';
           i += pendingOp.length;
         } else {
-          flushCommand(false);
+          flushCommand(false, next === '&' ? '&&' : '&');
           i += next === '&' ? 2 : 1;
         }
       } else if (c === '|') {
         if (next === '|') {
-          flushCommand(false);
+          flushCommand(false, '||');
           i += 2;
         } else {
-          flushCommand(true);
+          flushCommand(true, '|');
           i += next === '&' ? 2 : 1;
         }
       } else if (c === ';') {
-        flushCommand(false);
+        flushCommand(false, ';');
         i++;
       } else if (c === '(' && word !== null && !/^\s*\)/.test(src.slice(i + 1))) {
         // zsh reads `word(…)` as glob qualifiers or modifiers (`a(:s/x/y/)` rewrites the path,
@@ -826,11 +856,11 @@ class ShellLexer {
           `zsh glob group or qualifier: ${src.slice(i, close < 0 ? src.length : close + 1)}`,
         );
       } else if (c === '(') {
-        flushCommand(false);
+        flushCommand(false, '(');
         depth++;
         i++;
       } else if (c === ')') {
-        flushCommand(false);
+        flushCommand(false, ')');
         i++;
         closedAt = i;
         if (depth === 0 && nested) return i;
@@ -846,7 +876,9 @@ class ShellLexer {
         cmd.redirects.length === 0 &&
         isWordEnd(next)
       ) {
-        flushCommand(false);
+        flushCommand(false, c);
+        if (c === '{') braces++;
+        else if (braces > 0) braces--;
         i++;
       } else if (
         c === '=' &&
@@ -865,7 +897,7 @@ class ShellLexer {
         i++;
       }
     }
-    flushCommand(false);
+    flushCommand(false, '');
     if (nested) this.opaque.push('unterminated $(');
     return i;
   }
@@ -955,6 +987,17 @@ const COMMAND_POSITION_WORDS: ReadonlySet<string> = new Set([
   'time',
   'coproc',
 ]);
+
+/** Words that open and close a control structure (`ownShell`). */
+const CONTROL_OPENERS: ReadonlySet<string> = new Set([
+  'if',
+  'while',
+  'until',
+  'for',
+  'case',
+  'select',
+]);
+const CONTROL_CLOSERS: ReadonlySet<string> = new Set(['fi', 'done', 'esac']);
 
 function newCommand(piped: boolean): SimpleCommand {
   return { words: [], redirects: [], piped, heredoc: false };
@@ -2470,15 +2513,38 @@ export interface CommandPaths {
  * ../foo` is checked. `$HOME` and `$PWD` are expanded; any other `$VAR` or substitution inside
  * a path-like token makes it unresolvable, and so does `~user`.
  */
-export function pathsInCommand(command: string): Omit<CommandPaths, 'clustered'> {
+export function pathsInCommand(
+  command: string,
+  vars?: ReadonlyMap<string, string>,
+): Omit<CommandPaths, 'clustered'> {
   const out: Omit<CommandPaths, 'clustered'> = { paths: [], unresolvable: [] };
   for (const c of lexCommand(command).commands) {
-    const p = pathsOf(c);
+    const p = pathsOf(vars && vars.size > 0 ? withVars(c, vars) : c);
     // A caller that only reads `paths` judges the cluster readings too (fail closed).
     out.paths.push(...p.paths, ...p.clustered.map((x) => x.path));
     out.unresolvable.push(...p.unresolvable);
   }
   return out;
+}
+
+/**
+ * `command` with each `$NAME` / `${NAME}` of `vars` replaced by its value in its words and
+ * redirection targets (P13-09: the judge's command splitter places a target through a variable
+ * the line set earlier). Any other variable stays as it is, so it stays unresolvable.
+ */
+export function withVars(command: SimpleCommand, vars: ReadonlyMap<string, string>): SimpleCommand {
+  const sub = (word: string) =>
+    word.replace(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (m, a, b) => {
+      const value = vars.get((a ?? b) as string);
+      return value ?? m;
+    });
+  return {
+    ...command,
+    words: command.words.map(sub),
+    redirects: command.redirects.map((r) =>
+      r.op === '<<' || r.op === '<<-' ? r : { ...r, target: sub(r.target) },
+    ),
+  };
 }
 
 /**

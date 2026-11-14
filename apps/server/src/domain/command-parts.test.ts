@@ -355,3 +355,128 @@ describe('commandParts: bypasses closed in review (fix round 1)', () => {
     expect(last('cd sub && rm -rf x').outsideCwd).toBeUndefined();
   });
 });
+
+describe("commandParts: a Steward's scratch folder and its variables (P13-09)", () => {
+  const scratch = '/work/proj/.galactic/scratch/t1';
+  const opts = { scratch };
+  const parts = (command: string) => commandParts(command, ctx, opts);
+  const outsideOf = (command: string) =>
+    parts(command)
+      .filter((p) => p.categories.includes('destructive'))
+      .map((p) => p.outsideCwd === true);
+
+  it('a delete inside the scratch folder is not outside', () => {
+    expect(outsideOf(`rm -f ${scratch}/a.log`)).toEqual([false]);
+    expect(outsideOf(`rm -rf ${scratch}/build ${scratch}/*.md`)).toEqual([false]);
+    expect(outsideOf(`cd ${scratch} && rm -f *.log`)).toEqual([false]);
+    // The worktree still counts, in the same part too.
+    expect(outsideOf(`rm -f ${scratch}/a.log ./b.log`)).toEqual([false]);
+  });
+
+  it('without the scratch folder (an asteroid Steward) the same delete is outside', () => {
+    expect(
+      commandParts(`rm -f ${scratch}/a.log`, ctx).find((p) => p.categories.includes('destructive'))!
+        .outsideCwd,
+    ).toBe(true);
+  });
+
+  it("another task's scratch folder, the scratch root and anything else stay outside", () => {
+    expect(outsideOf('rm -f /work/proj/.galactic/scratch/t2/a.log')).toEqual([true]);
+    expect(outsideOf('rm -rf /work/proj/.galactic/scratch')).toEqual([true]);
+    expect(outsideOf(`rm -rf ${scratch}/../t2`)).toEqual([true]);
+    expect(outsideOf(`rm -f ${scratch}/a.log /tmp/b.log`)).toEqual([true]);
+    expect(outsideOf('rm -f /tmp/claude-501/t964-x.log')).toEqual([true]);
+  });
+
+  it('the real-world chain: a variable set to the scratch folder places its targets', () => {
+    const command = `SD=${scratch}; rm $SD/*.log $SD/*.md; ls -A $SD`;
+    const ps = parts(command);
+    const rm = ps.find((p) => p.text.startsWith('rm'))!;
+    // What the judge is shown is unchanged: the variable stays in the text.
+    expect(rm.text).toBe('rm "$SD/*.log" "$SD/*.md"');
+    expect(rm.categories).toContain('destructive');
+    expect(rm.outsideCwd).toBeUndefined();
+  });
+
+  it('${NAME}, a quoted value, && after the assignment and cd "$NAME" place it too', () => {
+    expect(outsideOf(`D="${scratch}/out"; rm -rf "\${D}"/x`)).toEqual([false]);
+    expect(outsideOf(`D=${scratch} && rm -rf $D/x`)).toEqual([false]);
+    expect(outsideOf(`M=${scratch}; cd "$M" && rm -f *.log`)).toEqual([false]);
+    expect(outsideOf(`M=sub; cd "$M" && rm -f x`)).toEqual([false]);
+  });
+
+  it('a variable set to a place outside places its target outside', () => {
+    expect(outsideOf('SD=/tmp/x; rm -rf $SD/y')).toEqual([true]);
+    expect(outsideOf('M=/tmp; cd "$M" && rm -f x')).toEqual([true]);
+  });
+
+  it('a value that is not literal leaves the name unknown', () => {
+    expect(outsideOf('SD=$(mktemp -d); rm -rf $SD')).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; SD=$(pwd); rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; SD=$HOME; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=\`pwd\`; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}/*; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf('SD=~/x; rm -rf $SD')).toEqual([true]);
+    expect(outsideOf('rm -rf $UNSET/x')).toEqual([true]);
+  });
+
+  it('an assignment that may not run in the reading shell, or not first, is not remembered', () => {
+    expect(outsideOf(`true || SD=${scratch}; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`true ||\nSD=${scratch}; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`false && SD=${scratch}; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`(SD=${scratch}); rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`{ SD=${scratch}; }; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch} | cat; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch} & rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`if true; then SD=${scratch}; fi; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`echo $(SD=${scratch}); rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`rm -rf $SD/x; SD=${scratch}`)).toEqual([true]);
+    // A prefix assignment sets the variable for that command only.
+    expect(outsideOf(`SD=${scratch} true; rm -rf $SD`)).toEqual([true]);
+  });
+
+  it('a name set again, read into, unset or looped over is forgotten', () => {
+    expect(outsideOf(`SD=${scratch}; export SD=$(pwd); rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; read SD; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; unset SD; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; printf -v SD x; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; for SD in /a; do :; done; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=; : \${SD:=/etc}; rm -rf $SD/x`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; eval "$X"; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`SD=${scratch}; source ./env.sh; rm -rf $SD`)).toEqual([true]);
+    expect(outsideOf(`f() { SD=/etc; }; SD=${scratch}; f; rm -rf $SD`)).toEqual([true]);
+  });
+
+  it('an assignment inside sh -c does not leak out; one outside reaches into it', () => {
+    expect(outsideOf(`sh -c 'SD=${scratch}'; rm -rf $SD/x`)).toEqual([true]);
+    expect(outsideOf(`sh -c 'SD=${scratch}; rm -rf $SD'`)).toEqual([false]);
+    expect(outsideOf(`SD=${scratch}; sh -c 'SD=/etc'; rm -rf $SD/x`)).toEqual([false]);
+    expect(outsideOf(`SD=${scratch}; sh -c 'SD=/etc; rm -rf $SD'`)).toEqual([true]);
+  });
+
+  it('a guarded path in the scratch folder is still guarded', () => {
+    const p = parts(`rm -rf ${scratch}/.git/hooks`).find((q) =>
+      q.categories.includes('destructive'),
+    )!;
+    expect(p.outsideCwd).toBeUndefined();
+    expect(p.guarded).toBe(true);
+    expect(parts(`SD=${scratch}; echo x > ~/.zshrc`).at(-1)!.guarded).toBe(true);
+  });
+
+  it('a resolved spelling of the scratch folder counts as the folder (aliases)', () => {
+    const aliased: PolicyContext = {
+      workspace: '/var/w/proj',
+      cwd: '/var/w/proj/.galactic/worktrees/t1',
+      home: '/Users/me',
+      aliases: [{ from: '/private/var/w/proj', to: '/var/w/proj' }],
+    };
+    const own = '/var/w/proj/.galactic/scratch/t1';
+    const p = (command: string) =>
+      commandParts(command, aliased, { scratch: own }).find((q) =>
+        q.categories.includes('destructive'),
+      )!;
+    expect(p('rm -f /private/var/w/proj/.galactic/scratch/t1/a.log').outsideCwd).toBeUndefined();
+    expect(p(`rm -f ${own}/a.log`).outsideCwd).toBeUndefined();
+    expect(p('rm -f /private/var/w/proj/.galactic/scratch/t2/a.log').outsideCwd).toBe(true);
+  });
+});

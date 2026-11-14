@@ -14,6 +14,7 @@ import {
   lexCommand,
   pathsInCommand,
   resolvePath,
+  withVars,
   type PolicyContext,
   type SimpleCommand,
 } from './permissions.js';
@@ -36,13 +37,27 @@ import {
 /** Thrown inside the splitter when shells nest deeper than `MAX_NESTING`. */
 class TooDeep extends Error {}
 
+/** What the splitter knows of the Steward besides its policy context. */
+export interface SplitOptions {
+  /**
+   * The Steward's scratch folder (P13-09): a destructive part whose targets are all inside it or
+   * the worktree, run from either, is not `outsideCwd`. Compared like the worktree (its spelling
+   * in `ctx.workspace`, `ctx.aliases` for the resolved one).
+   */
+  scratch?: string;
+}
+
 /** The parts of a shell command, in the order the lexer meets them. Never empty, never throws. */
-export function commandParts(command: string, ctx: PolicyContext): CommandPart[] {
+export function commandParts(
+  command: string,
+  ctx: PolicyContext,
+  opts: SplitOptions = {},
+): CommandPart[] {
   try {
-    const parts = new Splitter(ctx).split(command, 0);
-    return parts.length > 0 ? parts : [unreadablePart(command, ctx)];
+    const parts = new Splitter(ctx, opts).split(command, 0);
+    return parts.length > 0 ? parts : [unreadablePart(command, ctx, opts)];
   } catch {
-    return [unreadablePart(command, ctx)];
+    return [unreadablePart(command, ctx, opts)];
   }
 }
 
@@ -54,14 +69,18 @@ export const MAX_CALL_PART_CHARS = 300;
  * part, its name and a one-line summary of its redacted input (at most `MAX_CALL_PART_CHARS`),
  * classified with `classifyToolCall`.
  */
-export function partsOfCall(call: ToolCall, ctx: PolicyContext): CommandPart[] {
+export function partsOfCall(
+  call: ToolCall,
+  ctx: PolicyContext,
+  opts: SplitOptions = {},
+): CommandPart[] {
   const input =
     typeof call.input === 'object' && call.input !== null && !Array.isArray(call.input)
       ? (call.input as Record<string, unknown>)
       : {};
   if (call.toolName === 'Bash') {
     const command = typeof input['command'] === 'string' ? input['command'] : '';
-    return commandParts(command, ctx);
+    return commandParts(command, ctx, opts);
   }
   let summary: string;
   try {
@@ -80,9 +99,9 @@ export function partsOfCall(call: ToolCall, ctx: PolicyContext): CommandPart[] {
 
 // ---------------------------------------------------------------------------
 
-function unreadablePart(text: string, ctx: PolicyContext): CommandPart {
+function unreadablePart(text: string, ctx: PolicyContext, opts: SplitOptions): CommandPart {
   try {
-    return new Splitter(ctx).part(text, 'unreadable');
+    return new Splitter(ctx, opts).part(text, 'unreadable');
   } catch {
     return { text, categories: [], opaque: 'unreadable' };
   }
@@ -107,8 +126,21 @@ class Splitter {
    * closed). Never cleared — not by a later `cd`, nor at the end of a nested body, as `seen`.
    */
   private unknownCwd = false;
+  /**
+   * The variables the line sets (P13-09), used only to place targets (`outside`, a `cd`); what the
+   * judge is shown is unchanged. A string: set to that literal value by `NAME=value` run on its
+   * own in the reading shell (`ownShell`), the value with no `$`, backtick, glob or `~`. `null`:
+   * set in any other way, read into or unset — a destructive part that uses it cannot be placed.
+   * A body a shell runs keeps its own (`nested`).
+   */
+  private vars = new Map<string, string | null>();
+  /** Set by `eval`, `source` and the like: any variable may have been set to anything. */
+  private anyVar = false;
 
-  constructor(private readonly ctx: PolicyContext) {
+  constructor(
+    private readonly ctx: PolicyContext,
+    private readonly opts: SplitOptions = {},
+  ) {
     this.cwd = cwdOf(ctx);
     this.seen.add(this.cwd);
   }
@@ -117,9 +149,81 @@ class Splitter {
     if (depth > MAX_NESTING) throw new TooDeep();
     const lexed = lexCommand(src);
     if (lexed.opaque.length > 0) return [this.part(src, 'unreadable')];
+    // A function the line defines may set any variable when it is called: nothing is remembered.
+    const defines = DEFINES_FUNCTION.test(src);
     const out: CommandPart[] = [];
-    for (const command of lexed.commands) out.push(...this.simple(command, depth));
+    for (const command of lexed.commands) {
+      this.forget(command);
+      out.push(...this.simple(command, depth));
+      if (!defines) this.remember(command);
+    }
     return out;
+  }
+
+  /**
+   * Marks unknown every name `command` may set: all of them after `eval`, `source`, `let` and
+   * the like; else each name it assigns (`x=…`, `${x:=…}`), and each name a builtin that sets
+   * variables is given (`read x`, `for x in`, `unset x`, `printf -v x`, `export x=…`).
+   */
+  private forget(command: SimpleCommand): void {
+    const h = commandHead(command.words);
+    const head = command.words[h];
+    const name = head === undefined ? undefined : baseName(head);
+    if (name !== undefined && FORGETS_ALL.has(name)) {
+      this.anyVar = true;
+      for (const v of this.vars.keys()) this.vars.set(v, null);
+      return;
+    }
+    const names = name !== undefined && SETS_NAMED.has(name);
+    const words = [...command.words, ...command.redirects.map((r) => r.target)];
+    for (const [k, w] of words.entries()) {
+      for (const m of w.matchAll(/\$\{([A-Za-z_][A-Za-z0-9_]*):?=/g)) this.vars.set(m[1]!, null);
+      // An assignment before the command (`x=1 cmd`, `then x=1`) or given to `export` and the
+      // like; not an argument of another program (`sh -c 'x=1'` sets nothing here).
+      if (k > h && !names) continue;
+      const leading = /^([A-Za-z_][A-Za-z0-9_]*)(?:\[|\+?=)/.exec(w)?.[1];
+      if (leading !== undefined) this.vars.set(leading, null);
+      if (!names || k <= h) continue;
+      const named = /^-[A-Za-z]*?([A-Za-z_][A-Za-z0-9_]*)$|^([A-Za-z_][A-Za-z0-9_]*)$/.exec(w);
+      if (named) for (const n of [named[1], named[2]]) if (n) this.vars.set(n, null);
+      // An option cluster may end in a name glued to it (`-vx`): any suffix of it.
+      if (/^-[A-Za-z0-9_]+$/.test(w)) {
+        for (let k = 2; k < w.length; k++) {
+          if (/^[A-Za-z_]/.test(w.slice(k))) this.vars.set(w.slice(k), null);
+        }
+      }
+    }
+  }
+
+  /** Remembers the literal values a bare assignment sets; any other value is unknown. */
+  private remember(command: SimpleCommand): void {
+    if (!command.ownShell || command.redirects.length > 0 || command.heredoc) return;
+    const pairs = command.words.map((w) => /^([A-Za-z_][A-Za-z0-9_]*)=([\s\S]*)$/.exec(w));
+    if (pairs.length === 0 || pairs.some((p) => p === null)) return;
+    for (const p of pairs) {
+      const [, name, value] = p!;
+      this.vars.set(name!, /[$`*?[\]{}~]/.test(value!) ? null : value!);
+    }
+  }
+
+  /** The variables with a known literal value. */
+  private known(): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const [k, v] of this.vars) if (v !== null) out.set(k, v);
+    return out;
+  }
+
+  /** Whether `text` uses a variable the line set to something it cannot read. */
+  private usesUnknown(text: string): boolean {
+    for (const c of lexCommand(text).commands) {
+      for (const w of [...c.words, ...c.redirects.map((r) => r.target)]) {
+        for (const m of w.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)) {
+          const v = this.vars.get(m[1]!);
+          if (v === null || (v === undefined && this.anyVar)) return true;
+        }
+      }
+    }
+    return false;
   }
 
   private simple(command: SimpleCommand, depth: number): CommandPart[] {
@@ -208,13 +312,20 @@ class Splitter {
     return [this.plain(command)];
   }
 
-  /** A body a shell runs: split one level deeper; a `cd` in it does not move the cwd outside. */
+  /**
+   * A body a shell runs: split one level deeper; a `cd` or a variable it sets does not reach the
+   * line outside it.
+   */
   private nested(body: string, depth: number): CommandPart[] {
     const saved = this.cwd;
+    const savedVars = new Map(this.vars);
+    const savedAny = this.anyVar;
     try {
       return this.split(body, depth + 1);
     } finally {
       this.cwd = saved;
+      this.vars = savedVars;
+      this.anyVar = savedAny;
     }
   }
 
@@ -237,7 +348,8 @@ class Splitter {
     const h = commandHead(command.words);
     const name = command.words[h]?.toLowerCase();
     if (name === 'cd' || name === 'pushd') {
-      const target = command.words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
+      const words = withVars(command, this.known()).words;
+      const target = words.slice(h + 1).find((w) => w === '-' || !w.startsWith('-'));
       if (target === undefined || target === '' || target === '~') {
         this.cwd = this.ctx.home ?? homedir();
         this.seen.add(this.cwd);
@@ -266,23 +378,48 @@ class Splitter {
   }
 
   /**
-   * Whether `text` reaches outside the Steward's worktree (`ctx.cwd`; design §5.4a): it runs from
-   * a cwd outside it, names a path outside it, or names a path that cannot be placed — judged
-   * from every cwd the line has been at (`seen`), so it may flag a delete one time too many. The gate's
-   * own path reading (`pathsInCommand`, `isInsideWorkspace`) with the worktree as the root.
+   * Whether `text` reaches outside the Steward's worktree (`ctx.cwd`; design §5.4a) and its
+   * scratch folder (`opts.scratch`, P13-09): it runs from a cwd outside both, names a path outside
+   * both, names a path that cannot be placed, or uses a variable the line set to something it
+   * cannot read — judged from every cwd the line has been at (`seen`), so it may flag a delete
+   * one time too many. The gate's own path reading (`pathsInCommand`, `isInsideWorkspace`) with
+   * each folder as the root, `$NAME` replaced by the literal value the line gave it.
    */
   outside(text: string): boolean {
-    const root = cwdOf(this.ctx);
-    const { paths, unresolvable } = pathsInCommand(text);
+    const roots = [cwdOf(this.ctx)];
+    if (this.opts.scratch) roots.push(resolvePath(this.opts.scratch, this.ctx, roots[0]!));
+    if (this.usesUnknown(text)) return true;
+    const { paths, unresolvable } = pathsInCommand(text, this.known());
     if (unresolvable.length > 0) return true;
     return [...this.seen, this.cwd].some((cwd) => {
-      const worktree: PolicyContext = { ...this.ctx, workspace: root, cwd };
-      return (
-        !isInsideWorkspace(cwd, worktree) || paths.some((p) => !isInsideWorkspace(p, worktree))
-      );
+      const own = (p: string) =>
+        roots.some((root) => isInsideWorkspace(p, { ...this.ctx, workspace: root, cwd }));
+      return !own(cwd) || paths.some((p) => !own(p));
     });
   }
 }
+
+/** A line that defines a shell function (`f() {`, `function f`). */
+const DEFINES_FUNCTION = /(?:^|[\s;&|(){}])function\s|[A-Za-z0-9_.:-]\s*\(\s*\)/;
+/** Commands that may set any variable, named in a way the splitter cannot read: forget all. */
+const FORGETS_ALL: ReadonlySet<string> = new Set(['eval', 'source', '.', 'let', 'alias']);
+/** Builtins that set the variables they are given by name (`read x`, `for x in …`). */
+const SETS_NAMED: ReadonlySet<string> = new Set([
+  'read',
+  'mapfile',
+  'readarray',
+  'getopts',
+  'unset',
+  'printf',
+  'wait',
+  'for',
+  'select',
+  'declare',
+  'typeset',
+  'local',
+  'export',
+  'readonly',
+]);
 
 function isAssignment(word: string): boolean {
   return ASSIGNMENT_WORD.test(word);
