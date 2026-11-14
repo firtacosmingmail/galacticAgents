@@ -326,3 +326,135 @@ describe('folder marks relative to the Steward’s worktree and scratch folder (
     expect(coversIn2(abs, 'rm -rf /tmp/cache/x')).toBe(true);
   });
 });
+
+describe('final review fixes', () => {
+  const t1 = '/w/.worktrees/t1';
+
+  describe('C1: a site mark reads hosts from the words, writing or not', () => {
+    const mark: ApprovalMarkMatch = { kind: 'site', host: 'api.posthog.com' };
+
+    it.each([
+      'curl https://api.posthog.com/x',
+      'curl -X POST https://api.posthog.com/y',
+      'curl -d x https://api.posthog.com/y',
+      'curl --data-binary @f api.posthog.com/y',
+      'wget --post-data=x https://api.posthog.com/y',
+      'curl https://user@api.posthog.com/x',
+      'curl https://user:pw@API.PostHog.com:8443/x',
+      'curl https://api.posthog.com./x',
+      'curl --url=https://api.posthog.com/x',
+      'curl https://eu.api.posthog.com/x',
+      'echo hi | curl -T - https://eu.api.posthog.com/up',
+    ])('covers %s', (command) => {
+      expect(covers(mark, bash(command))).toBe(true);
+    });
+
+    it.each([
+      'curl -X POST https://example.com/y',
+      'curl -d x https://posthog.com/y',
+      'curl https://api.posthog.com.evil.io/x',
+      'pnpm test',
+    ])('does not cover %s', (command) => {
+      expect(covers(mark, bash(command))).toBe(false);
+    });
+
+    it.each([
+      ['curl -X POST https://API.posthog.com/y', 'api.posthog.com'],
+      ['curl -d x https://user@api.posthog.com./y', 'api.posthog.com'],
+      ['wget --post-data=x https://api.posthog.com:8443/y', 'api.posthog.com'],
+      ['curl -o out.json https://api.posthog.com/y', 'api.posthog.com'],
+    ])('derives the site of %s', (command, host) => {
+      expect(markFromApproval({ toolCall: bash(command), action: 'network' }, ctx)).toEqual({
+        kind: 'site',
+        host,
+      });
+    });
+  });
+
+  describe('I2: folder marks compare paths case-insensitively', () => {
+    const nm = markFromApproval({ toolCall: bash('rm -rf node_modules') }, ctx);
+    it.each(['rm -rf NODE_MODULES/.cache', 'rm -rf Node_modules', `rm -rf ${t1.toUpperCase()}`])(
+      'covers %s',
+      (command) => {
+        expect(covers(nm, bash(command))).toBe(true);
+      },
+    );
+    it('still does not cover another folder', () => {
+      expect(covers(nm, bash('rm -rf NODE_MODULES2'))).toBe(false);
+    });
+  });
+
+  describe('I3: the same action by another command', () => {
+    const nm = markFromApproval({ toolCall: bash('rm -rf node_modules') }, ctx);
+    it('git rm reads its pathspecs', () => {
+      expect(covers(nm, bash('git rm -r node_modules'))).toBe(true);
+      expect(covers(nm, bash('git rm -r --cached node_modules/x'))).toBe(true);
+      expect(covers(nm, bash('git rm -r dist'))).toBe(false);
+      expect(markFromApproval({ toolCall: bash('git rm -r node_modules') }, ctx)).toEqual({
+        kind: 'folder',
+        category: 'destructive',
+        paths: [`${t1}/node_modules`],
+      });
+    });
+
+    it('a part of the category with no known targets: every plain argument may be one', () => {
+      const parts = [{ text: 'scrub node_modules', categories: ['destructive' as const] }];
+      const call = bash('scrub node_modules');
+      expect(markCovers(nm, { toolCall: call, parts, ctx })).toBe(true);
+      const other = [{ text: 'scrub dist', categories: ['destructive' as const] }];
+      expect(markCovers(nm, { toolCall: bash('scrub dist'), parts: other, ctx })).toBe(false);
+    });
+
+    const edit = markFromApproval(
+      { toolCall: { toolName: 'Edit', input: { file_path: `${t1}/src/a.ts` } } },
+      ctx,
+    );
+    it.each([
+      "sed -i 's/a/b/' src/a.ts",
+      "sed -i.bak -e 's/a/b/' src/a.ts",
+      'echo x > src/a.ts',
+      'echo x >> ./src/a.ts',
+      'cp x src/a.ts',
+      'mv /tmp/x src/a.ts',
+      'cp a.ts src',
+      'cp -t src a.ts',
+      'echo x | tee -a src/a.ts',
+      'cd src && echo x > a.ts',
+    ])('an edit mark covers the shell edit %s', (command) => {
+      expect(covers(edit, bash(command))).toBe(true);
+    });
+    it.each([
+      "sed 's/a/b/' src/a.ts",
+      'cat src/a.ts',
+      'echo x > src/b.ts',
+      'cp src/a.ts /tmp/x',
+      'cp b.ts src',
+      'echo x | tee src/b.ts',
+    ])('an edit mark does not cover %s', (command) => {
+      expect(covers(edit, bash(command))).toBe(false);
+    });
+  });
+
+  describe('M2: prefix marks normalise the command name and skip git global options', () => {
+    const mark: ApprovalMarkMatch = { kind: 'prefix', words: ['git', 'branch'] };
+    it.each([
+      'git branch -D x',
+      '/usr/bin/git branch -D x',
+      'git -C . branch -D x',
+      'git -c core.pager=cat branch -D x',
+      'git --git-dir=.git --work-tree=. branch -D x',
+      'git --no-pager branch -D x',
+    ])('covers %s', (command) => {
+      expect(covers(mark, bash(command))).toBe(true);
+    });
+    it('does not cover another subcommand', () => {
+      expect(covers(mark, bash('git -C . status'))).toBe(false);
+    });
+    it.each(['/usr/bin/git branch -D x', 'git -C . branch -D x'])(
+      'derives git branch from %s',
+      (command) => {
+        expect(markFromApproval({ toolCall: bash(command) }, ctx)).toEqual(mark);
+      },
+    );
+  });
+});

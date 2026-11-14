@@ -110,7 +110,10 @@ export function markFromApproval(
         roots,
       );
     }
-    const host = hostsOf(c)[0];
+    // A site mark only for a network call (an MCP tool whose text holds a URL keeps a tool mark).
+    const host = c.actions.includes('network')
+      ? [...inputHosts(toolCall), ...hostsOf(c)][0]
+      : undefined;
     if (host !== undefined) return siteMark(host);
     return { kind: 'tool', toolName: toolCall.toolName };
   }
@@ -133,10 +136,12 @@ export function markFromApproval(
     }
   }
   if (whole === 'network') {
-    const host = hostsOf(classifyCommand(part.text, ctx))[0];
+    // The same reading as `markCovers`: the part's own words first (a POST or upload has no
+    // classifier hosts), the classifier's as a fallback.
+    const host = [...wordHosts(part.text), ...hostsOf(classifyCommand(part.text, ctx))][0];
     if (host !== undefined) return siteMark(host);
   }
-  const words = proposePrefix(part.text) ?? partWords(part.text);
+  const words = prefixWords(part.text);
   if (words.length > 0) return { kind: 'prefix', words };
   return { kind: 'tool', toolName: toolCall.toolName };
 }
@@ -219,7 +224,7 @@ export function markCovers(
         );
       }
       case 'site':
-        return hostsOf(c).some((h) => onSite(h, match.host));
+        return [...inputHosts(toolCall), ...hostsOf(c)].some((h) => onSite(h, match.host));
       case 'prefix':
         return false;
     }
@@ -230,17 +235,24 @@ export function markCovers(
     case 'folder':
       return foldersCover(match, parts, ctx);
     case 'site':
+      // Hosts read from the part's own words, whether the request writes or not (a POST, `-d`,
+      // `--post-data`, an upload: the classifier names no hosts for those), plus the classifier's.
       return parts.some((p) =>
-        hostsOf(classifyCommand(p.text, ctx)).some((h) => onSite(h, match.host)),
+        [...wordHosts(p.text), ...hostsOf(classifyCommand(p.text, ctx))].some((h) =>
+          onSite(h, match.host),
+        ),
       );
-    case 'prefix':
+    case 'prefix': {
+      const marked = normalisedWords(match.words);
       return parts.some((p) =>
         lexCommand(p.text).commands.some(
           (c) =>
             startsWith(c.words, match.words) ||
-            startsWith(c.words.slice(commandHead(c.words)), match.words),
+            startsWith(c.words.slice(commandHead(c.words)), match.words) ||
+            startsWith(normalisedWords(c.words.slice(commandHead(c.words))), marked),
         ),
       );
+    }
   }
 }
 
@@ -257,13 +269,24 @@ function foldersCover(
   let cwd = cwdOf(ctx);
   const seen = new Set([cwd]);
   let unknownCwd = false;
+  const edits = match.category === 'edit_workspace';
   for (const part of parts) {
     if (part.categories.includes(match.category)) {
       if (unknownCwd) return true;
       for (const from of seen) {
-        const placed = placeOf(part.text, ctx, from);
+        const placed = placeOf(part.text, ctx, from, true);
         if (placed.unplaceable) return true;
         if (placed.paths.some((p) => inMark(p, match, ctx))) return true;
+      }
+    }
+    // An edit mark also catches the same file edited from the shell, whatever the part's
+    // category (the gate reads `sed -i`, `>`, `cp` as running in the workspace).
+    if (edits) {
+      for (const from of seen) {
+        const edited = shellEdits(part.text, ctx, from);
+        if (edited.unplaceable) return true;
+        if (edited.paths.length > 0 && unknownCwd) return true;
+        if (edited.paths.some((p) => inMark(p, match, ctx))) return true;
       }
     }
     const moved = cdTarget(part.text);
@@ -314,8 +337,9 @@ const FILE_COMMANDS: ReadonlySet<string> = new Set([
 /**
  * The words of one simple command that name its targets: every non-option argument of a command
  * whose arguments are files (`FILE_COMMANDS`); `find`'s start paths (`.` when it names none);
- * `git clean`'s pathspecs (the cwd when it names none). Any other command: none here — its targets
- * are what the gate reads as paths (`pathsInCommand`).
+ * `git clean`'s pathspecs (the cwd when it names none) and `git rm`'s, under a `-C <dir>` given
+ * in front. Any other command: none here — its targets are what the gate reads as paths
+ * (`pathsInCommand`).
  */
 function targetWords(words: readonly string[]): string[] {
   const h = commandHead([...words]);
@@ -327,54 +351,202 @@ function targetWords(words: readonly string[]): string[] {
     const starts = end < 0 ? args : args.slice(0, end);
     return starts.length > 0 ? starts : ['.'];
   }
-  if (name === 'git' && args[0] === 'clean') {
-    const specs: string[] = [];
-    for (let k = 1; k < args.length; k++) {
-      const a = args[k]!;
-      if (a === '-e' || a === '--exclude') k++;
-      else if (!a.startsWith('-')) specs.push(a);
+  if (name === 'git') {
+    const { dirs, rest } = gitGlobals(args);
+    const under = (spec: string) =>
+      dirs.reduceRight((acc, d) => (isAbsolute(acc) ? acc : join(d, acc)), spec);
+    if (rest[0] === 'clean') {
+      const specs: string[] = [];
+      for (let k = 1; k < rest.length; k++) {
+        const a = rest[k]!;
+        if (a === '-e' || a === '--exclude') k++;
+        else if (!a.startsWith('-')) specs.push(a);
+      }
+      return (specs.length > 0 ? specs : ['.']).map(under);
     }
-    return specs.length > 0 ? specs : ['.'];
+    if (rest[0] === 'rm') {
+      const dashes = rest.indexOf('--');
+      const specs =
+        dashes < 0
+          ? rest.slice(1).filter((a) => !a.startsWith('-'))
+          : [...rest.slice(1, dashes).filter((a) => !a.startsWith('-')), ...rest.slice(dashes + 1)];
+      return specs.map(under);
+    }
   }
   return [];
+}
+
+/** git's global options that take the next word as their value (`git -C dir status`). */
+const GIT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
+  '-C',
+  '-c',
+  '--git-dir',
+  '--work-tree',
+  '--namespace',
+  '--super-prefix',
+  '--config-env',
+]);
+
+/**
+ * git's arguments with its global options in front skipped (`-C <dir>`, `-c <k=v>`,
+ * `--git-dir=…`, `--no-pager`, …): `rest` starts at the subcommand; `dirs` are the `-C` folders.
+ */
+function gitGlobals(args: readonly string[]): { dirs: string[]; rest: string[] } {
+  const dirs: string[] = [];
+  let k = 0;
+  while (k < args.length && args[k]!.startsWith('-') && args[k] !== '--') {
+    const a = args[k]!;
+    if (GIT_VALUE_OPTIONS.has(a)) {
+      if (a === '-C' && args[k + 1] !== undefined) dirs.push(args[k + 1]!);
+      k += 2;
+    } else k++;
+  }
+  return { dirs, rest: args.slice(k) };
+}
+
+/**
+ * A command's words from its name on, for matching and deriving prefix marks: the name as its
+ * basename (`/usr/bin/git` → `git`) and, for git, its global options skipped (`git -C . branch`
+ * → `git branch`).
+ */
+function normalisedWords(words: readonly string[]): string[] {
+  if (words.length === 0) return [];
+  const name = words[0]!.split('/').pop() || words[0]!;
+  if (name !== 'git') return [name, ...words.slice(1)];
+  return [name, ...gitGlobals(words.slice(1)).rest];
+}
+
+/** A plain word that names a subcommand (as the rule chooser reads one). */
+const SUBCOMMAND_WORD = /^[A-Za-z][A-Za-z0-9:_-]*$/;
+
+/**
+ * The words of a prefix mark: the chooser's prefix (`proposePrefix`) when it has one, else all
+ * the words of the part's first command; both from the normalised words (`normalisedWords`).
+ */
+function prefixWords(text: string): string[] {
+  const proposed = proposePrefix(text);
+  const all = partWords(text);
+  const n = normalisedWords(all);
+  if (proposed === undefined) return n.slice(0, MAX_PREFIX_WORDS);
+  const next = n[1];
+  return next !== undefined && SUBCOMMAND_WORD.test(next) ? n.slice(0, 2) : n.slice(0, 1);
 }
 
 /**
  * The targets a part names, resolved from `cwd`: its commands' `targetWords` and what the gate
  * reads as a path (`pathsInCommand`: absolute, `~`, `..` paths, option values such as `--out=/x`,
  * redirect targets). `unplaceable` when an argument or redirect target uses a variable other than
- * `$HOME`/`$PWD`, a substitution or `~user`, or the part cannot be read at all.
+ * `$HOME`/`$PWD`, a substitution or `~user`, or the part cannot be read at all. With `anyArg`
+ * (matching, never deriving), a part where none of those names a target has every plain
+ * non-option argument read as a possible one: the part is in the mark's category, so it acts on
+ * something, and a mark only ever makes the Waykeeper ask.
  */
 function placeOf(
   text: string,
   ctx: PolicyContext,
   cwd: string,
+  anyArg = false,
 ): { paths: Placed[]; unplaceable: boolean } {
   const lexed = lexCommand(text);
   if (lexed.opaque.length > 0) return { paths: [], unplaceable: true };
   const gate = pathsInCommand(text);
   if (gate.unresolvable.length > 0) return { paths: [], unplaceable: true };
   const words: string[] = [];
+  const plainArgs: string[] = [];
+  const names = new Set<string>();
   for (const c of lexed.commands) {
+    const h = commandHead(c.words);
+    const args = c.words.slice(h + 1);
+    if (c.words[h] !== undefined) names.add(c.words[h]);
     const shown = [
-      ...c.words.slice(commandHead(c.words) + 1),
+      ...args,
       ...c.redirects.filter((r) => !HEREDOC_OPS.has(r.op)).map((r) => r.target),
     ];
     if (shown.some((w) => unplaceable(expandKnown(w, cwd)))) {
       return { paths: [], unplaceable: true };
     }
     words.push(...targetWords(c.words));
+    plainArgs.push(...args.filter((w) => !w.startsWith('-')));
+  }
+  // Deriving, a command name the gate reads as a path (`/usr/bin/git`) is not a target.
+  const fromGate = anyArg ? gate.paths : gate.paths.filter((w) => !names.has(w));
+  const raws = [...words, ...fromGate].filter((w) => w !== '' && !HARMLESS_DEVICES.has(w));
+  const paths: Placed[] = [];
+  for (const raw of raws.length === 0 && anyArg ? plainArgs : raws) {
+    const placed = placeWord(raw, ctx, cwd);
+    if (placed === 'unplaceable') return { paths: [], unplaceable: true };
+    if (placed !== undefined) paths.push(placed);
+  }
+  return { paths, unplaceable: false };
+}
+
+/** One target word resolved from `cwd`; a glob as its folder before the first glob segment. */
+function placeWord(
+  raw: string,
+  ctx: PolicyContext,
+  cwd: string,
+): Placed | 'unplaceable' | undefined {
+  if (raw === '' || HARMLESS_DEVICES.has(raw)) return undefined;
+  const word = expandKnown(raw, cwd);
+  if (unplaceable(word)) return 'unplaceable';
+  const segments = word.split('/');
+  const g = segments.findIndex((s) => /[*?[\]{}]/.test(s));
+  const plain = g < 0 ? word : segments.slice(0, g).join('/') || (word.startsWith('/') ? '/' : '.');
+  return { path: unalias(resolvePath(plain, ctx, cwd), ctx), glob: g >= 0 };
+}
+
+/** Redirections that write their target. */
+const WRITE_REDIRECTS: ReadonlySet<string> = new Set(['>', '>>', '>|', '&>', '&>>', '<>', '>&']);
+
+/**
+ * The files a part edits from the shell, resolved from `cwd`: write-redirect targets, the files
+ * of `sed -i`, `tee`, `truncate`, `dd of=`, and the destination of `cp`/`mv`/`install` (with
+ * `<dest>/<source name>` too, in case the destination is a folder). `unplaceable` when one of
+ * those cannot be placed or the part cannot be read.
+ */
+function shellEdits(
+  text: string,
+  ctx: PolicyContext,
+  cwd: string,
+): { paths: Placed[]; unplaceable: boolean } {
+  const lexed = lexCommand(text);
+  if (lexed.opaque.length > 0) return { paths: [], unplaceable: true };
+  const raws: string[] = [];
+  for (const c of lexed.commands) {
+    for (const r of c.redirects) {
+      if (!WRITE_REDIRECTS.has(r.op) || /^(\d+|-)$/.test(r.target)) continue;
+      raws.push(r.target);
+    }
+    const h = commandHead(c.words);
+    const name = c.words[h]?.split('/').pop()?.toLowerCase();
+    const args = c.words.slice(h + 1);
+    const plain = args.filter((w) => !w.startsWith('-'));
+    if (name === 'sed' && args.some((a) => /^(-[a-zA-Z]*i|--in-place)/.test(a)))
+      raws.push(...plain);
+    else if (name === 'tee' || name === 'truncate') raws.push(...plain);
+    else if (name === 'dd')
+      raws.push(...args.filter((a) => a.startsWith('of=')).map((a) => a.slice(3)));
+    else if (name === 'cp' || name === 'mv' || name === 'install') {
+      const t = args.findIndex((a) => a === '-t' || a === '--target-directory');
+      const eq = args.find((a) => a.startsWith('--target-directory='));
+      const dest =
+        t >= 0
+          ? args[t + 1]
+          : eq !== undefined
+            ? eq.slice('--target-directory='.length)
+            : plain.at(-1);
+      if (dest === undefined) continue;
+      const sources = plain.filter(
+        (w, i) => w !== dest || (t < 0 && eq === undefined && i < plain.length - 1),
+      );
+      raws.push(dest, ...sources.map((s) => `${dest}/${s.split('/').filter(Boolean).pop() ?? s}`));
+    }
   }
   const paths: Placed[] = [];
-  for (const raw of [...words, ...gate.paths]) {
-    if (raw === '' || HARMLESS_DEVICES.has(raw)) continue;
-    const word = expandKnown(raw, cwd);
-    if (unplaceable(word)) return { paths: [], unplaceable: true };
-    const segments = word.split('/');
-    const g = segments.findIndex((s) => /[*?[\]{}]/.test(s));
-    const plain =
-      g < 0 ? word : segments.slice(0, g).join('/') || (word.startsWith('/') ? '/' : '.');
-    paths.push({ path: unalias(resolvePath(plain, ctx, cwd), ctx), glob: g >= 0 });
+  for (const raw of raws) {
+    const placed = placeWord(raw, ctx, cwd);
+    if (placed === 'unplaceable') return { paths: [], unplaceable: true };
+    if (placed !== undefined) paths.push(placed);
   }
   return { paths, unplaceable: false };
 }
@@ -393,7 +565,9 @@ function unplaceable(word: string): boolean {
 
 /**
  * Whether a target implies the folder mark: it is a mark path or inside one; a glob, or any target
- * of a delete mark, also when a mark path is inside it.
+ * of a delete mark, also when a mark path is inside it. Compared ignoring case too (macOS file
+ * systems are case-insensitive: `rm -rf NODE_MODULES` deletes `node_modules`), which can only
+ * make the Waykeeper ask.
  */
 function inMark(
   p: Placed,
@@ -406,9 +580,18 @@ function inMark(
     const m = unalias(raw, ctx);
     return (
       isInsideWorkspace(path, { ...ctx, workspace: m, cwd: m }) ||
-      (contains && isInsideWorkspace(m, { ...ctx, workspace: path, cwd: path }))
+      (contains && isInsideWorkspace(m, { ...ctx, workspace: path, cwd: path })) ||
+      within(m, path) ||
+      (contains && within(path, m))
     );
   });
+}
+
+/** Whether `child` is `parent` or inside it, both absolute, ignoring case. */
+function within(parent: string, child: string): boolean {
+  if (!isAbsolute(parent) || !isAbsolute(child)) return false;
+  const rel = relative(resolve(parent).toLowerCase(), resolve(child).toLowerCase());
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 /** `p` rewritten from another spelling of the workspace or cwd (`ctx.aliases`) to the context's. */
@@ -440,6 +623,70 @@ function hostsOf(c: Classification): string[] {
     .filter((f) => f.action === 'network')
     .flatMap((f) => f.hosts ?? [])
     .map((h) => h.toLowerCase());
+}
+
+/** A word that starts with a URL scheme (`https://`, `ftp://`, …). */
+const SCHEMED = /^[a-z][a-z0-9+.-]*:\/\//i;
+/** A schemeless `host[:port][/path]`, with an optional `user@` in front. */
+const HOST_LIKE = /^(?:[^\s/@]+@)?[a-z0-9-]+(?:\.[a-z0-9-]+)+\.?(?::\d+)?(?:[/?#]|$)/i;
+/** An scp-style git remote: `user@host:path`. */
+const SCP_LIKE = /^[^\s/@:]+@([a-z0-9-]+(?:\.[a-z0-9-]+)+)\.?:/i;
+
+/**
+ * The host a word names, or `undefined`: the word, or an option's value after `=` (`--url=…`),
+ * parsed as a URL (`https://` put in front of a schemeless `host/path`), lower-cased, its
+ * trailing dot stripped, userinfo and port dropped. `rank` orders a derivation: a URL with a
+ * scheme first, then a `host/path`, then a bare host-like word (which may be a file name).
+ */
+function hostOfWord(word: string): { host: string; rank: number } | undefined {
+  const eq = word.indexOf('=');
+  for (const w of eq > 0 ? [word, word.slice(eq + 1)] : [word]) {
+    const scp = SCP_LIKE.exec(w);
+    let url: string | undefined;
+    let rank = 0;
+    if (SCHEMED.test(w)) url = w;
+    else if (scp) return { host: scp[1]!.toLowerCase(), rank: 1 };
+    else if (HOST_LIKE.test(w)) {
+      url = `https://${w}`;
+      rank = /[/@:?#]/.test(w) ? 1 : 2;
+    }
+    if (url === undefined) continue;
+    let host: string;
+    try {
+      host = new URL(url).hostname.toLowerCase().replace(/\.+$/, '');
+    } catch {
+      continue;
+    }
+    if (host !== '') return { host, rank };
+  }
+  return undefined;
+}
+
+/**
+ * The hosts a part's own words name (`hostOfWord` over every word of every command), whether the
+ * request writes or not; ordered for a derivation (a URL with a scheme first).
+ */
+function wordHosts(text: string): string[] {
+  return lexCommand(text)
+    .commands.flatMap((c) => c.words)
+    .map(hostOfWord)
+    .filter((h) => h !== undefined)
+    .map((h, i) => ({ ...h, i }))
+    .sort((a, b) => a.rank - b.rank || a.i - b.i)
+    .map((h) => h.host);
+}
+
+/** The hosts the string inputs of a non-Bash call name with a scheme (a WebFetch's `url`). */
+function inputHosts(call: ToolCall): string[] {
+  const input =
+    typeof call.input === 'object' && call.input !== null && !Array.isArray(call.input)
+      ? (call.input as Record<string, unknown>)
+      : {};
+  return Object.values(input)
+    .filter((v): v is string => typeof v === 'string' && SCHEMED.test(v))
+    .map(hostOfWord)
+    .filter((h) => h !== undefined)
+    .map((h) => h.host);
 }
 
 /**
