@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-12 done (2026-11-14, branch `agent-waykeeper-approvals-fixes`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 12/12
+**Current task:** P13-13 · **Task status:** P13-09–P13-12 done (2026-11-14); auto mode P13-13–P13-18 todo (branch `agent-waykeeper-approvals-fixes`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 12/18
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -34,6 +34,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 
 | 8 | P13-09, P13-10, P13-11 | Follow-up from real use (added 2026-11-14): the Waykeeper approved none of 14 requests. |
 | 9 | P13-12 | Pre-existing gaps found in the follow-up's review (added 2026-11-14). |
+| 10 | P13-13 → P13-14 → P13-15 → P13-16 → P13-17 → P13-18 | Auto mode (added 2026-11-14), in order; plan `docs/superpowers/plans/2026-11-14-waykeeper-auto-mode.md`. |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -95,3 +96,27 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Status:** done (2026-11-14) · **Depends on:** P13-09 · **Parallel with:** —
 - Found in the final review of P13-09–P13-11, already true on `main`: a delete whose target is a bare variable the line never sets (`rm -rf $X` with `X` from the environment, `$1`, `$@`, `${!X}`) is not marked unplaceable, so it reaches the judge instead of Cosmin; and paths are compared as text, so a symlink planted in the worktree or scratch folder (`ln -s / $SD/l; rm -rf $SD/l/etc`) reads as inside. Decide with Cosmin first: forwarding every such delete adds cards (e.g. `git branch -D "$b"`).
 - **Cosmin's decision (2026-11-14):** keep asking for `rm -rf $X`; no agent creates symlinks; topic closed. SPEC decision 158. Done: every variable the line does not set to a literal, and every parameter, indirect name or command output, makes a delete unplaceable (forwarded); the gate refuses any command that makes a symbolic link, whatever the table or a rule says.
+
+### P13-13 — Auto flag, approval marks and approval parts: protocol and storage (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-12 · **Parallel with:** —
+- Plan Task 1. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
+
+### P13-14 — Approval marks: deriving and matching (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-13 · **Parallel with:** —
+- Plan Task 2. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
+
+### P13-15 — The Auto judge (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-14 · **Parallel with:** —
+- Plan Task 3. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
+
+### P13-16 — Auto mode and marks in the watch, the runtime and the routes (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-15 · **Parallel with:** —
+- Plan Task 4. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
+
+### P13-17 — Web: three-way switch, approvals log by category, marks (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-16 · **Parallel with:** —
+- Plan Task 5. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
+
+### P13-18 — Docs and gates (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-17 · **Parallel with:** —
+- Plan Task 6. Spec: `docs/superpowers/specs/2026-11-14-waykeeper-auto-mode-design.md`.
