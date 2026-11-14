@@ -163,6 +163,7 @@ import {
   setWaykeeperApprovals,
 } from './waykeeper-approvals.js';
 import { markFromApproval } from './approval-marks.js';
+import { scratchRoot } from '../workspace/workspaces.js';
 import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
 import {
@@ -1610,11 +1611,19 @@ export class Commands implements DomainCommands {
       parts: e.parts,
       ...(e.action !== undefined ? { action: e.action } : {}),
     };
-    const match = markFromApproval(approval, {
-      workspace: project.workspace,
-      cwd: e.cwd ?? project.workspace,
-      home: homedir(),
-    });
+    // Folder paths in the Steward's worktree or scratch folder are kept relative to them, so the
+    // mark applies to every Steward of the project.
+    let scratch: string | undefined;
+    try {
+      scratch = agent?.taskId ? scratchRoot(project.workspace, agent.taskId) : undefined;
+    } catch {
+      scratch = undefined;
+    }
+    const match = markFromApproval(
+      approval,
+      { workspace: project.workspace, cwd: e.cwd ?? project.workspace, home: homedir() },
+      { worktree: e.cwd, scratch },
+    );
     const made = {
       example: markExample(e.toolCall),
       fromSeq: input.seq,

@@ -231,6 +231,15 @@ describe('markLabel and ApprovalMark (P13-13)', () => {
     expect(markLabel({ kind: 'folder', category: 'edit_workspace', paths: ['/w/a', '/w/b'] })).toBe(
       'edits in /w/a, /w/b',
     );
+    expect(
+      markLabel({
+        kind: 'folder',
+        category: 'destructive',
+        paths: ['{worktree}/node_modules', '{scratch}', '{worktree}'],
+      }),
+    ).toBe(
+      "deletes in the Steward's worktree/node_modules, the Steward's scratch folder, the Steward's worktree",
+    );
     expect(markLabel({ kind: 'site', host: 'api.posthog.com' })).toBe('calls to api.posthog.com');
     expect(markLabel({ kind: 'prefix', words: ['pnpm', 'test'] })).toBe('pnpm test …');
     expect(markLabel({ kind: 'tool', toolName: 'WebFetch' })).toBe('the tool WebFetch');

@@ -390,8 +390,9 @@ function markForward(
   call: ApprovalWatchCall,
   parts: CommandPart[],
 ): { reason: string; part?: number } | undefined {
+  const roots = { worktree: call.ctx.cwd, scratch: call.scratch };
   const covers = (match: ApprovalMark['match'], some: CommandPart[]) =>
-    markCovers(match, { toolCall: call.toolCall, parts: some, ctx: call.ctx });
+    markCovers(match, { toolCall: call.toolCall, parts: some, ctx: call.ctx }, roots);
   const mark = call.marks().find((m) => covers(m.match, parts));
   if (!mark) return undefined;
   const part = parts.findIndex((_, n) => covers(mark.match, parts.slice(0, n + 1)));

@@ -246,3 +246,83 @@ describe('markFromApproval and markCovers', () => {
     });
   });
 });
+
+describe('folder marks relative to the Steward’s worktree and scratch folder (P13-16)', () => {
+  const t1 = { worktree: '/w/.worktrees/t1', scratch: '/w/.scratch/t1' };
+  const t2 = { worktree: '/w/.worktrees/t2', scratch: '/w/.scratch/t2' };
+  const ctx2: PolicyContext = { workspace: '/w', cwd: t2.worktree, home: '/Users/me' };
+  const coversIn2 = (match: ApprovalMarkMatch, command: string) => {
+    const toolCall = bash(command);
+    return markCovers(match, { toolCall, parts: partsOfCall(toolCall, ctx2), ctx: ctx2 }, t2);
+  };
+  const mark = markFromApproval({ toolCall: bash('rm -rf node_modules') }, ctx, t1);
+
+  it('stores a path in the worktree as {worktree}/<rest>', () => {
+    expect(mark).toEqual({
+      kind: 'folder',
+      category: 'destructive',
+      paths: ['{worktree}/node_modules'],
+    });
+    expect(markFromApproval({ toolCall: bash('rm -rf .') }, ctx, t1)).toEqual({
+      kind: 'folder',
+      category: 'destructive',
+      paths: ['{worktree}'],
+    });
+  });
+
+  it('stores a path in the scratch folder as {scratch}, the longer root first; others stay absolute', () => {
+    expect(
+      markFromApproval(
+        { toolCall: bash('rm -rf /w/.scratch/t1/out /tmp/x /w/.scratch/t1/out') },
+        ctx,
+        t1,
+      ),
+    ).toEqual({ kind: 'folder', category: 'destructive', paths: ['/tmp/x', '{scratch}/out'] });
+    const nested = { worktree: '/w/.worktrees/t1', scratch: '/w/.worktrees/t1/.tmp' };
+    expect(markFromApproval({ toolCall: bash('rm -rf .tmp/a') }, ctx, nested)).toEqual({
+      kind: 'folder',
+      category: 'destructive',
+      paths: ['{scratch}/a'],
+    });
+  });
+
+  it.each(['rm -rf node_modules/.cache', 'rm -rf /w/.worktrees/t2/node_modules', 'rm -rf .'])(
+    'covers %s run from another Steward’s worktree',
+    (command) => {
+      expect(coversIn2(mark, command)).toBe(true);
+    },
+  );
+
+  it.each(['rm -rf /w/.worktrees/t1/node_modules', 'rm -rf dist'])(
+    'does not cover %s from t2',
+    (command) => {
+      expect(coversIn2(mark, command)).toBe(false);
+    },
+  );
+
+  it('a {scratch} mark expands to the requester’s scratch folder, and to nothing without one', () => {
+    const scratchMark: ApprovalMarkMatch = {
+      kind: 'folder',
+      category: 'destructive',
+      paths: ['{scratch}/out'],
+    };
+    expect(coversIn2(scratchMark, 'rm -rf /w/.scratch/t2/out/a')).toBe(true);
+    expect(coversIn2(scratchMark, 'rm -rf /w/.scratch/t1/out/a')).toBe(false);
+    const toolCall = bash('rm -rf /w/.scratch/t2/out/a');
+    expect(
+      markCovers(
+        scratchMark,
+        { toolCall, parts: partsOfCall(toolCall, ctx2), ctx: ctx2 },
+        {
+          worktree: t2.worktree,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it('an absolute mark path matches as before', () => {
+    const abs = markFromApproval({ toolCall: bash('rm -rf /tmp/cache') }, ctx, t1);
+    expect(abs).toEqual({ kind: 'folder', category: 'destructive', paths: ['/tmp/cache'] });
+    expect(coversIn2(abs, 'rm -rf /tmp/cache/x')).toBe(true);
+  });
+});

@@ -757,6 +757,35 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     });
   }
 
+  it('a {worktree} mark covers the same place in the requesting Steward’s worktree', async () => {
+    const { judge, seen } = scripted(approve());
+    const relative = mark({
+      match: { kind: 'folder', category: 'destructive', paths: ['{worktree}/node_modules'] },
+    });
+    const { c, forward } = call('rm -rf node_modules/.cache', { marks: () => [relative] });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(forward.mock.calls[0]![0]).toMatchObject({
+      reason:
+        "You asked to be asked: deletes in the Steward's worktree/node_modules (from “rm -rf node_modules”).",
+      failingPart: 0,
+    });
+  });
+
+  it('a {scratch} mark uses the Steward’s scratch folder', async () => {
+    const { judge, seen } = scripted(approve());
+    const scratchMark = mark({
+      match: { kind: 'folder', category: 'destructive', paths: ['{scratch}/out'] },
+    });
+    const { c, forward } = call('rm -rf /work/proj/.scratch/t1/out/a', {
+      marks: () => [scratchMark],
+      scratch: '/work/proj/.scratch/t1',
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(forward.mock.calls[0]![0].reason).toMatch(/the Steward's scratch folder\/out/);
+  });
+
   it('a mark that does not cover the call leaves it to the judge', async () => {
     const { judge, seen } = scripted(approve());
     const { c, approve: approved } = call('rm -rf dist', { marks: () => [mark()] });

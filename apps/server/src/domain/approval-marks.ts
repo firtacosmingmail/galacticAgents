@@ -1,4 +1,4 @@
-import { isAbsolute, join, relative, sep } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import {
   approvalLogCategory,
   type ApprovalLogCategory,
@@ -44,6 +44,44 @@ const FOLDER_CATEGORY: Partial<Record<ApprovalLogCategory, PermissionAction>> = 
   read: 'read_workspace',
 };
 
+/**
+ * A Steward's own folders (P13-16): a folder mark stores a path inside one as `{worktree}/<rest>`
+ * or `{scratch}/<rest>`, and expands the token with the requesting Steward's folder, so a mark
+ * made in one task's worktree applies to the same place in every other task's.
+ */
+export interface MarkRoots {
+  worktree?: string | undefined;
+  scratch?: string | undefined;
+}
+
+const ROOT_TOKENS = [
+  ['{worktree}', 'worktree'],
+  ['{scratch}', 'scratch'],
+] as const;
+
+/** `path` with the longest root it is equal to or inside replaced by that root's token. */
+function tokenise(path: string, roots: MarkRoots | undefined): string {
+  const found = ROOT_TOKENS.flatMap(([token, key]) => {
+    const root = roots?.[key];
+    if (root === undefined) return [];
+    const rel = relative(resolve(root), path);
+    const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+    return inside ? [{ token, rel, length: resolve(root).length }] : [];
+  }).sort((a, b) => b.length - a.length)[0];
+  if (!found) return path;
+  return found.rel === '' ? found.token : `${found.token}/${found.rel.split(sep).join('/')}`;
+}
+
+/** A mark path with its token expanded to the requester's folder; `undefined` without that root. */
+function expand(path: string, roots: MarkRoots | undefined): string | undefined {
+  for (const [token, key] of ROOT_TOKENS) {
+    if (path !== token && !path.startsWith(`${token}/`)) continue;
+    const root = roots?.[key];
+    return root === undefined ? undefined : join(resolve(root), path.slice(token.length));
+  }
+  return path;
+}
+
 /** Longest prefix a mark keeps (`ApprovalMarkMatch` allows 20 words). */
 const MAX_PREFIX_WORDS = 20;
 
@@ -51,11 +89,13 @@ const MAX_PREFIX_WORDS = 20;
  * The mark made from one approval: `a.toolCall` as the event logged it, its `parts` when the event
  * carries them (else split again), its `action`; `ctx.cwd` is the approval's cwd. Always the same
  * JSON for the same approval (the store compares marks by `JSON.stringify`): keys in the schema's
- * order, folder paths de-duplicated and sorted, hosts lower-cased.
+ * order, folder paths tokenised by `roots` (the approving Steward's worktree and scratch folder),
+ * then de-duplicated and sorted, hosts lower-cased.
  */
 export function markFromApproval(
   a: { toolCall: ToolCall; parts?: CommandPart[] | undefined; action?: PermissionAction },
   ctx: PolicyContext,
+  roots?: MarkRoots,
 ): ApprovalMarkMatch {
   const { toolCall } = a;
   if (toolCall.toolName !== 'Bash') {
@@ -67,6 +107,7 @@ export function markFromApproval(
       return folderMark(
         category,
         files.map((p) => unalias(resolvePath(p, ctx, cwd), ctx)),
+        roots,
       );
     }
     const host = hostsOf(c)[0];
@@ -87,6 +128,7 @@ export function markFromApproval(
       return folderMark(
         category,
         placed.paths.map((p) => p.path),
+        roots,
       );
     }
   }
@@ -139,6 +181,8 @@ function approvedCwd(
 
 /**
  * Whether a request implies the mark `match`: any of its parts (or the non-Bash call itself) does.
+ * A folder mark's `{worktree}`/`{scratch}` paths are first expanded with the requesting Steward's
+ * `roots`; a token whose root is not given matches nothing.
  * - `folder`: the part has `match.category` and one of its targets is a mark path or inside one —
  *   or cannot be placed (a variable, a substitution, `~user`, a `cd` it cannot follow): it asks.
  *   A glob target matches when it may reach into a mark path; for a delete mark, so does a target
@@ -149,11 +193,18 @@ function approvedCwd(
  * - `tool`: the same tool.
  */
 export function markCovers(
-  match: ApprovalMarkMatch,
+  given: ApprovalMarkMatch,
   req: { toolCall: ToolCall; parts: CommandPart[]; ctx: PolicyContext },
+  roots?: MarkRoots,
 ): boolean {
   const { toolCall, ctx } = req;
-  if (match.kind === 'tool') return toolCall.toolName === match.toolName;
+  if (given.kind === 'tool') return toolCall.toolName === given.toolName;
+  let match = given;
+  if (given.kind === 'folder') {
+    const paths = given.paths.map((p) => expand(p, roots)).filter((p) => p !== undefined);
+    if (paths.length === 0) return false;
+    match = { ...given, paths };
+  }
 
   if (toolCall.toolName !== 'Bash') {
     const c = classifyToolCall(toolCall, ctx);
@@ -406,8 +457,16 @@ function startsWith(words: readonly string[], prefix: readonly string[]): boolea
   return words.length >= prefix.length && prefix.every((w, i) => words[i] === w);
 }
 
-function folderMark(category: PermissionAction, paths: string[]): ApprovalMarkMatch {
-  return { kind: 'folder', category, paths: [...new Set(paths)].sort() };
+function folderMark(
+  category: PermissionAction,
+  paths: string[],
+  roots: MarkRoots | undefined,
+): ApprovalMarkMatch {
+  return {
+    kind: 'folder',
+    category,
+    paths: [...new Set(paths.map((p) => tokenise(p, roots)))].sort(),
+  };
 }
 
 function siteMark(host: string): ApprovalMarkMatch {

@@ -269,7 +269,8 @@ describe('approval marks (P13-16)', () => {
         match: {
           kind: 'folder',
           category: 'destructive',
-          paths: [join(p.workspace, 'node_modules')],
+          // The Steward's own worktree is kept as a token: the mark binds every Steward.
+          paths: ['{worktree}/node_modules'],
         },
         example: 'rm -rf node_modules',
         fromSeq: seq,

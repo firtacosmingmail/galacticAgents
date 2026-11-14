@@ -41,7 +41,8 @@ export const MAX_APPROVAL_MARKS = 200;
 
 /**
  * What an approval mark matches (Auto mode, design 2026-11-14 §4.1): a folder (a category of
- * action inside these paths), a site (a network host), a command prefix, or a whole tool.
+ * action inside these paths; a path in the Steward's worktree or scratch folder is kept as
+ * `{worktree}/…` or `{scratch}/…`, so the mark applies to every Steward of the project), a site (a network host), a command prefix, or a whole tool.
  */
 export const ApprovalMarkMatch = z.discriminatedUnion('kind', [
   z.object({
@@ -130,11 +131,18 @@ const CATEGORY_WORDS: Partial<Record<PermissionAction, string>> = {
   push: 'pushes',
 };
 
+/** A folder mark's path in words: `{worktree}` / `{scratch}` as the Steward's own folders. */
+function markPathWords(path: string): string {
+  return path
+    .replace(/^\{worktree\}/, "the Steward's worktree")
+    .replace(/^\{scratch\}/, "the Steward's scratch folder");
+}
+
 /** A mark in words, for the marks list and the decision lines. */
 export function markLabel(match: ApprovalMarkMatch): string {
   switch (match.kind) {
     case 'folder':
-      return `${CATEGORY_WORDS[match.category] ?? match.category} in ${match.paths.join(', ')}`;
+      return `${CATEGORY_WORDS[match.category] ?? match.category} in ${match.paths.map(markPathWords).join(', ')}`;
     case 'site':
       return `calls to ${match.host}`;
     case 'prefix':
