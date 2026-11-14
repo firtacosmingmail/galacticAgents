@@ -296,6 +296,28 @@ describe('SDK request judge: Auto mode', () => {
     expect(sys).not.toContain('read versus write against the purpose');
   });
 
+  it('gives Auto its own parts wording: the send/spend test, never task fit', async () => {
+    const { sdk, judge } = setup(json(answer));
+    await judge.judge(auto, signal());
+    const sys = String(sdk.calls[0]!.options.systemPrompt);
+    expect(sys).toContain('Every part of a command must pass the send-or-spend test');
+    expect(sys).toMatch(/a later part .* sends or spends is the worst mistake/);
+    expect(sys).not.toContain('the task does not need');
+    expect(sys).not.toContain('fits the task');
+    // The three never-approve flags stay.
+    expect(sys).toContain('An unreadable part is never approved');
+    expect(sys).toContain('A part with outsideCwd is never approved');
+    expect(sys).toContain('Never approve a guarded part');
+  });
+
+  it('keeps the task-fit parts wording in task mode', async () => {
+    const { sdk, judge } = setup(json({ ...answer, sendsOrSpends: undefined }));
+    await judge.judge(input, signal());
+    const sys = String(sdk.calls[0]!.options.systemPrompt);
+    expect(sys).toContain('does something the task does not need is the worst mistake');
+    expect(sys).not.toContain('send-or-spend test');
+  });
+
   it('keeps the task prompt in task mode and does not need the field', async () => {
     const { sdk, judge } = setup(json({ ...answer, sendsOrSpends: undefined }));
     const v = await judge.judge(input, signal());
