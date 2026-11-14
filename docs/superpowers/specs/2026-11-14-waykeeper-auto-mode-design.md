@@ -146,6 +146,13 @@ by whom it was added, and **Remove**. They belong to the project and end with it
 only back to Auto's own rules, which Cosmin already turned on. A forwarded card says which mark sent
 it ("You asked to be asked: rm -rf node_modules").
 
+**As built (P13-14–P13-16, 2026-11-14).**
+- A folder mark's path inside the approving Steward's worktree or scratch folder is stored as `{worktree}/…` or `{scratch}/…` and expanded with the requesting Steward's own roots, so a mark applies to every Steward of the project; marks made from approvals recorded without `cwd` keep absolute paths.
+- A delete mark also covers deleting any folder that contains the marked one (`rm -rf .`, `git clean -fdx` from the worktree), because that deletes the marked folder. Edit and read marks cover only the path and what is inside it.
+- Deriving a mark follows the approved command's own `cd`s; when one cannot be followed it falls back to a prefix mark. Only file-argument commands (`rm`, `rmdir`, `unlink`, `mv`, `cp`, `shred`, `trash`, `find` start paths, `git clean` pathspecs) read plain words as targets; other commands use the engine's paths or a prefix mark (`git branch -D feat` makes "git branch …"). A target with a variable the engine cannot place makes a prefix mark (`rm …`).
+- The mark route is user-only, from anywhere, never from an agent; only a Waykeeper approval of that project, at most 10 days old by the server's clock; the example is redacted and cut to 300 characters. The 10-day button is computed when the log is read, so an entry crossing 10 days while open keeps its button and the server refuses it.
+- The send/spend quote is enforced in the approval watch (and in the SDK judge, Auto only); an Auto answer without a boolean `sendsOrSpends` forwards. Unparseable commands still forward in Auto; Cosmin's "Allow similar" rules and the table's allow still run before the Waykeeper.
+
 ### 4.6 Events and storage
 
 As decision 154: every change is an event in the same transaction as its domain change — the mode
