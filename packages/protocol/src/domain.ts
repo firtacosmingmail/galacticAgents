@@ -623,6 +623,18 @@ export function dismissalOf(
   return by.success && typeof reason === 'string' ? { by: by.data, reason } : undefined;
 }
 
+/** `meta.relaysQuestionId`: the question a question relays to the user (P13-10). */
+export const RELAYS_QUESTION_ID = 'relaysQuestionId';
+
+/**
+ * The id of the question `question` relays to the user (the Harmonizer's `ask_user` about a
+ * clarification it held, P13-10), from the row's `meta.relaysQuestionId`; `undefined` for none.
+ */
+export function relayedQuestionOf(question: Pick<Question, 'meta'> | undefined): Id | undefined {
+  const id = question?.meta?.[RELAYS_QUESTION_ID];
+  return typeof id === 'string' && id !== '' ? id : undefined;
+}
+
 export const Cost = z.object({
   usd: z.number().nonnegative().optional(),
   inputTokens: z.number().int().nonnegative().optional(),
