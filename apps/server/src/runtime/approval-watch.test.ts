@@ -258,6 +258,44 @@ describe('ApprovalWatch', () => {
       expect(context.parts[2]).toMatchObject({ text: 'rm -rf ../other', outsideCwd: true });
     });
 
+    it("a delete in the Steward's scratch folder reaches the judge (P13-09)", async () => {
+      const scratch = '/work/proj/.galactic/scratch/t1';
+      const command = `SD=${scratch}; rm $SD/*.log $SD/*.md; ls -A $SD`;
+      const { judge, seen } = scripted(approve({ kind: 'scratch cleanup' }));
+      const { c, approve: approved, forward } = call(command, { scratch });
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]!.request.parts[1]).toMatchObject({ text: 'rm "$SD/*.log" "$SD/*.md"' });
+      expect(seen[0]!.request.parts[1]!.outsideCwd).toBeUndefined();
+      expect(approved).toHaveBeenCalledTimes(1);
+      expect(forward).not.toHaveBeenCalled();
+
+      // Literally named, too.
+      const literal = scripted(approve({ kind: 'scratch cleanup' }));
+      const second = call(`rm -f ${scratch}/t964-a.log`, { scratch });
+      await new ApprovalWatch({ judge: literal.judge }).handle(second.c);
+      expect(literal.seen).toHaveLength(1);
+      expect(second.approve).toHaveBeenCalledTimes(1);
+    });
+
+    it('without a scratch folder, or outside it, the same delete forwards without the judge (P13-09)', async () => {
+      const scratch = '/work/proj/.galactic/scratch/t1';
+      for (const [command, over] of [
+        [`rm -f ${scratch}/a.log`, {}],
+        ['rm -f /tmp/claude-501/t964-a.log', { scratch }],
+        [`SD=$(mktemp -d); rm -rf $SD`, { scratch }],
+      ] as const) {
+        const { judge, seen } = scripted(approve());
+        const { c, approve: approved, forward } = call(command, over);
+        await new ApprovalWatch({ judge }).handle(c);
+        expect(seen).toHaveLength(0);
+        expect(approved).not.toHaveBeenCalled();
+        expect(forward.mock.calls[0]![0].reason).toContain(
+          "deletes outside the Steward's worktree and scratch folder",
+        );
+      }
+    });
+
     it.each(['rm -rf $(echo /)', 'rm -rf `echo build`'])(
       'a delete whose target is a substitution forwards without the judge (R9): %s',
       async (command) => {

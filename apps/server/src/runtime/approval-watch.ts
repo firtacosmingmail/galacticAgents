@@ -59,6 +59,11 @@ export interface ApprovalWatchCall {
   categories: PermissionAction[];
   /** The Steward's policy context: `cwd` is its worktree. */
   ctx: PolicyContext;
+  /**
+   * A project Steward's scratch folder (P13-09): a delete inside it counts as inside, like one in
+   * its worktree. Absent for an asteroid's Steward.
+   */
+  scratch?: string;
   /** The task, the user's words, the recent actions and the project's approvals; may throw. */
   facts: () => ApprovalFacts | undefined;
   /** False once the agent ended or is stopping, or the call was withdrawn: nothing is done. */
@@ -72,7 +77,7 @@ export interface ApprovalWatchCall {
 /** Why a part can never be approved by the judge, or `undefined` (design §5.4a). */
 function hardRule(part: CommandPart): string | undefined {
   if (part.guarded) return 'it writes agent or git configuration, or the deliverables folder';
-  if (part.outsideCwd) return "it deletes outside the Steward's worktree";
+  if (part.outsideCwd) return "it deletes outside the Steward's worktree and scratch folder";
   if (part.categories.includes('destructive') && /\$\(|`/.test(part.text)) {
     return 'it deletes a target that a command substitution decides';
   }
@@ -94,7 +99,8 @@ function hardRule(part: CommandPart): string | undefined {
  * timeout, fail-closed failures and cancel race.
  *
  * The judge is not trusted. The hard rules are decided here, before it is called and without it:
- * a guarded write (by a part or by the whole call), a delete outside the worktree, a delete whose
+ * a guarded write (by a part or by the whole call), a delete outside the worktree and the
+ * Steward's scratch folder, a delete whose
  * target a substitution decides, an unreadable part, and inline code or a script file whose raw
  * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
  * if every push or upload part is granted by a quote the server finds in the user's own words,
@@ -171,7 +177,11 @@ export class ApprovalWatch {
   }
 
   private async decide(call: ApprovalWatchCall): Promise<void> {
-    const parts = partsOfCall(call.toolCall, call.ctx);
+    const parts = partsOfCall(
+      call.toolCall,
+      call.ctx,
+      call.scratch !== undefined ? { scratch: call.scratch } : {},
+    );
     const shown = parts.map((p) => ({ ...p, text: redactSecrets(p.text) }));
     const unjudged = `not judged: ${call.toolCall.toolName}`.slice(0, MAX_KIND_CHARS);
     const forward = (
