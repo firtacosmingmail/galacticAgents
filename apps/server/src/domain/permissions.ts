@@ -2416,7 +2416,9 @@ function guardedTargets(
   }
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
-    for (const w of command.words.slice(h + 1)) {
+    const text = textArguments(command.words);
+    for (const [k, w] of command.words.entries()) {
+      if (k <= h || text.has(k)) continue;
       // Each comma part too (`-Wl,-o,.git/hooks/x`): fail closed for any program.
       for (const part of w.includes(',') ? [w, ...w.split(',')] : [w]) {
         const values = part.startsWith('-') ? optionValues(part) : [];
@@ -2531,7 +2533,9 @@ function pathsOf(command: SimpleCommand): CommandPaths {
   const add = (word: string, isTarget: boolean) => {
     for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word, clusters);
   };
-  for (const w of command.words) {
+  const text = textArguments(command.words);
+  for (const [k, w] of command.words.entries()) {
+    if (text.has(k)) continue;
     const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
     if (long !== undefined) add(long, false);
     add(w, false);
@@ -2547,6 +2551,29 @@ function pathsOf(command: SimpleCommand): CommandPaths {
     if (r.op === '<<' || r.op === '<<-' || r.op === '<<<') continue; // delimiter / string, not a file
     if ((r.op === '>&' || r.op === '<&') && /^(?:\d+-?|-)$/.test(r.target)) continue; // fd dup
     add(r.target, true);
+  }
+  return out;
+}
+
+/** gh's options whose value is a jq filter or a Go template (`--jq`/`-q`, `--template`/`-t`). */
+const GH_TEXT_OPTS = new Set(['--jq', '-q', '--template', '-t']);
+
+/**
+ * The indexes of a command's words that are text it reads, never a path (P13-11): the value of
+ * gh's `--jq`/`-q` and `--template`/`-t`, as the next word or glued with `=` (`--jq=.a`), for any
+ * gh subcommand. A filter like `.[].user.login` would otherwise read as a glob that may reach
+ * `.git`. Only the value: a redirection or another argument of the same command is still read.
+ */
+function textArguments(words: readonly string[]): Set<number> {
+  const out = new Set<number>();
+  const h = commandHead([...words]);
+  if (h >= words.length || baseName(words[h]!) !== 'gh') return out;
+  for (let k = h + 1; k < words.length; k++) {
+    const w = words[k]!;
+    if (w === '--') break;
+    const eq = w.indexOf('=');
+    if (w.startsWith('--') && eq > 0 && GH_TEXT_OPTS.has(w.slice(0, eq))) out.add(k);
+    else if (GH_TEXT_OPTS.has(w) && k + 1 < words.length) out.add(++k);
   }
   return out;
 }

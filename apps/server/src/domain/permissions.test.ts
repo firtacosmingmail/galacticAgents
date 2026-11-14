@@ -1070,3 +1070,33 @@ describe("an agent's own session tool-results folder (P14-11)", () => {
     expect(decisionOf('Read', { file_path: file }, { ...rctx, readableFolders: [] })).toBe('ask');
   });
 });
+
+describe("gh's --jq and --template values are not paths (P13-11)", () => {
+  const filters = [
+    "gh api repos/a/b/pulls/1/reviews --jq '.[].user.login'",
+    "gh api repos/a/b/pulls/1/reviews --jq '[.[] | {user: .user.login, state}] | group_by(.user) | map(.[-1])'",
+    "gh api repos/a/b/pulls/1/reviews --jq='.[].user.login'",
+    "gh pr view 1 --json reviews -q '.reviews[].author.login'",
+    "gh pr list --json title --template '{{range .}}{{.title}}/{{end}}'",
+    "gh api x -t '{{.a}}/../.git/x'",
+    "gh api x --template='{{.a}}/.claude/x'",
+  ];
+  it.each(filters)('%s: network only, not guarded', (command) => {
+    const c = classifyCommand(command, ctx);
+    expect(c.actions).toEqual(['network']);
+    expect(c.guarded).toBeUndefined();
+  });
+
+  it('a real guarded path in the same command is still guarded', () => {
+    const c = classifyCommand("gh api x --jq '.[].a' > ~/.gitconfig", ctx);
+    expect(c.guarded).toBe(true);
+    expect(c.actions).toContain('outside_workspace');
+    const d = classifyCommand('gh api x --jq .a --input .git/hooks/x', ctx);
+    expect(d.guarded).toBe(true);
+  });
+
+  it('the filter of another program is still read as before', () => {
+    expect(classifyCommand("jq '.[].user.login' x.json > .git/x", ctx).guarded).toBe(true);
+    expect(classifyCommand("curl https://x.example -o '.[].a'", ctx).guarded).toBe(true);
+  });
+});
