@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-09, P13-10, P13-11 · **Task status:** P13-09, P13-10, P13-11 in progress (follow-up from real use, branch `agent-waykeeper-approvals-fixes`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up in progress (8/11)
+**Current task:** P13-12 · **Task status:** P13-09, P13-10, P13-11 done (2026-11-14, branch `agent-waykeeper-approvals-fixes`); P13-12 todo
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 11/12
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -33,6 +33,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 7 | P13-08 | Steward scratch checkouts stay in the workspace (found in the test run; added 2026-11-09). |
 
 | 8 | P13-09, P13-10, P13-11 | Follow-up from real use (added 2026-11-14): the Waykeeper approved none of 14 requests. |
+| 9 | P13-12 | Pre-existing gaps found in the follow-up's review (added 2026-11-14). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -74,15 +75,22 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Done: a project Steward's prompt names its scratch folder `<workspace>/.galactic/scratch/<task-id>` and forbids files, clones and worktrees outside the workspace (other refs are read with `git log`/`git diff`/`git show`); `Workspaces.mergeTask` and `removeWorktree` remove that folder and any git worktree registered in it. SPEC decision 27 amended. Asteroid Stewards get no scratch folder (their folder may be someone's working copy). A `git worktree add` there still writes into `.git`, so it still asks.
 
 ### P13-09 — A Steward's own scratch and temp files are its own (added 2026-11-14)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-10, P13-11
+- **Status:** done (2026-11-14) · **Depends on:** — · **Parallel with:** P13-10, P13-11
 - Found in real use: 8 of the Waykeeper's 14 forwards were "deletes outside the Steward's worktree" for the Steward's own temporary files: `rm -f /tmp/claude-501/t964-*.log` (Claude Code's temp folder), `SD=<its scratch folder>; rm $SD/*.log` (the variable is not resolved, so the target "cannot be placed"), and deletes in its scratch folder, which does not count as its own.
 - Do: a destructive part inside the Steward's scratch folder counts as inside its workspace; a `NAME=<literal path>` assignment earlier in the same command is resolved when placing later parts; the Steward's processes get its scratch folder as their temp folder, so its temp files land there. Never: anything outside both the worktree and the scratch folder.
+- Done: SPEC 154 and TECHNOLOGY §3.10 amended. The scratch folder counts as the Steward's own in the splitter and the watch; `SpawnOptions.tempDir` sets `CLAUDE_CODE_TMPDIR` and `TMPDIR` for a project Steward in its own worktree. A literal variable set exactly once in the line places targets; loops, whitespace values, `IFS`, `trap`, namerefs, `eval`/`source` make names unknown (final review findings 1–3).
 
 ### P13-10 — Cosmin's picked answers and relayed questions grant a push (added 2026-11-14)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-09, P13-11
+- **Status:** done (2026-11-14) · **Depends on:** — · **Parallel with:** P13-09, P13-11
 - Found in real use: Cosmin picked "Push and post the 4 replies" on a Harmonizer question relaying the Waykeeper's "May I push?", and the push was still forwarded: a picked option was not his words, and the Harmonizer's question was not one of the project's. 5 of 14 forwards were pushes.
 - Do (amends decision 154, Cosmin's call 2026-11-14): his answer to a question the Harmonizer asked to relay a question of the project's agents counts; an option he picked counts as his words when the option names the action. The server's quote check (15 characters, verbatim) stays. The "Approved 3 times before" button is not offered on a push or an upload (it was offered and then refused).
+- Done: SPEC 154 and TECHNOLOGY §3.10 amended. The Harmonizer's `ask_user` takes `questionId` (stored as `meta.relaysQuestionId`). A picked option naming the action counts unless it holds back or negates, and is quoted only whole (`PICKED_OPTION_PREFIX`; final review finding 4). Pushes and uploads never record or offer a standing approval.
 
 ### P13-11 — A `gh --jq` filter is not a path (added 2026-11-14)
-- **Status:** in progress · **Depends on:** — · **Parallel with:** P13-09, P13-10
+- **Status:** done (2026-11-14) · **Depends on:** — · **Parallel with:** P13-09, P13-10
 - Found in real use: `gh api …/reviews --jq '.[].user.login'` was classified as "agent or git configuration" (guarded), so it could never be approved. The filter of `--jq`/`-q` and the template of `--template`/`-t` are not paths. This also affects the normal permission table.
+- Done: the value of `gh`'s `--jq`/`-q`/`--template`/`-t` is never a path, in the gate and the splitter.
+
+### P13-12 — Unplaceable delete targets and symlinks (added 2026-11-14)
+- **Status:** todo · **Depends on:** P13-09 · **Parallel with:** —
+- Found in the final review of P13-09–P13-11, already true on `main`: a delete whose target is a bare variable the line never sets (`rm -rf $X` with `X` from the environment, `$1`, `$@`, `${!X}`) is not marked unplaceable, so it reaches the judge instead of Cosmin; and paths are compared as text, so a symlink planted in the worktree or scratch folder (`ln -s / $SD/l; rm -rf $SD/l/etc`) reads as inside. Decide with Cosmin first: forwarding every such delete adds cards (e.g. `git branch -D "$b"`).
