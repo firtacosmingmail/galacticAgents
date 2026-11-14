@@ -238,6 +238,12 @@ export interface OpenQuestionInput {
    * user's).
    */
   toUser?: boolean;
+  /**
+   * The question this one relays to the user (P13-10): the Harmonizer's `ask_user` about a
+   * clarification it holds. Kept on the row as `meta.relaysQuestionId` (`relayedQuestionOf`), so
+   * the user's answer counts among the asking project's own words (`userWordsFor`).
+   */
+  relays?: Id;
 }
 
 export interface AnswerQuestionInput {

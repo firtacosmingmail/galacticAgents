@@ -4,6 +4,7 @@ import {
   AgentEvent,
   DISMISSED_BY_USER,
   QUESTION_SET_LIMITS,
+  RELAYS_QUESTION_ID,
   SetAnswer,
   SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
@@ -22,7 +23,7 @@ import {
   type StandingApprovalResult,
   type StandingApprovalInput,
   SIMILAR_APPROVALS_THRESHOLD,
-  needsUserQuote,
+  isPushOrUpload,
   type PermissionRule,
   type Project,
   type RemovePermissionRuleInput,
@@ -812,7 +813,7 @@ export class Commands implements DomainCommands {
    * the same command, so no supervisor holds it on the way and none is woken by it.
    */
   openQuestion(input: OpenQuestionInput) {
-    const { toUser, ...rest } = input;
+    const { toUser, relays, ...rest } = input;
     if (toUser && rest.kind !== 'clarification') {
       return Promise.reject(
         new DomainError('invalid', 'only a clarification is opened for the user explicitly'),
@@ -824,7 +825,11 @@ export class Commands implements DomainCommands {
         {
           ...rest,
           id: `q-${randomUUID()}`,
-          meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+          meta: {
+            source: COMMAND_SOURCE,
+            ...(toUser ? { toUser: true } : {}),
+            ...(relays ? { [RELAYS_QUESTION_ID]: relays } : {}),
+          },
         },
         this.questions,
         toUser ? { type: 'user' } : undefined,
@@ -1459,10 +1464,7 @@ export class Commands implements DomainCommands {
         `a standing approval needs ${SIMILAR_APPROVALS_THRESHOLD} similar approvals first`,
       );
     }
-    if (
-      question.context.permissionAction === 'push' ||
-      forward.parts.some((p) => p.categories.includes('push') || needsUserQuote(p))
-    ) {
+    if (isPushOrUpload(question.context)) {
       throw new DomainError(
         'invalid',
         'a push or an upload is never a standing approval: allow it once',

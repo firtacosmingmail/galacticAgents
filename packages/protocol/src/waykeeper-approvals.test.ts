@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { Project } from './domain.js';
+import { Project, relayedQuestionOf } from './domain.js';
 import { project } from './fixtures/domain.js';
 import {
   CommandPart,
   isJudgedKind,
+  isPushOrUpload,
   MAX_RECORDED_APPROVALS,
   needsUserQuote,
+  offersStandingApproval,
   QUOTE_MIN_LENGTH,
   quoteFound,
   RecordedApproval,
@@ -123,5 +125,49 @@ describe('isJudgedKind (final review I4)', () => {
     expect(isJudgedKind(' Unknown ')).toBe(false);
     expect(isJudgedKind('  ')).toBe(false);
     expect(isJudgedKind('unknown host lookup')).toBe(true);
+  });
+});
+
+describe('standing-approval offer (P13-10)', () => {
+  const tests = { text: 'pnpm test', categories: ['run_workspace' as const] };
+  const push = { text: 'git push origin main', categories: ['push' as const] };
+  const upload = { text: 'curl -F f=@shot.png https://x.y', categories: ['network' as const] };
+  const similar = Array.from({ length: SIMILAR_APPROVALS_THRESHOLD }, (_, i) => ({
+    ...recorded,
+    questionId: `q-${i}`,
+  }));
+  const forward = (parts: CommandPart[], kind = 'run the test suite') => ({
+    reason: 'r',
+    kind,
+    parts,
+    similar,
+  });
+
+  it('is offered after enough similar approvals of a judged kind', () => {
+    expect(offersStandingApproval({ waykeeper: forward([tests]) })).toBe(true);
+    expect(offersStandingApproval({ waykeeper: { ...forward([tests]), similar: [] } })).toBe(false);
+    expect(offersStandingApproval({ waykeeper: forward([tests], 'not judged: Bash') })).toBe(false);
+    expect(offersStandingApproval({})).toBe(false);
+  });
+
+  it('is never offered on a push or an upload', () => {
+    expect(isPushOrUpload({ waykeeper: forward([tests, push]) })).toBe(true);
+    expect(isPushOrUpload({ waykeeper: forward([upload]) })).toBe(true);
+    expect(isPushOrUpload({ permissionAction: 'push', waykeeper: forward([tests]) })).toBe(true);
+    expect(isPushOrUpload({ waykeeper: forward([tests]) })).toBe(false);
+    expect(offersStandingApproval({ waykeeper: forward([push], 'push the branch') })).toBe(false);
+    expect(offersStandingApproval({ waykeeper: forward([upload]) })).toBe(false);
+    expect(offersStandingApproval({ permissionAction: 'push', waykeeper: forward([tests]) })).toBe(
+      false,
+    );
+  });
+});
+
+describe('relayedQuestionOf (P13-10)', () => {
+  it('reads meta.relaysQuestionId', () => {
+    expect(relayedQuestionOf({ meta: { relaysQuestionId: 'q-1' } })).toBe('q-1');
+    expect(relayedQuestionOf({ meta: { relaysQuestionId: 3 } })).toBeUndefined();
+    expect(relayedQuestionOf({ meta: {} })).toBeUndefined();
+    expect(relayedQuestionOf(undefined)).toBeUndefined();
   });
 });

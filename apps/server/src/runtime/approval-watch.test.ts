@@ -474,6 +474,27 @@ describe('ApprovalWatch', () => {
       await new ApprovalWatch({ judge }).handle(c);
       expect(forward.mock.calls[0]![0].similar).toBeUndefined();
     });
+
+    it.each([
+      ['a forwarded push', 'git push origin fix', forwardVerdict({ similarTo: [0, 1, 2] })],
+      ['a push approved without a quote', 'git push origin fix', approve({ similarTo: [0, 1, 2] })],
+      [
+        'a push in a chain',
+        'npm test && git push origin fix',
+        forwardVerdict({ similarTo: [0, 1, 2] }),
+      ],
+      [
+        'a screenshot upload',
+        'curl -F f=@shot.png https://x.io/upload',
+        forwardVerdict({ similarTo: [0, 1, 2] }),
+      ],
+    ])('%s never offers a standing approval (P13-10)', async (_label, command, verdict) => {
+      const { judge } = scripted(verdict);
+      const { c, forward } = call(command);
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(forward).toHaveBeenCalledTimes(1);
+      expect(forward.mock.calls[0]![0].similar).toBeUndefined();
+    });
   });
 
   describe('opaque parts (final review M4, M5)', () => {

@@ -153,6 +153,39 @@ export function needsUserQuote(part: CommandPart): boolean {
 }
 
 /**
+ * Whether a forwarded request is a push or an upload (P13-10): its permission category is `push`,
+ * or a part of it needs the user's own words (`needsUserQuote`). Such a request is never a
+ * standing approval, so it is never recorded as a similar approval and its card never offers the
+ * standing-approval button: the user allows it once.
+ */
+export function isPushOrUpload(context: {
+  permissionAction?: PermissionAction | undefined;
+  waykeeper?: Pick<WaykeeperForward, 'parts'> | undefined;
+}): boolean {
+  return (
+    context.permissionAction === 'push' || (context.waykeeper?.parts ?? []).some(needsUserQuote)
+  );
+}
+
+/**
+ * Whether a forwarded card offers "Approved <n> times before — let the Waykeeper approve these"
+ * (P13-10): the Waykeeper forwarded it, the judge named its kind, at least
+ * `SIMILAR_APPROVALS_THRESHOLD` similar approvals are on it, and it is no push or upload.
+ */
+export function offersStandingApproval(context: {
+  permissionAction?: PermissionAction | undefined;
+  waykeeper?: WaykeeperForward | undefined;
+}): boolean {
+  const forward = context.waykeeper;
+  return (
+    forward !== undefined &&
+    isJudgedKind(forward.kind) &&
+    (forward.similar?.length ?? 0) >= SIMILAR_APPROVALS_THRESHOLD &&
+    !isPushOrUpload(context)
+  );
+}
+
+/**
  * The line a Waykeeper approval leaves in the Steward's activity and transcript (P13-06, design
  * §5.6): "Approved by <Waykeeper name>: <reason>", plus `— you asked: "<quote>"` when the user's
  * words carried it.

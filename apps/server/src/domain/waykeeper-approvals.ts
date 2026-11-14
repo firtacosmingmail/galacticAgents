@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   isJudgedKind,
+  isPushOrUpload,
   MAX_RECORDED_APPROVALS,
   type Actor,
   type Id,
@@ -161,7 +162,7 @@ export function projectIdOfAsker(ctx: CommandContext, question: Question): Id | 
  * the asking agent's project in the answer's own transaction, with the kind the judge named and a
  * redacted one-line summary of the call (the precedent line). Anything else records nothing: a deny,
  * a plain permission request, an answer by anyone but the user, a project that ended, a forward
- * whose kind is a placeholder (`isJudgedKind`).
+ * whose kind is a placeholder (`isJudgedKind`), a push or an upload (`isPushOrUpload`, P13-10).
  */
 export function recordForwardedAllow(
   ctx: CommandContext,
@@ -175,6 +176,8 @@ export function recordForwardedAllow(
   if (answer !== 'allow' || by.type !== 'user') return;
   // A placeholder kind (a request the judge never named) is no kind to repeat (final review I4).
   if (!isJudgedKind(forward.kind)) return;
+  // A push or an upload can never become a standing approval (P13-10): no repeat to count.
+  if (isPushOrUpload(question.context)) return;
   const projectId = projectIdOfAsker(ctx, question);
   const project = projectId ? ctx.tables.projects.get(projectId) : undefined;
   if (!project || RULES_END_IN.has(project.state)) return;
