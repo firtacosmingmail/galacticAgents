@@ -2,7 +2,7 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { relayedQuestionOf, type Id } from '@galactic/protocol';
+import { PICKED_OPTION_PREFIX, relayedQuestionOf, type Id } from '@galactic/protocol';
 import { userWordsFor } from '../../runtime/user-words.js';
 import { brainDefinition } from '../testing/canned.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
@@ -98,7 +98,9 @@ describe('ask_user relays a held question (P13-10)', () => {
       answer: 'Push and post the 4 replies',
       by: { type: 'user' },
     });
-    expect(userWordsFor(h.log, task.id)).toContain('Push and post the 4 replies');
+    expect(userWordsFor(h.log, task.id)).toContain(
+      `${PICKED_OPTION_PREFIX}Push and post the 4 replies`,
+    );
   });
 
   it('refuses a link to a question it does not hold', async () => {

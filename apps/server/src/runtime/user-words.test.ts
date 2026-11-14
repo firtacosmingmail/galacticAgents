@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { quoteFound, type Actor, type Id, type Question } from '@galactic/protocol';
+import {
+  PICKED_OPTION_PREFIX,
+  quoteFound,
+  type Actor,
+  type Id,
+  type Question,
+} from '@galactic/protocol';
 import { createAgent } from '../domain/agents.js';
 import type { CommandContext } from '../domain/event-log.js';
 import { createProject } from '../domain/projects.js';
@@ -222,14 +228,49 @@ describe('userWordsFor', () => {
     offered('q-3', 'Post the replies — and tag Dean', ['Post the replies', 'Hold']);
     offered('q-4', 'x', ['Deploy to staging', 'Hold'], { choices: ['Deploy to staging'] });
     offered('q-5', 'Hold', ['Merge it', 'Hold']);
+    const P = PICKED_OPTION_PREFIX;
     expect(userWordsFor(w.log, task.id)).toEqual([
-      'Push the branch to origin',
-      'Upload the screenshot',
-      'Open a PR',
-      'Post the replies',
+      `${P}Push the branch to origin`,
+      `${P}Upload the screenshot`,
+      `${P}Open a PR`,
+      `${P}Post the replies`,
       'and tag Dean',
-      'Deploy to staging',
+      `${P}Deploy to staging`,
     ]);
+  });
+
+  it('never counts a picked option that holds or negates; a picked one is quoted whole only (P13-10 review)', () => {
+    const w = setup();
+    const { task, steward } = project(w);
+    const offered = (id: Id, answer: string, options: string[]) =>
+      w.run((ctx) => {
+        const q = answered(ctx, id, steward.id, answer, USER);
+        ctx.tables.questions.upsert({ ...q, context: { ...q.context, options } });
+      });
+    const hold = 'Hold — do not push the branch to origin main yet';
+    offered('q-1', hold, ['Push now', hold]);
+    for (const [i, o] of [
+      "Don't push the branch yet",
+      'Never merge it',
+      'No upload, thanks',
+      'Wait, then push',
+      'Skip the push',
+      'Cancel the release',
+      'Stop deploying',
+      'Merge without the tests',
+      'NOT the PR comment',
+    ].entries()) {
+      offered(`q-n${i}`, o, [o, 'Go']);
+    }
+    expect(userWordsFor(w.log, task.id)).toEqual([]);
+    expect(quoteFound('push the branch to origin main', userWordsFor(w.log, task.id))).toBe(false);
+
+    const push = 'Push and post the 4 replies';
+    offered('q-2', push, [push, hold]);
+    const words = userWordsFor(w.log, task.id);
+    expect(words).toEqual([`${PICKED_OPTION_PREFIX}${push}`]);
+    expect(quoteFound(push, words)).toBe(true);
+    expect(quoteFound('Push and post the 4', words)).toBe(false);
   });
 
   describe("the Harmonizer's relay of a project agent's question (P13-10)", () => {
@@ -269,7 +310,7 @@ describe('userWordsFor', () => {
       const { task, wk } = project(w);
       relay(w, wk.id, 'Push and post the 4 replies');
       const words = userWordsFor(w.log, task.id);
-      expect(words).toEqual(['Push and post the 4 replies']);
+      expect(words).toEqual([`${PICKED_OPTION_PREFIX}Push and post the 4 replies`]);
       expect(quoteFound('Push and post the 4 replies', words)).toBe(true);
     });
 

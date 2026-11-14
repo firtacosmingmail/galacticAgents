@@ -8,6 +8,7 @@ import {
   MAX_RECORDED_APPROVALS,
   needsUserQuote,
   offersStandingApproval,
+  PICKED_OPTION_PREFIX,
   QUOTE_MIN_LENGTH,
   quoteFound,
   RecordedApproval,
@@ -100,6 +101,20 @@ describe('quoteFound', () => {
   });
   it('refuses a quote that is absent', () => {
     expect(quoteFound('delete everything now please', words)).toBe(false);
+  });
+  it('accepts a picked option only quoted whole, the marker optional (P13-10 review)', () => {
+    const picked = [`${PICKED_OPTION_PREFIX}Push and post the 4  replies`];
+    expect(quoteFound('Push and post the 4 replies', picked)).toBe(true);
+    expect(quoteFound(` Push and post the\n4 replies `, picked)).toBe(true);
+    expect(quoteFound(`${PICKED_OPTION_PREFIX}Push and post the 4 replies`, picked)).toBe(true);
+    expect(quoteFound('Push and post the 4', picked)).toBe(false);
+    expect(quoteFound('post the 4 replies', picked)).toBe(false);
+    const hold = [`${PICKED_OPTION_PREFIX}Hold — do not push the branch to origin main yet`];
+    expect(quoteFound('push the branch to origin main', hold)).toBe(false);
+  });
+  it('free text still grants by any long enough substring, beside a picked option', () => {
+    const said = [`${PICKED_OPTION_PREFIX}Hold`, 'ok, push the branch to origin main now'];
+    expect(quoteFound('push the branch to origin main', said)).toBe(true);
   });
 });
 

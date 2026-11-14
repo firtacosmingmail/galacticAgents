@@ -1,4 +1,5 @@
 import {
+  PICKED_OPTION_PREFIX,
   answerDetailOf,
   relayedQuestionOf,
   type Agent,
@@ -44,8 +45,9 @@ interface Said {
  *     project's Waykeepers;
  *   - his answers (`answeredBy` the user) to questions of the project's agents, and to the
  *     Harmonizer's questions that relay one of theirs (`relayedQuestionOf`, P13-10): what he wrote
- *     (`freeTextOf`), plus each option he picked that names a push or an upload (`pickedActionsOf`;
- *     a bare "Yes" or "Hold" never counts);
+ *     (`freeTextOf`), plus each option he picked that names a push or an upload and holds nothing
+ *     back (`pickedActionsOf`; a bare "Yes" or "Hold" never counts), marked
+ *     `PICKED_OPTION_PREFIX`;
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
@@ -138,14 +140,22 @@ const ACTION_WORDS =
 /** The marker an agent puts on its suggested option, dropped before the option counts as words. */
 const RECOMMENDED = /\s*\(recommended\)\s*$/i;
 
+/**
+ * Words that hold an action back or negate it (P13-10 review): a picked option with one of them
+ * ("Hold — do not push the branch yet", "Push only, no replies") never counts, even when it names
+ * the action.
+ */
+const HOLDS = /\b(?:not|don'?t|do not|never|no|hold|wait|skip|cancel|stop|without)\b/i;
+
 /** Whether `option` names a push or upload action (`ACTION_WORDS`). */
 export function namesAction(option: string): boolean {
   return ACTION_WORDS.test(option);
 }
 
 /**
- * The options the user picked that name a push or upload action (P13-10, Cosmin 2026-11-14), each
- * without its " (Recommended)" marker: a single pick, a multi-select pick (joined by `CHOICE_JOIN`)
+ * The options the user picked that name a push or upload action and hold nothing back (`HOLDS`)
+ * (P13-10, Cosmin 2026-11-14), each without its " (Recommended)" marker and marked
+ * `PICKED_OPTION_PREFIX` so the quote check takes it whole only: a single pick, a multi-select pick (joined by `CHOICE_JOIN`)
  * or the options before "<options> — <text>"; a question-set row's `answerDetail.choices`.
  */
 function pickedActionsOf(q: Question, answer: string): string[] {
@@ -166,7 +176,13 @@ function pickedActionsOf(q: Question, answer: string): string[] {
       picked = splitOptions(a.slice(0, at).trim(), options) ?? [];
     }
   }
-  return [...new Set(picked.map((o) => o.replace(RECOMMENDED, '').trim()).filter(namesAction))];
+  return [
+    ...new Set(
+      picked
+        .map((o) => o.replace(RECOMMENDED, '').trim())
+        .filter((o) => namesAction(o) && !HOLDS.test(o)),
+    ),
+  ].map((o) => `${PICKED_OPTION_PREFIX}${o}`);
 }
 
 /** How a multi-select answer joins its choices, and its choices to its text (`renderSetAnswer`). */

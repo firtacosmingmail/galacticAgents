@@ -133,12 +133,26 @@ export const QUOTE_MIN_LENGTH = 15;
 const normaliseWords = (text: string): string => text.replace(/\s+/g, ' ').trim();
 
 /**
+ * The marker before an option the user picked among the user's words (P13-10): the option is the
+ * asking agent's text, which the user chose whole, so a quote of it must be the whole option.
+ */
+export const PICKED_OPTION_PREFIX = 'Picked option: ';
+
+/**
  * Whether `quote` appears verbatim in one of the user's own `words`, whitespace runs collapsed and
- * both sides trimmed, and is at least `QUOTE_MIN_LENGTH` characters (design 5.4a, 6).
+ * both sides trimmed, and is at least `QUOTE_MIN_LENGTH` characters (design 5.4a, 6). A word that
+ * starts with `PICKED_OPTION_PREFIX` is a picked option: only the whole option matches (with or
+ * without the marker), never a piece of it ("Hold — do not push …" grants no "push …").
  */
 export function quoteFound(quote: string, words: readonly string[]): boolean {
   const q = normaliseWords(quote);
-  return q.length >= QUOTE_MIN_LENGTH && words.some((w) => normaliseWords(w).includes(q));
+  if (q.length < QUOTE_MIN_LENGTH) return false;
+  return words.some((w) => {
+    const n = normaliseWords(w);
+    const marker = normaliseWords(PICKED_OPTION_PREFIX);
+    if (!n.startsWith(marker)) return n.includes(q);
+    return q === n || q === normaliseWords(n.slice(marker.length));
+  });
 }
 
 const IMAGE_FILE = /\.(png|jpe?g|gif|webp|heic)\b/i;
