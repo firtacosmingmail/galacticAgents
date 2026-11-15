@@ -380,19 +380,14 @@ describe('setWaykeeperApprovals', () => {
       origin: 'remote',
     });
     expect(s.proj().waykeeperApprovals).toBeUndefined();
-    const remote = await s.refusal(
-      s.commands.setWaykeeperApprovals({
-        projectId: s.project.id,
-        on: true,
-        by: USER,
-        origin: 'remote',
-      }),
-    );
-    expect(remote.code).toBe('remote_control');
-    const unknown = await s.refusal(
-      s.commands.setWaykeeperApprovals({ projectId: s.project.id, on: true, by: USER }),
-    );
-    expect(unknown.code).toBe('remote_control');
+    // From the phone too (Cosmin, 2026-11-15).
+    const remote = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      by: USER,
+      origin: 'remote',
+    });
+    expect(remote.value.waykeeperApprovals).toBe(true);
     const agent = await s.refusal(
       s.commands.setWaykeeperApprovals({
         projectId: s.project.id,
@@ -404,24 +399,14 @@ describe('setWaykeeperApprovals', () => {
     expect(agent.code).toBe('invalid');
   });
 
-  it('turns Auto on only from the Mac, and turns it off from anywhere (P13-13)', async () => {
+  it('turns Auto on and off from anywhere (P13-13; the phone too, 2026-11-15)', async () => {
     const s = setup();
-    const refused = await s.refusal(
-      s.commands.setWaykeeperApprovals({
-        projectId: s.project.id,
-        on: true,
-        auto: true,
-        by: USER,
-        origin: 'remote',
-      }),
-    );
-    expect(refused.code).toBe('remote_control');
     const on = await s.commands.setWaykeeperApprovals({
       projectId: s.project.id,
       on: true,
       auto: true,
       by: USER,
-      origin: 'local',
+      origin: 'remote',
     });
     expect(on.value).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
     const down = await s.commands.setWaykeeperApprovals({

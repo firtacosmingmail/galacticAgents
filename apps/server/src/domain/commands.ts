@@ -1530,21 +1530,15 @@ export class Commands implements DomainCommands {
     }
   }
 
-  /** The user turns a project's Waykeeper approvals on or off (P13-05): on needs the Mac. */
+  /**
+   * The user turns a project's Waykeeper approvals on, to Auto, or off (P13-05, P13-13), from the
+   * Mac or the phone (Cosmin, 2026-11-15; SPEC decision 160). Never an agent: the route refuses
+   * an agent's process, and only `by: user` is accepted here.
+   */
   setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>> {
     if (input.by.type !== 'user') {
       return Promise.reject(
         new DomainError('invalid', 'only the user switches Waykeeper approvals'),
-      );
-    }
-    // Turning it on, or Auto on, needs the Mac; lowering Auto to plain approvals does not.
-    const switchOff = !this.log.tables.projects.get(input.projectId)?.waykeeperApprovals;
-    if (input.on && (input.auto || switchOff) && !this.mayWriteRules(input.origin)) {
-      return Promise.reject(
-        new DomainError(
-          'remote_control',
-          'Waykeeper approvals are turned on only from this machine',
-        ),
       );
     }
     return this.run((ctx) => {

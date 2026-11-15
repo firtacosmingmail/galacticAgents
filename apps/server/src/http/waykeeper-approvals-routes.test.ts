@@ -168,7 +168,7 @@ describe('POST /api/questions/:id/standing-approval', () => {
 });
 
 describe('PUT /api/projects/:id/waykeeper-approvals', () => {
-  it('turns on from the Mac, off from anywhere; on from remote is 403', async () => {
+  it('turns on and off from anywhere, the phone too', async () => {
     await setup();
     const p = await newProject();
     expect(
@@ -183,12 +183,11 @@ describe('PUT /api/projects/:id/waykeeper-approvals', () => {
     const remote = await call(
       'PUT',
       `/api/projects/${p.id}/waykeeper-approvals`,
-      { on: true },
+      { on: true, auto: true },
       REMOTE,
     );
-    expect(remote.status).toBe(403);
-    expect(remote.body['error']).toBe('remote_control');
-    expect(project(p.id).waykeeperApprovals).toBeUndefined();
+    expect(remote.status).toBe(200);
+    expect(project(p.id)).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
     expect(
       (await call('PUT', `/api/projects/${p.id}/waykeeper-approvals`, { on: 'yes' })).status,
     ).toBe(400);

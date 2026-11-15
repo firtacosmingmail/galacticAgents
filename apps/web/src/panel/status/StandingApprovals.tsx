@@ -5,9 +5,9 @@ import { ApprovalsLog, when } from './ApprovalsLog.js';
 /**
  * A project's Waykeeper approvals (P13-06, design §5.6; SPEC decision 154), beside its "Allow
  * similar" rules: the switch "Waykeeper approves Stewards' requests" and the standing approvals,
- * each with what it covers, who made it and when, and a Remove button. Turning the switch on is
- * the Mac's alone: from a remote client the server answers 403 and its message shows here, next
- * to the switch. Turning it off and removing a standing approval work from anywhere.
+ * each with what it covers, who made it and when, and a Remove button. The switch, Auto included,
+ * and removing a standing approval work from anywhere, the phone too (SPEC decision 160); a
+ * refusal from the server shows its message here, next to the switch.
  */
 
 /** "added <when>", then " by the Waykeeper" and " from a remote client" when so. */

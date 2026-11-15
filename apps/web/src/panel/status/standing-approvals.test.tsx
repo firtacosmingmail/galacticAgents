@@ -85,7 +85,7 @@ describe('the Waykeeper approvals switch and standing approvals (P13-06)', () =>
     expect(api.setWaykeeperApprovals).toHaveBeenCalledWith('p-1', true, true);
   });
 
-  it('shows the server’s message next to the switch when a remote “on” is refused', async () => {
+  it('shows the server’s message next to the switch when it is refused', async () => {
     api.setWaykeeperApprovals.mockRejectedValueOnce(
       new ApiError(403, 'Turn this on from the Mac itself.', 'remote_control'),
     );
