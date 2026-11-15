@@ -21,7 +21,7 @@ Per-task reviews of Waykeeper auto mode and a final review of the whole branch `
 ## Known limits
 
 - Shell edits are recognised for redirects, `sed -i`, `tee`, `truncate`, `dd of=` and `cp`/`mv`/`install` destinations only. `perl -i`, `awk -i inplace`, `patch` and editors run from the shell are not. An edit by a script or inline code is not seen either.
-- Host-looking words include file names such as `out.json`. Matching then asks more, never less. A derived site prefers a URL with a scheme.
+- Host-looking words include file names such as `out.json`. Matching then asks more, never less. A derived site prefers a URL with a scheme, and puts last a bare host-like word right after an option (`curl -o out.json api.posthog.com` derives `api.posthog.com`, fixed after the final review).
 - With the any-argument fallback, a mark can also ask about requests that merely name the marked folder in a part of the same category.
 - Some marks are broad: `rm -rf $X` gives the prefix mark `rm …`, and `git clean -fdx` gives a delete mark on the whole worktree. Both ask more, never less. A warning on broad marks is left for Cosmin.
 - A request forwarded by the mark re-check after the judge still offers a standing approval.

@@ -664,12 +664,21 @@ function hostOfWord(word: string): { host: string; rank: number } | undefined {
 
 /**
  * The hosts a part's own words name (`hostOfWord` over every word of every command), whether the
- * request writes or not; ordered for a derivation (a URL with a scheme first).
+ * request writes or not; ordered for a derivation (a URL with a scheme first). A bare host-like
+ * word right after an option (`-o out.json`, `-T report.pdf`) is most likely that option's file,
+ * so it comes last: `curl -o out.json api.posthog.com` derives `api.posthog.com`.
  */
 function wordHosts(text: string): string[] {
   return lexCommand(text)
-    .commands.flatMap((c) => c.words)
-    .map(hostOfWord)
+    .commands.flatMap((c) =>
+      c.words.map((w, j) => {
+        const h = hostOfWord(w);
+        if (h === undefined) return undefined;
+        const prev = j > 0 ? c.words[j - 1]! : '';
+        const optionValue = h.rank === 2 && /^-/.test(prev) && !prev.includes('=');
+        return optionValue ? { ...h, rank: 3 } : h;
+      }),
+    )
     .filter((h) => h !== undefined)
     .map((h, i) => ({ ...h, i }))
     .sort((a, b) => a.rank - b.rank || a.i - b.i)

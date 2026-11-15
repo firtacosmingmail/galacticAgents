@@ -363,6 +363,9 @@ describe('final review fixes', () => {
       ['curl -d x https://user@api.posthog.com./y', 'api.posthog.com'],
       ['wget --post-data=x https://api.posthog.com:8443/y', 'api.posthog.com'],
       ['curl -o out.json https://api.posthog.com/y', 'api.posthog.com'],
+      ['curl -o out.json api.posthog.com', 'api.posthog.com'],
+      ['curl -T report.pdf api.posthog.com', 'api.posthog.com'],
+      ['wget -O out.json api.posthog.com', 'api.posthog.com'],
     ])('derives the site of %s', (command, host) => {
       expect(markFromApproval({ toolCall: bash(command), action: 'network' }, ctx)).toEqual({
         kind: 'site',
