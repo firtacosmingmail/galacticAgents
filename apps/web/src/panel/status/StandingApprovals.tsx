@@ -33,7 +33,8 @@ const CHOICES: {
   },
   {
     id: 'auto',
-    label: 'Auto: everything except pushing, sending, spending and deletes outside the project',
+    label:
+      'Auto: everything except pushing to main, sending, spending and deletes outside the project',
     send: (api, id) => api.setWaykeeperApprovals(id, true, true),
   },
 ];

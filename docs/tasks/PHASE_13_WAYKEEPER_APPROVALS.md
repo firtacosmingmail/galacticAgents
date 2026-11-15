@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19 done (2026-11-15) (branch `agent-waykeeper-approvals-fixes`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 19/19
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15) (branch `agent-waykeeper-approvals-fixes`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 20/20
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -36,6 +36,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 9 | P13-12 | Pre-existing gaps found in the follow-up's review (added 2026-11-14). |
 | 10 | P13-13 → P13-14 → P13-15 → P13-16 → P13-17 → P13-18 | Auto mode (added 2026-11-14), in order; plan `docs/superpowers/plans/2026-11-14-waykeeper-auto-mode.md`. |
 | 11 | P13-19 | The switch from the phone (added 2026-11-15). |
+| 12 | P13-20 | Auto approves git pushes, never to main (added 2026-11-15). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -126,3 +127,8 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Status:** done (2026-11-15) · **Depends on:** P13-18 · **Parallel with:** —
 - Cosmin: "I want to be able to activate and deactivate the switch from the mobile phone as well." SPEC decision 160.
 - **Acceptance:** `setWaykeeperApprovals` no longer refuses a remote origin (Off, fits the task, Auto); an agent is still refused (`invalid` in the command, 403 `agent_peer` at the route); the command and route tests cover a remote on and Auto on; SPEC 154/159, TECHNOLOGY §3.10 and the panel comment say so.
+
+### P13-20 — Auto approves git pushes, never to the main branch (added 2026-11-15)
+- **Status:** done (2026-11-15) · **Depends on:** P13-19 · **Parallel with:** —
+- Cosmin: "We need to approve the pushing to git as well. add a restriction on pushing to the main branch." SPEC decision 161.
+- **Acceptance:** in Auto a `git push` to a branch other than `main`/`master`/the default branch is approved without a quote; a push to the main branch, or one whose branch cannot be told (`--all`, `--mirror`, a pattern, a variable, a `cd`/`-C` with no refspec), is forwarded in both modes; `gh pr create` and other pushes still need a quote; the Auto label says "pushing to main"; tests in `git-push.test.ts`, `git-read.test.ts`, `approval-watch.test.ts`, `request-judge.test.ts`.

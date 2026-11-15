@@ -17,6 +17,13 @@ import {
   type WaykeeperForward,
 } from '@galactic/protocol';
 import { markCovers } from '../domain/approval-marks.js';
+import {
+  gitPushOf,
+  mainBranchesOf,
+  movesFolder,
+  pushesToMain,
+  type GitRead,
+} from '../domain/git-push.js';
 import { partsOfCall } from '../domain/command-parts.js';
 import { classifyToolCall, mentionsPush, type PolicyContext } from '../domain/permissions.js';
 import { HeldJudgeCalls } from './held-judge.js';
@@ -79,6 +86,11 @@ export interface ApprovalWatchCall {
   auto: () => boolean;
   /** The project's "Always asks me" marks (P13-16): read before the judge and again after; may throw. */
   marks: () => readonly ApprovalMark[];
+  /**
+   * Runs `git` in the Steward's worktree (P13-20): where a push goes. Absent or failing, a push
+   * that needs the current branch is forwarded.
+   */
+  git?: GitRead;
   approve: (d: WaykeeperApproval) => void;
   forward: (context: WaykeeperForward) => void;
 }
@@ -193,6 +205,39 @@ export class ApprovalWatch {
     this.calls.cancel(agentId);
   }
 
+  /**
+   * The request's git pushes (P13-20, decision 161): `forward` for a push to the main branch
+   * (`main`, `master`, the remote's default) or one whose branch cannot be told; otherwise the
+   * indexes of the parts that are a single git push to other branches (`cleared`). Other pushes
+   * (`gh pr create`, `npm publish`) are neither.
+   */
+  private async gitPushes(
+    call: ApprovalWatchCall,
+    parts: readonly CommandPart[],
+  ): Promise<{ cleared: number[] } | { forward: string; part: number }> {
+    const cleared: number[] = [];
+    if (call.toolCall.toolName !== 'Bash') return { cleared };
+    let mains: string[] | undefined;
+    for (const [i, part] of parts.entries()) {
+      if (!part.categories.includes('push')) continue;
+      const moved = parts.slice(0, i + 1).some((p) => movesFolder(p.text));
+      const push = await gitPushOf(part.text, call.git, moved);
+      if (push === undefined) continue;
+      if ('unknown' in push) {
+        return {
+          forward: `it pushes and the Waykeeper cannot tell which branch (${push.unknown})`,
+          part: i,
+        };
+      }
+      mains ??= await mainBranchesOf(call.git);
+      if (pushesToMain(push.branches, mains)) {
+        return { forward: 'it pushes to the main branch, which only the user can allow', part: i };
+      }
+      cleared.push(i);
+    }
+    return { cleared };
+  }
+
   private async decide(call: ApprovalWatchCall): Promise<void> {
     const parts = partsOfCall(
       call.toolCall,
@@ -239,13 +284,33 @@ export class ApprovalWatch {
         unjudged,
       );
     }
-    const quoteNeeded = parts.map(needsUserQuote);
+    // -- git pushes (P13-20, decision 161): never to the main branch; in Auto, approved elsewhere
+    const pushes = await this.gitPushes(call, parts);
+    if ('forward' in pushes) {
+      return forward(`Never approved by the Waykeeper: ${pushes.forward}.`, unjudged, pushes.part);
+    }
+    const mode: RequestJudgeInput['mode'] = call.auto() ? 'auto' : 'task';
+    // In Auto a git push to a branch other than main needs no quote; any other push still does.
+    const pushesCleared =
+      mode === 'auto' && call.toolCall.toolName === 'Bash' && pushes.cleared.length > 0;
+    const withoutPush = (p: CommandPart): CommandPart => ({
+      ...p,
+      categories: p.categories.filter((c) => c !== 'push'),
+    });
+    const quoteNeeded = parts.map((p, i) =>
+      needsUserQuote(pushesCleared && pushes.cleared.includes(i) ? withoutPush(p) : p),
+    );
+    const allPushesCleared =
+      pushesCleared &&
+      parts.every((p, i) => !p.categories.includes('push') || pushes.cleared.includes(i));
     // A push the gate saw in the whole call (an unsplit tool's input) needs the user's words too.
     const callNeedsQuote =
       quoteNeeded.some(Boolean) ||
       needsUserQuote({
         text: parts.map((p) => p.text).join(' '),
-        categories: [...new Set([...call.categories, ...whole.actions])],
+        categories: [...new Set([...call.categories, ...whole.actions])].filter(
+          (c) => !(allPushesCleared && c === 'push'),
+        ),
       });
     const quotePart = quoteNeeded.indexOf(true);
     allowOnce = callNeedsQuote;
@@ -258,7 +323,6 @@ export class ApprovalWatch {
     }
     if (marked) return forward(marked.reason, unjudged, marked.part);
 
-    const mode: RequestJudgeInput['mode'] = call.auto() ? 'auto' : 'task';
     const judge = this.deps.judge;
     if (!judge) return forward('No request judge is configured.', unjudged);
     let facts: ApprovalFacts | undefined;
@@ -272,6 +336,7 @@ export class ApprovalWatch {
 
     const input: RequestJudgeInput = {
       mode,
+      ...(allPushesCleared ? { pushesCleared: true } : {}),
       task: known.task,
       workspace: call.ctx.workspace,
       cwd: call.ctx.cwd ?? call.ctx.workspace,

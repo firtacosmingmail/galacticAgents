@@ -285,6 +285,27 @@ describe('SDK request judge: Auto mode', () => {
     sendsOrSpends: false,
   };
 
+  it('approves a git push the server cleared without a quote, never in task mode (P13-20)', async () => {
+    const push = {
+      ...auto,
+      request: {
+        ...auto.request,
+        categories: ['push' as const],
+        parts: [{ text: 'git push origin feat', categories: ['push' as const] }],
+      },
+    };
+    expect((await setup(json(answer)).judge.judge(push, signal())).verdict).toBe('forward');
+    const cleared = setup(json(answer));
+    expect((await cleared.judge.judge({ ...push, pushesCleared: true }, signal())).verdict).toBe(
+      'approve',
+    );
+    expect(String(cleared.sdk.calls[0]!.prompt)).toContain('Pushes cleared: yes');
+    const task = setup(json(answer));
+    expect(
+      (await task.judge.judge({ ...push, mode: 'task', pushesCleared: true }, signal())).verdict,
+    ).toBe('forward');
+  });
+
   it('uses the Auto prompt, not the task prompt', async () => {
     const { sdk, judge } = setup(json(answer));
     await judge.judge(auto, signal());

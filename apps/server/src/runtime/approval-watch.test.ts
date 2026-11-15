@@ -908,3 +908,118 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     });
   });
 });
+
+describe('git pushes: Auto approves them, never to the main branch (P13-20, decision 161)', () => {
+  /** A worktree on `feat` tracking `origin/feat`; the remote's default branch is `main`. */
+  const git =
+    (over: Record<string, string | undefined> = {}) =>
+    (args: string[]) => {
+      const answers: Record<string, string | undefined> = {
+        'symbolic-ref --quiet --short HEAD': 'feat',
+        'for-each-ref --format=%(upstream:lstrip=3)%09%(push:lstrip=3) refs/heads/feat':
+          'feat\tfeat',
+        'for-each-ref --format=%(upstream:lstrip=3)%09%(push:lstrip=3) refs/heads/sneaky':
+          'main\tmain',
+        'symbolic-ref --quiet --short refs/remotes/origin/HEAD': 'origin/main',
+        ...over,
+      };
+      return Promise.resolve(answers[args.join(' ')]);
+    };
+  const NO_QUOTE: ApprovalFacts = { ...FACTS, userWords: ['Build the prospect list'] };
+
+  it.each(['git push origin feat', 'git push -u origin HEAD', 'git push'])(
+    'in Auto approves %s without the user’s words',
+    async (command) => {
+      const { judge, seen } = scripted(approve({ kind: 'git push', sendsOrSpends: false }));
+      const watch = new ApprovalWatch({ judge });
+      const {
+        c,
+        approve: approved,
+        forward,
+      } = call(command, {
+        auto: () => true,
+        git: git(),
+        facts: () => NO_QUOTE,
+        categories: ['push'],
+      });
+      await watch.handle(c);
+      expect(forward).not.toHaveBeenCalled();
+      expect(approved).toHaveBeenCalledTimes(1);
+      expect(seen[0]).toMatchObject({ mode: 'auto', pushesCleared: true });
+    },
+  );
+
+  it.each([
+    ['git push origin main', git()],
+    ['git push origin HEAD:master', git()],
+    ['git push origin sneaky', git()],
+    ['git push', git({ 'symbolic-ref --quiet --short HEAD': 'main' })],
+    [
+      'git push origin development',
+      git({ 'symbolic-ref --quiet --short refs/remotes/origin/HEAD': 'origin/development' }),
+    ],
+  ])('never approves %s: it pushes to the main branch', async (command, g) => {
+    const { judge, seen } = scripted(approve({ quote: 'push the fixes to the branch' }));
+    for (const auto of [true, false]) {
+      const watch = new ApprovalWatch({ judge });
+      const {
+        c,
+        approve: approved,
+        forward,
+      } = call(command, {
+        auto: () => auto,
+        git: g,
+        categories: ['push'],
+      });
+      await watch.handle(c);
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward.mock.calls[0]![0].reason).toMatch(/pushes to the main branch/);
+    }
+    expect(seen).toHaveLength(0);
+  });
+
+  it.each([
+    'git push --all origin',
+    'git push origin $BRANCH',
+    'cd ../other && git push',
+    'git -C ../other push',
+  ])('forwards %s: its branch cannot be told', async (command) => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const watch = new ApprovalWatch({ judge });
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = call(command, {
+      auto: () => true,
+      git: git(),
+      categories: ['push'],
+    });
+    await watch.handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toMatch(/cannot tell which branch/);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('in Auto still needs the user’s words for gh pr create, and in task mode for any push', async () => {
+    const { judge, seen } = scripted(approve({ kind: 'push', sendsOrSpends: false }));
+    const watch = new ApprovalWatch({ judge });
+    const pr = call('gh pr create --fill', {
+      auto: () => true,
+      git: git(),
+      facts: () => NO_QUOTE,
+      categories: ['push'],
+    });
+    await watch.handle(pr.c);
+    expect(pr.approve).not.toHaveBeenCalled();
+    expect(seen[0]?.pushesCleared).toBeUndefined();
+    const task = call('git push origin feat', {
+      git: git(),
+      facts: () => NO_QUOTE,
+      categories: ['push'],
+    });
+    await watch.handle(task.c);
+    expect(task.approve).not.toHaveBeenCalled();
+    expect(seen[1]?.pushesCleared).toBeUndefined();
+  });
+});

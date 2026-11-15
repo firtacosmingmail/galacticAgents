@@ -97,7 +97,7 @@ const AUTO_SYSTEM_PROMPT = [
   '',
   UNTRUSTED_PARAGRAPH,
   '',
-  'What goes to Cosmin. A part that **sends** (messages, emails, chat posts, comments, replies, form submissions, anything delivering content to people or an outside service on his behalf, by any means: curl, an MCP tool, a script) or that **spends** (ads, purchases, paid API calls, starting paid cloud resources). Set "sendsOrSpends" to true when any part sends or spends, and to false otherwise. Reading, building, testing, editing files in the worktree, running the repository\'s own scripts and deleting its own build output do not send or spend: approve them. A push (category "push": git push, gh pr create, ...) or an upload of a screenshot or image also goes to Cosmin. When you are unsure whether something sends or spends, forward.',
+  'What goes to Cosmin. A part that **sends** (messages, emails, chat posts, comments, replies, form submissions, anything delivering content to people or an outside service on his behalf, by any means: curl, an MCP tool, a script) or that **spends** (ads, purchases, paid API calls, starting paid cloud resources). Set "sendsOrSpends" to true when any part sends or spends, and to false otherwise. Reading, building, testing, editing files in the worktree, running the repository\'s own scripts and deleting its own build output do not send or spend: approve them. A push (category "push": git push, gh pr create, ...) or an upload of a screenshot or image also goes to Cosmin, except that when the request says "Pushes cleared: yes" the server already checked that every git push in it goes to a branch other than the main branch: approve those pushes without a quote; a git push to a branch is not a send. When you are unsure whether something sends or spends, forward.',
   '',
   "Approve a part that sends or spends, or a push, only with a verbatim quote of Cosmin's words that asks for it. " +
     QUOTE_RULES,
@@ -169,6 +169,12 @@ function buildPrompt(input: RequestJudgeInput): string {
     fence,
     body,
     fence,
+    // Outside the block: the server's own word (P13-20).
+    ...(input.mode === 'auto' && input.pushesCleared === true
+      ? [
+          'Pushes cleared: yes (the server checked every git push goes to a branch other than main).',
+        ]
+      : []),
   ].join('\n');
 }
 
@@ -247,9 +253,13 @@ function hardRuleViolation(
       failingPart: bad,
     };
   }
+  // A git push the server cleared in Auto (P13-20) needs no quote; an image upload still does.
+  const cleared = input.mode === 'auto' && input.pushesCleared === true;
   const needsQuote =
-    input.request.categories.includes('push') ||
-    parts.some((p) => needsUserQuote(p)) ||
+    (!cleared && input.request.categories.includes('push')) ||
+    parts.some((p) =>
+      needsUserQuote(cleared ? { ...p, categories: p.categories.filter((c) => c !== 'push') } : p),
+    ) ||
     (input.mode === 'auto' && v.sendsOrSpends === true);
   if (needsQuote) {
     if (!v.quote || !quoteFound(v.quote, input.userWords)) {

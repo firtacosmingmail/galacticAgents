@@ -85,6 +85,7 @@ import {
   type SpawnCheck,
 } from './caps.js';
 import { ApprovalWatch, type ApprovalFacts } from './approval-watch.js';
+import { gitReader } from './git-read.js';
 import {
   aliasesOf,
   createPermissionGate,
@@ -2333,6 +2334,7 @@ export class AgentRuntime {
       switchOn: () => this.approvalsOn(projectId),
       auto: () => this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true,
       marks: () => this.opts.log.tables.projects.get(projectId)?.approvalMarks ?? [],
+      ...(cwd ? { git: gitReader(cwd) } : {}),
       approve: (d) => {
         this.permissionDecided(
           live,

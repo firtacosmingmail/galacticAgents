@@ -210,6 +210,11 @@ export function isJudgedKind(kind: string): boolean {
 export interface RequestJudgeInput {
   /** `task`: a Steward's request against its task; `auto`: the Auto policy (design 4.2). */
   mode: 'task' | 'auto';
+  /**
+   * Auto only (P13-20, decision 161): every push in the request is a git push the server checked
+   * goes to a branch other than the main branch; it needs no quote of the user's words.
+   */
+  pushesCleared?: true;
   task: { title: string; description: string };
   workspace: string;
   cwd: string;

@@ -391,7 +391,7 @@ const GIT_VALUE_OPTIONS: ReadonlySet<string> = new Set([
  * git's arguments with its global options in front skipped (`-C <dir>`, `-c <k=v>`,
  * `--git-dir=…`, `--no-pager`, …): `rest` starts at the subcommand; `dirs` are the `-C` folders.
  */
-function gitGlobals(args: readonly string[]): { dirs: string[]; rest: string[] } {
+export function gitGlobals(args: readonly string[]): { dirs: string[]; rest: string[] } {
   const dirs: string[] = [];
   let k = 0;
   while (k < args.length && args[k]!.startsWith('-') && args[k] !== '--') {
