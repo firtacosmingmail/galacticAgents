@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-22 (todo, design question for Cosmin) · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21 done (2026-11-16) (branch `agent-publishes-scope`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 21/22
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16) (branch `agent-publishes-scope`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 22/22
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -38,7 +38,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 11 | P13-19 | The switch from the phone (added 2026-11-15). |
 | 12 | P13-20 | Auto approves git pushes, never to main (added 2026-11-15). |
 | 13 | P13-21 | A push or a PR is not publishing; `=` separators are readable (added 2026-11-16). |
-| 14 | P13-22 | Publishing strictness only from the publish request (added 2026-11-16; design question). |
+| 14 | P13-22 | Outward steps last: publishing, pushes, deploys, account changes and cleanup in small final steps (added 2026-11-16). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -140,6 +140,7 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Found in Cosmin's test (screenshots of 2026-11-16): on an Auto project every request of the "Common calendar + PR" Steward came to him, even `git branch -r | head`. The Waykeeper had planned the task `publishes` because it ended in a push and a PR; a publishing step's Steward runs under the publishing policy (every workspace command and network call asks) and is never judged by the Waykeeper (`watchApproval` skips publishing runs). Separately, `echo =====` (a separator) made a call unreadable: zsh `=` expansion. SPEC decision 162.
 - **Acceptance:** the Waykeeper's `publishes` field, its prompt and the Harmonizer's `check_model` say publishing is posting content in Cosmin's name with `request_publish`, and that pushing a branch, opening or commenting on a PR or a CI deploy is not; a word of `=` signs only is readable as an argument of `echo` or `printf`, and stays unreadable as a command word, a redirect target or another program's argument (`permission-findings.test.ts`, `providers.test.ts`). A task already flagged keeps its flag.
 
-### P13-22 — Publishing strictness only from the publish request (added 2026-11-16)
-- **Status:** todo (design question for Cosmin) · **Depends on:** P13-21 · **Parallel with:** —
-- Cosmin: the Steward did a lot of other work (reading PRs, Figma, branching); "the publishing part should have been in the end". Today `publishes` is a property of the whole task (decision 146: a step is a task), so the publishing policy and the bypass of Waykeeper approvals cover the Steward's whole run. Options: (a) the Waykeeper splits a publishing step out as a small final task (prompt only); (b) the publishing policy starts when the Steward first calls `request_publish` and the Waykeeper judges its calls until then; (c) both. Decide before implementing; meanwhile P13-21 keeps code PRs from being flagged at all.
+### P13-22 — Outward steps last, in small final steps (added 2026-11-16)
+- **Status:** done (2026-11-16) · **Depends on:** P13-21 · **Parallel with:** —
+- Cosmin: the Steward did a lot of other work (reading PRs, Figma, branching); "the publishing part should have been in the end". Then: "I want the publishing tasks to be as granular as possible with commands that are only for that, and as close as possible to the end of the project or task. The same thing for the cleanup tasks. […] For the last ones ask for input. But don't block the work that does not need me, for something that can be postponed in the end of the task." Today `publishes` is a property of the whole task (decision 146), so the publishing policy and the bypass of Waykeeper approvals cover the Steward's whole run; the fix is to make the publishing task small and last, not to change the policy. SPEC decision 163.
+- **Acceptance:** the Waykeeper's prompt plans what needs nobody first (fetch, read, implement, review, test locally) and the outward steps last (push and PR, database changes and deploys to shared environments, account or settings changes, publishing, cleanup): a Steward may push its own branch and open its PR as the last step of its task; every other outward step and every publish is its own final task, blockedBy the work it ships, naming only those commands; questions about the final steps wait for the final task. `plan_tasks` refuses a publishing task that does not wait (directly or through others) for every non-publishing task of the plan, and `create_task` one that does not wait for the project's open non-publishing tasks, naming what to add. Every Steward's etiquette says the same order, and that a question only about a final step waits until the rest is done. Tests in `providers.test.ts` and `steward-prompt.test.ts`.

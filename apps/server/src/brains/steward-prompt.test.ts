@@ -35,6 +35,10 @@ describe('Steward prompt template (P2-11)', () => {
       'Never ask for permission in prose',
       '"Done:"',
       '"Not done:"',
+      // P13-22: what needs nobody first; outward steps and cleanup at the very end.
+      '- Order of work. First do everything that needs nobody',
+      'finish all the other work first, then ask',
+      'If the question is only about a final step',
     ]) {
       expect(text).toContain(rule);
     }
