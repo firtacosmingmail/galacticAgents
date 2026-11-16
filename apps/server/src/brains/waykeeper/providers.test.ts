@@ -206,6 +206,12 @@ describe('the Waykeeper prompt (P11-08)', () => {
       'The approved request may carry a provider note. Give each task the provider and model it names (provider alone means its default model), mark image-making tasks makesImages and publishing tasks publishes, and leave the rest to the project default. A publishing task never goes to Gemini.',
     );
   });
+
+  it('says a push or a PR is not publishing (P13-21)', () => {
+    expect(WAYKEEPER_SYSTEM_PROMPT).toContain(
+      'pushing a branch or opening a PR is not publishing, so a coding task that ends in a PR is not marked publishes',
+    );
+  });
 });
 
 describe('a spawn re-checks the step against its provider (final review I3)', () => {

@@ -898,6 +898,21 @@ class ShellLexer {
         // no command and stays as it is (`test a = b`).
         let end = i + 1;
         while (end < src.length && !/[\s;&|<>()]/.test(src[end]!)) end++;
+        // A word of `=` signs only (`echo =====`, a separator a Steward prints) as an argument of
+        // `echo` or `printf` (P13-21): zsh looks up a program named `====` and at worst prints its
+        // path, so nothing new runs. Anywhere else (a command word, a redirect target, another
+        // program's argument) it stays unreadable.
+        const head = cmd.words[commandHead(cmd.words)];
+        if (
+          word === null &&
+          pendingOp === null &&
+          /^=+$/.test(src.slice(i, end)) &&
+          (head === 'echo' || head === 'printf')
+        ) {
+          append(src.slice(i, end));
+          i = end;
+          continue;
+        }
         return this.fail(`zsh =command expansion: ${src.slice(i, end)}`);
       } else {
         append(c);

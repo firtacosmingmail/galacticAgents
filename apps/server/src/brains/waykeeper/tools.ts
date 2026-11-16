@@ -160,7 +160,10 @@ const PROVIDER_PROPERTIES = {
   makesImages: { type: 'boolean', description: 'The task makes images.' },
   publishes: {
     type: 'boolean',
-    description: 'The task publishes (posts, uploads, deploys). Never on Gemini.',
+    description:
+      'The task posts content in the user’s name with request_publish (a social post, an article, a ' +
+      'store listing). Pushing a branch, opening or commenting on a PR, or a CI deploy is not ' +
+      'publishing: leave it false for those. Never on Gemini.',
   },
 };
 

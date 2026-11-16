@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15) (branch `agent-waykeeper-approvals-fixes`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 20/20
+**Current task:** P13-22 (todo, design question for Cosmin) · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21 done (2026-11-16) (branch `agent-publishes-scope`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 21/22
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -37,6 +37,8 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 10 | P13-13 → P13-14 → P13-15 → P13-16 → P13-17 → P13-18 | Auto mode (added 2026-11-14), in order; plan `docs/superpowers/plans/2026-11-14-waykeeper-auto-mode.md`. |
 | 11 | P13-19 | The switch from the phone (added 2026-11-15). |
 | 12 | P13-20 | Auto approves git pushes, never to main (added 2026-11-15). |
+| 13 | P13-21 | A push or a PR is not publishing; `=` separators are readable (added 2026-11-16). |
+| 14 | P13-22 | Publishing strictness only from the publish request (added 2026-11-16; design question). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -132,3 +134,12 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Status:** done (2026-11-15) · **Depends on:** P13-19 · **Parallel with:** —
 - Cosmin: "We need to approve the pushing to git as well. add a restriction on pushing to the main branch." SPEC decision 161.
 - **Acceptance:** in Auto a `git push` to a branch other than `main`/`master`/the default branch is approved without a quote; a push to the main branch, or one whose branch cannot be told (`--all`, `--mirror`, a pattern, a variable, a `cd`/`-C` with no refspec), is forwarded in both modes; `gh pr create` and other pushes still need a quote; the Auto label says "pushing to main"; tests in `git-push.test.ts`, `git-read.test.ts`, `approval-watch.test.ts`, `request-judge.test.ts`.
+
+### P13-21 — A push or a PR is not publishing; `echo =====` is readable (added 2026-11-16)
+- **Status:** done (2026-11-16) · **Depends on:** P13-20 · **Parallel with:** —
+- Found in Cosmin's test (screenshots of 2026-11-16): on an Auto project every request of the "Common calendar + PR" Steward came to him, even `git branch -r | head`. The Waykeeper had planned the task `publishes` because it ended in a push and a PR; a publishing step's Steward runs under the publishing policy (every workspace command and network call asks) and is never judged by the Waykeeper (`watchApproval` skips publishing runs). Separately, `echo =====` (a separator) made a call unreadable: zsh `=` expansion. SPEC decision 162.
+- **Acceptance:** the Waykeeper's `publishes` field, its prompt and the Harmonizer's `check_model` say publishing is posting content in Cosmin's name with `request_publish`, and that pushing a branch, opening or commenting on a PR or a CI deploy is not; a word of `=` signs only is readable as an argument of `echo` or `printf`, and stays unreadable as a command word, a redirect target or another program's argument (`permission-findings.test.ts`, `providers.test.ts`). A task already flagged keeps its flag.
+
+### P13-22 — Publishing strictness only from the publish request (added 2026-11-16)
+- **Status:** todo (design question for Cosmin) · **Depends on:** P13-21 · **Parallel with:** —
+- Cosmin: the Steward did a lot of other work (reading PRs, Figma, branching); "the publishing part should have been in the end". Today `publishes` is a property of the whole task (decision 146: a step is a task), so the publishing policy and the bypass of Waykeeper approvals cover the Steward's whole run. Options: (a) the Waykeeper splits a publishing step out as a small final task (prompt only); (b) the publishing policy starts when the Steward first calls `request_publish` and the Waykeeper judges its calls until then; (c) both. Decide before implementing; meanwhile P13-21 keeps code PRs from being flagged at all.
