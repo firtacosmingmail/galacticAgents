@@ -213,47 +213,6 @@ async function providerOfTask(
 
 // -- plan_tasks ------------------------------------------------------------------------------------
 
-/**
- * A publishing task comes last (P13-22, SPEC decision 163): it waits, directly or through other
- * tasks, for every task of the plan that does not publish, so the publish is a small final step
- * and the work before it runs without the publishing policy. The refusal says which positions to
- * add to its blockedBy.
- */
-export function publishingLastInPlan(
-  tasks: readonly {
-    publishes?: boolean | undefined;
-    blockedBy?: readonly (number | string)[] | undefined;
-  }[],
-): string | undefined {
-  const before = (i: number): Set<number> => {
-    const seen = new Set<number>();
-    const walk = (k: number) => {
-      for (const b of tasks[k]?.blockedBy ?? []) {
-        if (typeof b !== 'number' || seen.has(b) || b < 0 || b >= tasks.length) continue;
-        seen.add(b);
-        walk(b);
-      }
-    };
-    walk(i);
-    return seen;
-  };
-  for (const [i, task] of tasks.entries()) {
-    if (!task.publishes) continue;
-    const waits = before(i);
-    const missing = tasks.flatMap((t, k) => (k !== i && !t.publishes && !waits.has(k) ? [k] : []));
-    if (missing.length > 0) {
-      return (
-        `task ${i + 1} of the plan publishes, so it comes last and holds only the publishing: ` +
-        `add positions ${missing.join(', ')} to its blockedBy (move it after them if needed)`
-      );
-    }
-  }
-  return undefined;
-}
-
-/** Task states that no longer hold work a publishing task should wait for. */
-const NOTHING_TO_WAIT_FOR: ReadonlySet<string> = new Set([...TASK_DONE, 'failed']);
-
 export const planTasksTool: BrainTool = {
   name: 'plan_tasks',
   description:
@@ -312,8 +271,6 @@ export const planTasksTool: BrainTool = {
         ...(await providerOfTask(ctx, task, project, `task ${i + 1} of the plan: `)),
       });
     }
-    const notLast = publishingLastInPlan(planned);
-    if (notLast) throw new DomainError('invalid', notLast);
     const rationale = optStr(input, 'rationale');
     const { value } = await ctx.commands.proposePlan({
       projectId: project.id,
@@ -376,28 +333,6 @@ export const createTaskTool: BrainTool = {
     const priority = optPriority(input);
     const title = optStr(input, 'title');
     const providers = await providerOfTask(ctx, input, project, '');
-    if (providers.publishes) {
-      // P13-22: a publishing task added later also waits for the project's open work.
-      const waits = new Set<Id>();
-      const walk = (ids: readonly Id[]) => {
-        for (const id of ids) {
-          if (waits.has(id)) continue;
-          waits.add(id);
-          walk(ctx.queries.task(id)?.blockedBy ?? []);
-        }
-      };
-      walk((blockedBy ?? []) as Id[]);
-      const missing = ctx.queries
-        .projectTasks(project.id)
-        .filter((t) => !t.publishes && !NOTHING_TO_WAIT_FOR.has(t.state) && !waits.has(t.id))
-        .map((t) => t.id);
-      if (missing.length > 0) {
-        throw new DomainError(
-          'invalid',
-          `a publishing task comes last and holds only the publishing: add ${missing.join(', ')} to its blockedBy`,
-        );
-      }
-    }
     const { value } = await ctx.commands.createTask({
       description: str(input, 'description'),
       ...(title ? { title } : {}),

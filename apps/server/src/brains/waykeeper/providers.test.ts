@@ -5,7 +5,6 @@ import { createTask } from '../../domain/tasks.js';
 import { brainHarness, type BrainHarness, type ToolOutcome } from '../testing/index.js';
 import { providerFakes } from '../testing/provider-fakes.js';
 import { waykeeperDefinition, WAYKEEPER_SYSTEM_PROMPT } from './index.js';
-import { publishingLastInPlan } from './tools.js';
 
 /**
  * P11-08: a Waykeeper's plan carries each task's provider, model and flags, checked against the
@@ -54,26 +53,26 @@ describe('plan_tasks carries providers (P11-08)', () => {
       summary: 'Images, then publish',
       tasks: [
         { description: 'Make images', provider: 'gemini', makesImages: true },
-        { description: 'Plain' },
         {
           description: 'Publish',
           provider: 'chatgpt',
           model: 'GPT 5.6 terra',
           publishes: true,
-          blockedBy: [0, 1],
+          blockedBy: [0],
         },
+        { description: 'Plain' },
       ],
     });
     expect(out.result, JSON.stringify(out.result)).toMatchObject({ ok: true, turnEnded: true });
     const tasks = h.log.tables.tasks.all();
     expect(tasks).toHaveLength(3);
     expect(tasks[0]).toMatchObject({ provider: 'gemini', makesImages: true });
-    expect(tasks[1]!.provider).toBeUndefined();
-    expect(tasks[2]).toMatchObject({
+    expect(tasks[1]).toMatchObject({
       provider: 'chatgpt',
       model: 'gpt-5.6-terra',
       publishes: true,
     });
+    expect(tasks[2]!.provider).toBeUndefined();
     expect(h.log.tables.proposals.all()).toHaveLength(1);
   });
 
@@ -161,7 +160,6 @@ describe('plan_tasks carries providers (P11-08)', () => {
     const p = await project();
     let later: ToolOutcome | undefined;
     let refused: ToolOutcome | undefined;
-    let early: ToolOutcome | undefined;
     const hq = await h.startHarmonizer();
     const wk = await h.startBrain(
       waykeeperDefinition(),
@@ -178,17 +176,10 @@ describe('plan_tasks carries providers (P11-08)', () => {
                 provider: 'gemini',
                 publishes: true,
               });
-              const first = h.log.tables.tasks.all()[0]!.id;
-              early = await t.try('create_task', {
-                description: 'Publish early',
-                provider: 'chatgpt',
-                publishes: true,
-              });
               later = await t.try('create_task', {
                 description: 'Publish',
                 provider: 'chatgpt',
                 publishes: true,
-                blockedBy: [first],
               });
             }),
       },
@@ -202,44 +193,10 @@ describe('plan_tasks carries providers (P11-08)', () => {
     );
     await h.settle();
     expect(refused).toMatchObject({ ok: false });
-    // P13-22: a publishing task added later waits for the project's open work.
-    expect(early).toMatchObject({ ok: false });
-    expect((early as { message?: string }).message).toContain('comes last');
     expect(later).toMatchObject({ ok: true });
     const created = h.log.tables.tasks.all().filter((t) => t.description !== 'first');
     expect(created).toHaveLength(1);
     expect(created[0]).toMatchObject({ provider: 'chatgpt', publishes: true });
-  });
-});
-
-describe('a publishing task comes last (P13-22)', () => {
-  it.each([
-    [[{ description: 'Post it', publishes: true }], undefined],
-    [[{}, {}, { publishes: true, blockedBy: [0, 1] }], undefined],
-    [[{}, { blockedBy: [0] }, { publishes: true, blockedBy: [1] }], undefined],
-    [[{}, { publishes: true, blockedBy: [0] }, { publishes: true, blockedBy: [0] }], undefined],
-    [[{}, { publishes: true, blockedBy: [0] }, {}], 'add positions 2'],
-    [[{}, {}, { publishes: true, blockedBy: [1] }], 'add positions 0'],
-    [[{ publishes: true }, {}], 'add positions 1'],
-  ])('%j: %s', (tasks, refusal) => {
-    const out = publishingLastInPlan(tasks);
-    if (refusal === undefined) expect(out).toBeUndefined();
-    else expect(out).toContain(refusal);
-  });
-
-  it('plan_tasks refuses a publish that does not come last and creates nothing', async () => {
-    const out = await planning(await project(), 'plan_tasks', {
-      summary: 'x',
-      tasks: [
-        { description: 'Write it' },
-        { description: 'Post it', provider: 'chatgpt', publishes: true },
-      ],
-    });
-    expect(out.result).toMatchObject({ ok: false });
-    expect((out.result as { message?: string }).message).toContain(
-      'task 2 of the plan publishes, so it comes last',
-    );
-    expect(h.log.tables.tasks.all()).toHaveLength(0);
   });
 });
 
@@ -253,7 +210,7 @@ describe('the Waykeeper prompt (P11-08)', () => {
   it('says the order of work: what needs nobody first, outward steps last (P13-22)', () => {
     for (const words of [
       'Order of work (decision 163)',
-      'every other step that acts outside this Mac, and every publish, goes into its own final task',
+      'goes into its own final task, blockedBy the tasks whose work it needs (not unrelated ones)',
       'Before plan_tasks ask Cosmin only what the early work needs',
     ]) {
       expect(WAYKEEPER_SYSTEM_PROMPT).toContain(words);
