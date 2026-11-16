@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -18,6 +19,7 @@ import {
   type AgentEvent,
   type AgentRole,
   type AgentRuntime as RuntimeName,
+  type CommandPart,
   type Event,
   type Id,
   type Job,
@@ -72,6 +74,8 @@ import {
 import { RULES_END_IN } from '../domain/project-rules.js';
 import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
+import { workspaceOfCwd } from '../brains/steward-prompt.js';
+import { scratchRoot } from '../workspace/workspaces.js';
 import { AgentInbox, type InboxMessage } from './inbox.js';
 import {
   CapsEnforcer,
@@ -81,6 +85,7 @@ import {
   type SpawnCheck,
 } from './caps.js';
 import { ApprovalWatch, type ApprovalFacts } from './approval-watch.js';
+import { gitReader } from './git-read.js';
 import {
   aliasesOf,
   createPermissionGate,
@@ -844,6 +849,7 @@ export class AgentRuntime {
       ...(agent.supervisorId ? { supervisorId: agent.supervisorId } : {}),
       ...(agent.meta?.freeForm === true ? { freeForm: true } : {}),
     });
+    const tempDir = this.tempDirOf(agent, req);
     let handle: SpawnHandle;
     try {
       handle = await open({
@@ -858,6 +864,7 @@ export class AgentRuntime {
         ...(req.bare ? { bare: true } : {}),
         ...(req.launchFlags?.length ? { launchFlags: req.launchFlags } : {}),
         ...(req.model ? { model: req.model } : {}),
+        ...(tempDir ? { tempDir } : {}),
       });
     } catch (error) {
       const message = (error as Error).message;
@@ -1899,6 +1906,42 @@ export class AgentRuntime {
     return live;
   }
 
+  /**
+   * A project Steward's scratch folder (P13-09): `<workspace>/.galactic/scratch/<task id>`, the
+   * workspace read from its cwd as its prompt names it (`stewardPrompt`). None for any other
+   * agent, nor for an asteroid's Steward (its folder may be someone's working copy).
+   */
+  private scratchOf(agent: Pick<Agent, 'role' | 'taskId'>, cwd: string): string | undefined {
+    if (agent.role !== 'steward' || !agent.taskId) return undefined;
+    if (!this.opts.log.tables.tasks.get(agent.taskId)?.projectId) return undefined;
+    try {
+      return scratchRoot(workspaceOfCwd(cwd), agent.taskId);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * The temp folder a project Steward's process gets (P13-09): its scratch folder, created first,
+   * so the CLI and the commands it runs write their temp files there — inside what the approval
+   * watch counts as the Steward's own. Only for a Steward in its own worktree
+   * (`<workspace>/.galactic/worktrees/<id>`): there `.galactic/` is kept out of git and the
+   * folder is removed with the worktree; in a workspace without worktrees it would stay behind in
+   * the user's folder. None when it cannot be created (the runtime's default).
+   */
+  private tempDirOf(agent: Agent, req: SpawnRequest): string | undefined {
+    if (workspaceOfCwd(req.cwd) === req.cwd) return undefined;
+    const scratch = this.scratchOf(agent, req.cwd);
+    if (!scratch) return undefined;
+    try {
+      mkdirSync(scratch, { recursive: true });
+      return scratch;
+    } catch (error) {
+      this.onError(error, `scratch folder ${agent.id}`);
+      return undefined;
+    }
+  }
+
   /** The agent's project workspace now (a moved workspace applies at once), else the spawn's. */
   private workspaceOf(agentId: Id, req: SpawnRequest): string {
     const { tables } = this.opts.log;
@@ -2270,6 +2313,7 @@ export class AgentRuntime {
       ...(userFolders.length > 0 ? { userFolders } : {}),
       ...this.readableContext(live),
     };
+    const scratch = this.scratchOf(agent, cwd);
     let categories: PermissionAction[];
     try {
       categories = classifyToolCall(call, ctx).actions;
@@ -2284,9 +2328,13 @@ export class AgentRuntime {
       toolCall: call,
       categories,
       ctx,
+      ...(scratch ? { scratch } : {}),
       facts: () => this.approvalFacts(live, projectId, taskId),
       active: () => this.watching(live),
       switchOn: () => this.approvalsOn(projectId),
+      auto: () => this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true,
+      marks: () => this.opts.log.tables.projects.get(projectId)?.approvalMarks ?? [],
+      ...(cwd ? { git: gitReader(cwd) } : {}),
       approve: (d) => {
         this.permissionDecided(
           live,
@@ -2301,6 +2349,8 @@ export class AgentRuntime {
               ? { standingApprovalId: d.standingApprovalId }
               : {}),
             ...(d.quote !== undefined ? { quote: d.quote } : {}),
+            parts: d.parts,
+            ...(cwd ? { cwd } : {}),
           },
           event.questionId,
         );
@@ -2356,6 +2406,10 @@ export class AgentRuntime {
       quote?: string;
       /** The Waykeeper's request judge approved it (P13-04): never set by the scope watch. */
       waykeeperApproval?: true;
+      /** The request's parts, texts already redacted (P13-16): for the approvals log and marks. */
+      parts?: CommandPart[];
+      /** The Steward's working directory when it asked (P13-16). */
+      cwd?: string;
     },
     questionId?: Id,
   ): void {
@@ -2379,6 +2433,8 @@ export class AgentRuntime {
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
       ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
+      ...(d.parts && d.parts.length > 0 ? { parts: d.parts } : {}),
+      ...(d.cwd ? { cwd: d.cwd } : {}),
     };
     if (!live.handle) live.decisions.push(event);
     else this.record(event);

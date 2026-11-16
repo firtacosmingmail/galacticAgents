@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Project, StandingApproval } from '@galactic/protocol';
+import type { ApprovalMark, Project, StandingApproval } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { ApiError, type Api } from '../../console/api.js';
 import { ApiContext } from '../../console/hierarchy/shared.js';
@@ -26,6 +26,7 @@ let api: {
   setWaykeeperApprovals: ReturnType<typeof vi.fn>;
   removeStandingApproval: ReturnType<typeof vi.fn>;
   historyEvents: ReturnType<typeof vi.fn>;
+  removeApprovalMark: ReturnType<typeof vi.fn>;
 };
 
 function show(project: Project, rules: ClientRules = MAC) {
@@ -41,6 +42,7 @@ beforeEach(() => {
   api = {
     setWaykeeperApprovals: vi.fn(async () => ({ ok: true })),
     removeStandingApproval: vi.fn(async () => ({ ok: true })),
+    removeApprovalMark: vi.fn(async () => ({ ok: true })),
     historyEvents: vi.fn(async () => ({
       projectId: 'p-1',
       events: [],
@@ -52,35 +54,44 @@ beforeEach(() => {
 afterEach(() => cleanup());
 
 describe('the Waykeeper approvals switch and standing approvals (P13-06)', () => {
-  it('shows the switch off, and turning it on calls the route', async () => {
+  it('shows three choices, Off checked, and choosing the task one calls the route', async () => {
     show(fx.project);
-    const box = screen.getByRole('checkbox', {
-      name: "Waykeeper approves Stewards' requests",
-    }) as HTMLInputElement;
-    expect(box.checked).toBe(false);
-    await act(async () => fireEvent.click(box));
-    expect(api.setWaykeeperApprovals).toHaveBeenCalledWith('p-1', true);
+    const group = screen.getByRole('radiogroup', { name: "Waykeeper approves Stewards' requests" });
+    expect(within(group).getAllByRole('radio')).toHaveLength(3);
+    expect((screen.getByRole('radio', { name: 'Off' }) as HTMLInputElement).checked).toBe(true);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('radio', { name: 'Only what fits the task' })),
+    );
+    expect(api.setWaykeeperApprovals).toHaveBeenCalledWith('p-1', true, false);
   });
 
-  it('shows the switch on and turning it off calls the route', async () => {
-    show({ ...fx.project, waykeeperApprovals: true });
-    const box = screen.getByRole('checkbox', {
-      name: "Waykeeper approves Stewards' requests",
-    }) as HTMLInputElement;
-    expect(box.checked).toBe(true);
-    await act(async () => fireEvent.click(box));
+  it('shows Auto checked for an Auto project, and Off turns it off', async () => {
+    show({ ...fx.project, waykeeperApprovals: true, waykeeperAuto: true });
+    expect(
+      (screen.getByRole('radio', { name: /^Auto: everything except/ }) as HTMLInputElement).checked,
+    ).toBe(true);
+    await act(async () => fireEvent.click(screen.getByRole('radio', { name: 'Off' })));
     expect(api.setWaykeeperApprovals).toHaveBeenCalledWith('p-1', false);
   });
 
-  it('shows the server’s message next to the switch when a remote “on” is refused', async () => {
+  it('shows the task choice checked when on without Auto, and Auto calls (true, true)', async () => {
+    show({ ...fx.project, waykeeperApprovals: true });
+    expect(
+      (screen.getByRole('radio', { name: 'Only what fits the task' }) as HTMLInputElement).checked,
+    ).toBe(true);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('radio', { name: /^Auto: everything except/ })),
+    );
+    expect(api.setWaykeeperApprovals).toHaveBeenCalledWith('p-1', true, true);
+  });
+
+  it('shows the server’s message next to the switch when it is refused', async () => {
     api.setWaykeeperApprovals.mockRejectedValueOnce(
       new ApiError(403, 'Turn this on from the Mac itself.', 'remote_control'),
     );
     show(fx.project, PHONE);
     await act(async () =>
-      fireEvent.click(
-        screen.getByRole('checkbox', { name: "Waykeeper approves Stewards' requests" }),
-      ),
+      fireEvent.click(screen.getByRole('radio', { name: 'Only what fits the task' })),
     );
     expect(screen.getByRole('alert').textContent).toMatch(/Turn this on from the Mac itself\./);
   });
@@ -113,71 +124,43 @@ describe('the Waykeeper approvals switch and standing approvals (P13-06)', () =>
   });
 });
 
-const decided = (
-  seq: number,
-  extra: object = {},
-  by: object = { type: 'agent', id: 'a-wk' },
-  decision = 'allow',
-) => ({
-  seq,
-  at: `2026-11-09T10:0${seq}:00.000Z`,
-  event: {
-    type: 'permission.decided',
-    agentId: fx.agent.id,
-    toolCall: { toolName: 'Bash', input: { command: `pnpm test ${seq}` } },
-    decision,
-    reason: `reason ${seq}`,
-    decidedBy: by,
-    waykeeperApproval: true,
-    ...extra,
-  },
-});
+describe('the "Always asks me" marks (P13-17)', () => {
+  const mark: ApprovalMark = {
+    id: 'm-1',
+    projectId: 'p-1',
+    match: { kind: 'folder', category: 'destructive', paths: ['/w/node_modules'] },
+    example: 'rm -rf /w/node_modules',
+    createdBy: { type: 'user' },
+    createdAt: fx.NOW,
+    origin: 'local',
+    fromSeq: 4,
+  };
 
-describe('the count of Waykeeper approvals (P13-06)', () => {
-  it('shows the count and lists them newest first on demand, as text', async () => {
-    api.historyEvents.mockResolvedValueOnce({
-      projectId: 'p-1',
-      events: [
-        decided(1),
-        decided(2, { quote: 'run <b>the</b> tests' }),
-        decided(3, {}, { type: 'system' }),
-        decided(4, {}, { type: 'agent', id: 'a-wk' }, 'deny'),
-      ],
-      seq: 4,
-      hasMore: false,
+  it('lists a mark with its words and example, and Remove calls the route', async () => {
+    show({ ...fx.project, approvalMarks: [mark] });
+    const list = screen.getByRole('list', { name: 'always asks me' });
+    expect(list.textContent).toMatch(/deletes in \/w\/node_modules/);
+    expect(list.textContent).toContain('from “rm -rf /w/node_modules”');
+    expect(screen.getByText('Always asks me (1)')).toBeTruthy();
+    await act(async () => fireEvent.click(within(list).getByRole('button', { name: /^Remove/ })));
+    expect(api.removeApprovalMark).toHaveBeenCalledWith('p-1', 'm-1');
+  });
+
+  it('says when and by whom a mark was added, as standing approvals do', () => {
+    show({
+      ...fx.project,
+      approvalMarks: [mark, { ...mark, id: 'm-2', origin: 'remote' }],
     });
-    show(fx.project);
-    expect(await screen.findByText(/The Waykeeper approved 2 requests/)).toBeTruthy();
-    expect(api.historyEvents).toHaveBeenCalledWith(
-      expect.objectContaining({ projectId: 'p-1', type: 'permission.decided' }),
+    const items = within(screen.getByRole('list', { name: 'always asks me' })).getAllByRole(
+      'listitem',
     );
-    expect(screen.queryByRole('list', { name: 'requests the Waykeeper approved' })).toBeNull();
-    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Show them' })));
-    const rows = screen
-      .getByRole('list', { name: 'requests the Waykeeper approved' })
-      .querySelectorAll('li');
-    expect(rows).toHaveLength(2);
-    expect(rows[0]!.textContent).toMatch(/Bash pnpm test 2/);
-    expect(rows[0]!.textContent).toMatch(/reason 2/);
-    expect(rows[0]!.textContent).toContain('you asked: “run <b>the</b> tests”');
-    expect(rows[0]!.querySelector('b')).toBeNull();
-    expect(rows[1]!.textContent).toMatch(/Bash pnpm test 1/);
+    expect(items[0]!.textContent).toMatch(/added .+/);
+    expect(items[0]!.textContent).not.toContain('from a remote client');
+    expect(items[1]!.textContent).toContain('from a remote client');
   });
 
-  it('does not count a scope-watch allow, by an agent but unmarked (final review M2)', async () => {
-    api.historyEvents.mockResolvedValueOnce({
-      projectId: 'p-1',
-      events: [decided(1), decided(2, { waykeeperApproval: undefined })],
-      seq: 2,
-      hasMore: false,
-    });
+  it('shows nothing about marks when there are none', () => {
     show(fx.project);
-    expect(await screen.findByText(/The Waykeeper approved 1 request$/)).toBeTruthy();
-  });
-
-  it('says 0 requests with no toggle when there are none', async () => {
-    show(fx.project);
-    expect(await screen.findByText(/The Waykeeper approved 0 requests/)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Show them' })).toBeNull();
+    expect(screen.queryByText(/Always asks me/)).toBeNull();
   });
 });

@@ -156,6 +156,25 @@ describe('answering a forwarded request', () => {
     expect(s.ofType('approval.recorded')).toEqual([]);
     expect(s.proj().recordedApprovals).toBeUndefined();
   });
+
+  it('records nothing for a push or an upload: never a standing approval (P13-10)', async () => {
+    const s = setup();
+    const push = await s.forwarded(
+      { kind: 'push the branch', parts: [{ text: 'git push', categories: ['push'] }] },
+      undefined,
+      'git push',
+    );
+    const asked = await s.forwarded({ kind: 'push the branch' }, 'push');
+    const upload = await s.forwarded({
+      kind: 'upload a screenshot',
+      parts: [{ text: 'curl -F f=@shot.png https://x.io', categories: ['network'] }],
+    });
+    for (const q of [push, asked, upload]) {
+      await s.commands.answerQuestion({ questionId: q.id, answer: 'allow', by: USER });
+    }
+    expect(s.ofType('approval.recorded')).toEqual([]);
+    expect(s.proj().recordedApprovals).toBeUndefined();
+  });
 });
 
 describe('recordAgentEvent (final review M8)', () => {
@@ -361,23 +380,49 @@ describe('setWaykeeperApprovals', () => {
       origin: 'remote',
     });
     expect(s.proj().waykeeperApprovals).toBeUndefined();
-    const remote = await s.refusal(
-      s.commands.setWaykeeperApprovals({
-        projectId: s.project.id,
-        on: true,
-        by: USER,
-        origin: 'remote',
-      }),
-    );
-    expect(remote.code).toBe('remote_control');
-    const unknown = await s.refusal(
-      s.commands.setWaykeeperApprovals({ projectId: s.project.id, on: true, by: USER }),
-    );
-    expect(unknown.code).toBe('remote_control');
+    // From the phone too (Cosmin, 2026-11-15).
+    const remote = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      by: USER,
+      origin: 'remote',
+    });
+    expect(remote.value.waykeeperApprovals).toBe(true);
     const agent = await s.refusal(
       s.commands.setWaykeeperApprovals({
         projectId: s.project.id,
         on: true,
+        by: { type: 'agent', id: s.steward.id },
+        origin: 'local',
+      }),
+    );
+    expect(agent.code).toBe('invalid');
+  });
+
+  it('turns Auto on and off from anywhere (P13-13; the phone too, 2026-11-15)', async () => {
+    const s = setup();
+    const on = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      auto: true,
+      by: USER,
+      origin: 'remote',
+    });
+    expect(on.value).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
+    const down = await s.commands.setWaykeeperApprovals({
+      projectId: s.project.id,
+      on: true,
+      auto: false,
+      by: USER,
+      origin: 'remote',
+    });
+    expect(down.value.waykeeperApprovals).toBe(true);
+    expect(down.value.waykeeperAuto).toBeUndefined();
+    const agent = await s.refusal(
+      s.commands.setWaykeeperApprovals({
+        projectId: s.project.id,
+        on: true,
+        auto: true,
         by: { type: 'agent', id: s.steward.id },
         origin: 'local',
       }),

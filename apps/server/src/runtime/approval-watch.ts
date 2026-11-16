@@ -1,8 +1,10 @@
 import {
   isJudgedKind,
+  markLabel,
   needsUserQuote,
   quoteFound,
   SIMILAR_APPROVALS_THRESHOLD,
+  type ApprovalMark,
   type CommandPart,
   type Id,
   type PermissionAction,
@@ -14,6 +16,14 @@ import {
   type ToolCall,
   type WaykeeperForward,
 } from '@galactic/protocol';
+import { markCovers } from '../domain/approval-marks.js';
+import {
+  gitPushOf,
+  mainBranchesOf,
+  movesFolder,
+  pushesToMain,
+  type GitRead,
+} from '../domain/git-push.js';
 import { partsOfCall } from '../domain/command-parts.js';
 import { classifyToolCall, mentionsPush, type PolicyContext } from '../domain/permissions.js';
 import { HeldJudgeCalls } from './held-judge.js';
@@ -41,8 +51,10 @@ export interface WaykeeperApproval {
   reason: string;
   /** The project's standing approval the judge relied on. */
   standingApprovalId?: Id;
-  /** The user's words that grant a push or an upload, found in them by the server. */
+  /** The user's words that grant a push, an upload, a send or a spend, found in them by the server. */
   quote?: string;
+  /** The request's parts, their texts redacted: logged on the approval (P13-16). */
+  parts: CommandPart[];
 }
 
 /**
@@ -59,12 +71,26 @@ export interface ApprovalWatchCall {
   categories: PermissionAction[];
   /** The Steward's policy context: `cwd` is its worktree. */
   ctx: PolicyContext;
+  /**
+   * A project Steward's scratch folder (P13-09): a delete inside it counts as inside, like one in
+   * its worktree. Absent for an asteroid's Steward.
+   */
+  scratch?: string;
   /** The task, the user's words, the recent actions and the project's approvals; may throw. */
   facts: () => ApprovalFacts | undefined;
   /** False once the agent ended or is stopping, or the call was withdrawn: nothing is done. */
   active: () => boolean;
   /** Whether the project's switch is still on: read again when the verdict arrives. */
   switchOn: () => boolean;
+  /** Whether the project is in Auto mode (P13-16): read when the request arrives and again after. */
+  auto: () => boolean;
+  /** The project's "Always asks me" marks (P13-16): read before the judge and again after; may throw. */
+  marks: () => readonly ApprovalMark[];
+  /**
+   * Runs `git` in the Steward's worktree (P13-20): where a push goes. Absent or failing, a push
+   * that needs the current branch is forwarded.
+   */
+  git?: GitRead;
   approve: (d: WaykeeperApproval) => void;
   forward: (context: WaykeeperForward) => void;
 }
@@ -72,7 +98,8 @@ export interface ApprovalWatchCall {
 /** Why a part can never be approved by the judge, or `undefined` (design §5.4a). */
 function hardRule(part: CommandPart): string | undefined {
   if (part.guarded) return 'it writes agent or git configuration, or the deliverables folder';
-  if (part.outsideCwd) return "it deletes outside the Steward's worktree";
+  if (part.outsideCwd)
+    return "it deletes outside the Steward's worktree and scratch folder, or a target it cannot place (a variable the command does not set)";
   if (part.categories.includes('destructive') && /\$\(|`/.test(part.text)) {
     return 'it deletes a target that a command substitution decides';
   }
@@ -94,12 +121,20 @@ function hardRule(part: CommandPart): string | undefined {
  * timeout, fail-closed failures and cancel race.
  *
  * The judge is not trusted. The hard rules are decided here, before it is called and without it:
- * a guarded write (by a part or by the whole call), a delete outside the worktree, a delete whose
+ * a guarded write (by a part or by the whole call), a delete outside the worktree and the
+ * Steward's scratch folder, a delete whose
  * target a substitution decides, an unreadable part, and inline code or a script file whose raw
  * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
  * if every push or upload part is granted by a quote the server finds in the user's own words,
  * any standing approval it names exists on the project (and never covers a push, an upload or an
- * opaque part), and the switch is still on. The judge's reason is cut to `MAX_REASON_CHARS`.
+ * opaque part), and the switch is still on.
+ *
+ * Auto mode and marks (P13-16; design 2026-11-14-waykeeper-auto-mode §4.2, §4.5): after the hard
+ * rules and before the judge, a request one of the project's "Always asks me" marks covers is
+ * forwarded, in either mode. In Auto the judge is asked in `auto` mode and must say whether the
+ * request sends or spends; an approval is kept only if Auto is still on, no mark covers it by
+ * now, and a send or a spend is granted by a quote in the user's own words, like a push. The
+ * judge's reason is cut to `MAX_REASON_CHARS`.
  * Every failure — no judge, an error, a timeout, a malformed answer, a throw anywhere before a
  * callback — forwards. Never throws into the runtime.
  */
@@ -170,10 +205,50 @@ export class ApprovalWatch {
     this.calls.cancel(agentId);
   }
 
+  /**
+   * The request's git pushes (P13-20, decision 161): `forward` for a push to the main branch
+   * (`main`, `master`, the remote's default) or one whose branch cannot be told; otherwise the
+   * indexes of the parts that are a single git push to other branches (`cleared`). Other pushes
+   * (`gh pr create`, `npm publish`) are neither.
+   */
+  private async gitPushes(
+    call: ApprovalWatchCall,
+    parts: readonly CommandPart[],
+  ): Promise<{ cleared: number[] } | { forward: string; part: number }> {
+    const cleared: number[] = [];
+    if (call.toolCall.toolName !== 'Bash') return { cleared };
+    let mains: string[] | undefined;
+    for (const [i, part] of parts.entries()) {
+      if (!part.categories.includes('push')) continue;
+      const moved = parts.slice(0, i + 1).some((p) => movesFolder(p.text));
+      const push = await gitPushOf(part.text, call.git, moved);
+      if (push === undefined) continue;
+      if ('unknown' in push) {
+        return {
+          forward: `it pushes and the Waykeeper cannot tell which branch (${push.unknown})`,
+          part: i,
+        };
+      }
+      mains ??= await mainBranchesOf(call.git);
+      if (pushesToMain(push.branches, mains)) {
+        return { forward: 'it pushes to the main branch, which only the user can allow', part: i };
+      }
+      cleared.push(i);
+    }
+    return { cleared };
+  }
+
   private async decide(call: ApprovalWatchCall): Promise<void> {
-    const parts = partsOfCall(call.toolCall, call.ctx);
+    const parts = partsOfCall(
+      call.toolCall,
+      call.ctx,
+      call.scratch !== undefined ? { scratch: call.scratch } : {},
+    );
     const shown = parts.map((p) => ({ ...p, text: redactSecrets(p.text) }));
     const unjudged = `not judged: ${call.toolCall.toolName}`.slice(0, MAX_KIND_CHARS);
+    // A push or an upload is never a standing approval (P13-10): its card never offers one.
+    /** A push, an upload, a send or a spend: its card never offers a standing approval. */
+    let allowOnce = false;
     const forward = (
       reason: string,
       kind: string,
@@ -188,7 +263,7 @@ export class ApprovalWatch {
         parts: shown,
         ...(failingPart !== undefined ? { failingPart } : {}),
         // A placeholder kind never offers a standing approval: it would cover nothing nameable.
-        ...(similar && isJudgedKind(named) ? { similar } : {}),
+        ...(similar && isJudgedKind(named) && !allowOnce ? { similar } : {}),
       });
     };
 
@@ -209,15 +284,44 @@ export class ApprovalWatch {
         unjudged,
       );
     }
-    const quoteNeeded = parts.map(needsUserQuote);
+    // -- git pushes (P13-20, decision 161): never to the main branch; in Auto, approved elsewhere
+    const pushes = await this.gitPushes(call, parts);
+    if ('forward' in pushes) {
+      return forward(`Never approved by the Waykeeper: ${pushes.forward}.`, unjudged, pushes.part);
+    }
+    const mode: RequestJudgeInput['mode'] = call.auto() ? 'auto' : 'task';
+    // In Auto a git push to a branch other than main needs no quote; any other push still does.
+    const pushesCleared =
+      mode === 'auto' && call.toolCall.toolName === 'Bash' && pushes.cleared.length > 0;
+    const withoutPush = (p: CommandPart): CommandPart => ({
+      ...p,
+      categories: p.categories.filter((c) => c !== 'push'),
+    });
+    const quoteNeeded = parts.map((p, i) =>
+      needsUserQuote(pushesCleared && pushes.cleared.includes(i) ? withoutPush(p) : p),
+    );
+    const allPushesCleared =
+      pushesCleared &&
+      parts.every((p, i) => !p.categories.includes('push') || pushes.cleared.includes(i));
     // A push the gate saw in the whole call (an unsplit tool's input) needs the user's words too.
     const callNeedsQuote =
       quoteNeeded.some(Boolean) ||
       needsUserQuote({
         text: parts.map((p) => p.text).join(' '),
-        categories: [...new Set([...call.categories, ...whole.actions])],
+        categories: [...new Set([...call.categories, ...whole.actions])].filter(
+          (c) => !(allPushesCleared && c === 'push'),
+        ),
       });
     const quotePart = quoteNeeded.indexOf(true);
+    allowOnce = callNeedsQuote;
+
+    let marked: ReturnType<typeof markForward>;
+    try {
+      marked = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", unjudged);
+    }
+    if (marked) return forward(marked.reason, unjudged, marked.part);
 
     const judge = this.deps.judge;
     if (!judge) return forward('No request judge is configured.', unjudged);
@@ -231,6 +335,8 @@ export class ApprovalWatch {
     const known = facts;
 
     const input: RequestJudgeInput = {
+      mode,
+      ...(allPushesCleared ? { pushesCleared: true } : {}),
       task: known.task,
       workspace: call.ctx.workspace,
       cwd: call.ctx.cwd ?? call.ctx.workspace,
@@ -248,9 +354,11 @@ export class ApprovalWatch {
     const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
     if (outcome === 'cancelled' || !call.active()) return;
     if (!outcome.ok) return forward(outcome.reason, unjudged);
-    const verdict = validVerdict(outcome.value, parts.length);
+    const verdict = validVerdict(outcome.value, parts.length, mode);
     if (!verdict) return forward('The check gave a malformed answer: no verdict.', unjudged);
 
+    const sendsOrSpends = mode === 'auto' && verdict.sendsOrSpends === true;
+    if (sendsOrSpends) allowOnce = true;
     const similar = similarOf(verdict.similarTo, known.recordedApprovals);
     const kind = verdict.kind;
     if (verdict.verdict === 'forward') {
@@ -266,11 +374,30 @@ export class ApprovalWatch {
         similar,
       );
     }
+    if (mode === 'auto' && !call.auto()) {
+      return forward(
+        'Auto mode was turned off while the request was judged.',
+        kind,
+        undefined,
+        similar,
+      );
+    }
+    // A mark added while the request was judged still makes it ask.
+    let markedNow: ReturnType<typeof markForward>;
+    try {
+      markedNow = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", kind, undefined, similar);
+    }
+    if (markedNow) return forward(markedNow.reason, kind, markedNow.part, similar);
     const failing = quotePart >= 0 ? quotePart : undefined;
-    if (callNeedsQuote) {
+    const needsQuote = callNeedsQuote || sendsOrSpends;
+    if (needsQuote) {
+      const what = callNeedsQuote ? 'a push or an upload' : 'a send or a spend';
+      const What = callNeedsQuote ? 'A push or an upload' : 'A send or a spend';
       if (verdict.quote === undefined || !quoteFound(verdict.quote, known.userWords)) {
         return forward(
-          `A push or an upload needs the user's own words asking for it. The judge said: ${verdict.reason}`,
+          `${What} needs the user's own words asking for it. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -278,7 +405,7 @@ export class ApprovalWatch {
       }
       if (verdict.standingApprovalId !== undefined) {
         return forward(
-          `A standing approval never covers a push or an upload. The judge said: ${verdict.reason}`,
+          `A standing approval never covers ${what}. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -312,9 +439,32 @@ export class ApprovalWatch {
       ...(verdict.standingApprovalId !== undefined
         ? { standingApprovalId: verdict.standingApprovalId }
         : {}),
-      ...(callNeedsQuote && verdict.quote !== undefined ? { quote: verdict.quote } : {}),
+      ...(needsQuote && verdict.quote !== undefined ? { quote: verdict.quote } : {}),
+      parts: shown,
     });
   }
+}
+
+/**
+ * The first of the project's marks the call implies (P13-16), as a forward: "You asked to be
+ * asked: <mark> (from “<example>”)." and the first part it implies — the shortest run of parts
+ * from the start it covers, so a `cd` before that part still counts. `undefined` when none does;
+ * throws when the marks cannot be read.
+ */
+function markForward(
+  call: ApprovalWatchCall,
+  parts: CommandPart[],
+): { reason: string; part?: number } | undefined {
+  const roots = { worktree: call.ctx.cwd, scratch: call.scratch };
+  const covers = (match: ApprovalMark['match'], some: CommandPart[]) =>
+    markCovers(match, { toolCall: call.toolCall, parts: some, ctx: call.ctx }, roots);
+  const mark = call.marks().find((m) => covers(m.match, parts));
+  if (!mark) return undefined;
+  const part = parts.findIndex((_, n) => covers(mark.match, parts.slice(0, n + 1)));
+  return {
+    reason: `You asked to be asked: ${markLabel(mark.match)} (from “${mark.example}”).`,
+    ...(part >= 0 ? { part } : {}),
+  };
 }
 
 /** The project's standing approvals as of now; none when they cannot be read. */
@@ -347,7 +497,11 @@ const isIndex = (i: unknown, length: number): i is number =>
   typeof i === 'number' && Number.isInteger(i) && i >= 0 && i < length;
 
 /** The judge's answer when it is well formed, else `undefined` (it then forwards). */
-function validVerdict(answer: unknown, partCount: number): RequestVerdict | undefined {
+function validVerdict(
+  answer: unknown,
+  partCount: number,
+  mode: RequestJudgeInput['mode'],
+): RequestVerdict | undefined {
   if (typeof answer !== 'object' || answer === null) return undefined;
   const v = answer as Partial<Record<keyof RequestVerdict, unknown>>;
   if (v.verdict !== 'approve' && v.verdict !== 'forward') return undefined;
@@ -357,6 +511,8 @@ function validVerdict(answer: unknown, partCount: number): RequestVerdict | unde
     return undefined;
   }
   if (v.quote !== undefined && typeof v.quote !== 'string') return undefined;
+  // Auto's one question is whether it sends or spends: an answer without it is no answer.
+  if (mode === 'auto' && typeof v.sendsOrSpends !== 'boolean') return undefined;
   const reason =
     v.reason.length <= MAX_REASON_CHARS ? v.reason : `${v.reason.slice(0, MAX_REASON_CHARS - 1)}…`;
   return {
@@ -370,5 +526,6 @@ function validVerdict(answer: unknown, partCount: number): RequestVerdict | unde
       ? { standingApprovalId: v.standingApprovalId }
       : {}),
     ...(typeof v.quote === 'string' ? { quote: v.quote } : {}),
+    ...(typeof v.sendsOrSpends === 'boolean' ? { sendsOrSpends: v.sendsOrSpends } : {}),
   };
 }

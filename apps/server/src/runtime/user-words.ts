@@ -1,4 +1,11 @@
-import { answerDetailOf, type Agent, type Id, type Question } from '@galactic/protocol';
+import {
+  PICKED_OPTION_PREFIX,
+  answerDetailOf,
+  relayedQuestionOf,
+  type Agent,
+  type Id,
+  type Question,
+} from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
 
 /**
@@ -36,8 +43,11 @@ interface Said {
  *
  *   - his messages (`message.sent` with a `user` sender) to the task's Stewards and to the
  *     project's Waykeepers;
- *   - his answers (`answeredBy` the user) to questions of the project's agents — only what he
- *     wrote: never an option the agent offered (`freeTextOf`);
+ *   - his answers (`answeredBy` the user) to questions of the project's agents, and to the
+ *     Harmonizer's questions that relay one of theirs (`relayedQuestionOf`, P13-10): what he wrote
+ *     (`freeTextOf`), plus each option he picked that names a push or an upload and holds nothing
+ *     back (`pickedActionsOf`; a bare "Yes" or "Hold" never counts), marked
+ *     `PICKED_OPTION_PREFIX`;
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
@@ -81,15 +91,25 @@ function collect(log: EventLogReader, taskId: Id): string[] {
   }
 
   const asking = new Set(agents.filter(inProject).map((a) => a.id));
+  const harmonizers = new Set(agents.filter((a) => a.role === 'harmonizer').map((a) => a.id));
+  /** A Harmonizer's question that relays a question of the project's agents (P13-10). */
+  const relaysProject = (q: Question): boolean => {
+    if (!harmonizers.has(q.originAgentId)) return false;
+    const relayed = relayedQuestionOf(q);
+    const origin = relayed !== undefined ? tables.questions.get(relayed) : undefined;
+    return origin !== undefined && asking.has(origin.originAgentId);
+  };
   for (const q of tables.questions.all()) {
     if (
       q.status === 'answered' &&
       q.answeredBy?.type === 'user' &&
       typeof q.answer === 'string' &&
-      asking.has(q.originAgentId)
+      (asking.has(q.originAgentId) || relaysProject(q))
     ) {
-      const text = freeTextOf(q, q.answer);
-      if (text) said.push({ at: q.updatedAt, seq: Number.MAX_SAFE_INTEGER, text });
+      const texts = [...pickedActionsOf(q, q.answer), freeTextOf(q, q.answer)];
+      for (const text of texts) {
+        if (text) said.push({ at: q.updatedAt, seq: Number.MAX_SAFE_INTEGER, text });
+      }
     }
   }
 
@@ -107,13 +127,71 @@ function collect(log: EventLogReader, taskId: Id): string[] {
     .map((s) => s.text.slice(0, MAX_USER_WORD_CHARS));
 }
 
+/**
+ * Words that name an action a push or an upload performs (P13-10): an option the user picked
+ * counts as his words only when it names one ("Push and post the 4 replies"), never a bare "Yes",
+ * "Hold" or "Go ahead". `mentionsPush` (decision 49) reads commands, not prose, so this is its own
+ * small list: push, publish, post, upload, merge, comment, reply, send, open/create/raise a PR,
+ * release, deploy — in their usual inflections.
+ */
+const ACTION_WORDS =
+  /\b(?:push(?:es|ed|ing)?|publish(?:es|ed|ing)?|post(?:s|ed|ing)?|upload(?:s|ed|ing)?|merg(?:e|es|ed|ing)|comment(?:s|ed|ing)?|repl(?:y|ies|ied|ying)|send(?:s|ing)?|sent|release(?:s|d)?|releasing|deploy(?:s|ed|ing)?|(?:open|create|raise)s?\s+(?:a\s+|the\s+)?(?:pr|pull request)s?)\b/i;
+
+/** The marker an agent puts on its suggested option, dropped before the option counts as words. */
+const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+
+/**
+ * Words that hold an action back or negate it (P13-10 review): a picked option with one of them
+ * ("Hold — do not push the branch yet", "Push only, no replies") never counts, even when it names
+ * the action.
+ */
+const HOLDS = /\b(?:not|don'?t|do not|never|no|hold|wait|skip|cancel|stop|without)\b/i;
+
+/** Whether `option` names a push or upload action (`ACTION_WORDS`). */
+export function namesAction(option: string): boolean {
+  return ACTION_WORDS.test(option);
+}
+
+/**
+ * The options the user picked that name a push or upload action and hold nothing back (`HOLDS`)
+ * (P13-10, Cosmin 2026-11-14), each without its " (Recommended)" marker and marked
+ * `PICKED_OPTION_PREFIX` so the quote check takes it whole only: a single pick, a multi-select pick (joined by `CHOICE_JOIN`)
+ * or the options before "<options> — <text>"; a question-set row's `answerDetail.choices`.
+ */
+function pickedActionsOf(q: Question, answer: string): string[] {
+  const options = new Set((q.context.options ?? []).map((o) => o.trim()).filter(Boolean));
+  if (options.size === 0) return [];
+  const detail = answerDetailOf(q);
+  let picked: string[];
+  if (detail) {
+    picked = detail.skipped ? [] : detail.choices.map((c) => c.trim());
+  } else {
+    const a = answer.trim();
+    picked = splitOptions(a, options) ?? [];
+    for (
+      let at = a.indexOf(TEXT_JOIN);
+      picked.length === 0 && at >= 0;
+      at = a.indexOf(TEXT_JOIN, at + 1)
+    ) {
+      picked = splitOptions(a.slice(0, at).trim(), options) ?? [];
+    }
+  }
+  return [
+    ...new Set(
+      picked
+        .map((o) => o.replace(RECOMMENDED, '').trim())
+        .filter((o) => namesAction(o) && !HOLDS.test(o)),
+    ),
+  ].map((o) => `${PICKED_OPTION_PREFIX}${o}`);
+}
+
 /** How a multi-select answer joins its choices, and its choices to its text (`renderSetAnswer`). */
 const CHOICE_JOIN = ', ';
 const TEXT_JOIN = ' — ';
 
 /**
  * The part of an answer the user wrote himself: an option the asking agent offered is the agent's
- * text, not his (final review I1). An answer that is only options (one, or several joined as a
+ * text (final review I1) — it counts only through `pickedActionsOf`, when it names the action. An answer that is only options (one, or several joined as a
  * multi-select answer) has none; "<options> — <text>" keeps the text; anything else is kept whole.
  */
 function freeTextOf(q: Question, answer: string): string | undefined {
@@ -133,26 +211,33 @@ function freeTextOf(q: Question, answer: string): string | undefined {
 
 /** Whether `text` is one or more of `options` joined by `CHOICE_JOIN`. */
 function madeOfOptions(text: string, options: ReadonlySet<string>): boolean {
-  const memo = new Map<number, boolean>();
-  const from = (i: number): boolean => {
+  return splitOptions(text, options) !== undefined;
+}
+
+/** The `options` that make up `text` joined by `CHOICE_JOIN`, in order, or `undefined`. */
+function splitOptions(text: string, options: ReadonlySet<string>): string[] | undefined {
+  const memo = new Map<number, string[] | null>();
+  const from = (i: number): string[] | null => {
     const known = memo.get(i);
     if (known !== undefined) return known;
-    let ok = false;
+    let found: string[] | null = null;
     for (const o of options) {
       if (!text.startsWith(o, i)) continue;
       const end = i + o.length;
-      if (
-        end === text.length ||
-        (text.startsWith(CHOICE_JOIN, end) && from(end + CHOICE_JOIN.length))
-      ) {
-        ok = true;
+      if (end === text.length) {
+        found = [o];
+        break;
+      }
+      const rest = text.startsWith(CHOICE_JOIN, end) ? from(end + CHOICE_JOIN.length) : null;
+      if (rest) {
+        found = [o, ...rest];
         break;
       }
     }
-    memo.set(i, ok);
-    return ok;
+    memo.set(i, found);
+    return found;
   };
-  return text.length > 0 && from(0);
+  return text.length > 0 ? (from(0) ?? undefined) : undefined;
 }
 
 const byTime = (said: Said[]): Said[] =>

@@ -422,12 +422,14 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       // Waykeeper approvals (P13) live on the project's row; `updatedAt` stays, as on the server.
       const project = next.projects[event.projectId];
       if (!project) return next;
-      const { waykeeperApprovals: _old, ...rest } = project;
+      const { waykeeperApprovals: _old, waykeeperAuto: _auto, ...rest } = project;
       return {
         ...next,
         projects: {
           ...next.projects,
-          [project.id]: event.on ? { ...rest, waykeeperApprovals: true } : rest,
+          [project.id]: event.on
+            ? { ...rest, waykeeperApprovals: true, ...(event.auto ? { waykeeperAuto: true } : {}) }
+            : rest,
         },
       };
     }
@@ -450,6 +452,28 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         projects: {
           ...next.projects,
           [project.id]: approvals.length > 0 ? { ...rest, standingApprovals: approvals } : rest,
+        },
+      };
+    }
+    case 'approval_mark.added': {
+      const project = next.projects[event.mark.projectId];
+      if (!project) return next;
+      const marks = [...(project.approvalMarks ?? []), event.mark];
+      return {
+        ...next,
+        projects: { ...next.projects, [project.id]: { ...project, approvalMarks: marks } },
+      };
+    }
+    case 'approval_mark.removed': {
+      const project = next.projects[event.projectId];
+      if (!project?.approvalMarks) return next;
+      const marks = project.approvalMarks.filter((m) => m.id !== event.markId);
+      const { approvalMarks: _old, ...rest } = project;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: marks.length > 0 ? { ...rest, approvalMarks: marks } : rest,
         },
       };
     }
@@ -637,11 +661,14 @@ export function summaryOf(world: WorldState): SystemSummary {
   });
 }
 
-/** The projects with `recordedApprovals` dropped from one (absent project: unchanged). */
+/**
+ * The projects with `recordedApprovals` and `waykeeperAuto` dropped from one (absent project, or
+ * neither present: unchanged).
+ */
 function withoutRecorded(projects: Record<Id, Project>, id: Id): Record<Id, Project> {
   const project = projects[id];
-  if (!project?.recordedApprovals) return projects;
-  const { recordedApprovals: _old, ...rest } = project;
+  if (!project?.recordedApprovals && !project?.waykeeperAuto) return projects;
+  const { recordedApprovals: _old, waykeeperAuto: _auto, ...rest } = project;
   return { ...projects, [id]: rest };
 }
 

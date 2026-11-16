@@ -1,6 +1,6 @@
 # P15-10 — real run of the project dashboard (manual, Cosmin)
 
-**Status:** not run. This needs a real browser, a real phone and real Claude runs; only Cosmin runs it. Phase 15 is not done until the result is recorded at the bottom.
+**Status:** done (2026-11-14). This needs a real browser, a real phone and real Claude runs; only Cosmin runs it. Phase 15 is not done until the result is recorded at the bottom.
 
 ## Before you start
 
@@ -35,4 +35,4 @@ Date, model used, and for each step: passed or what happened. Also: anything tha
 
 ## Result
 
-(Left for Cosmin.)
+2026-11-14: Cosmin ran the checks on the test instance and reported "The dashboard test is done. All good." Two issues found during the run were fixed before it ended: the job map overlay had no background (fixed in 508c16fb) and the Stewards list named each Steward by its whole brief (P15-11).

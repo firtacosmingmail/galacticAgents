@@ -157,3 +157,57 @@ describe('the world fold of panel.* and panels.arranged (P15-01)', () => {
     expect(applySnapshot(SnapshotMessage.parse(base)).panels).toEqual({});
   });
 });
+
+const user = { type: 'user' } as const;
+
+describe('the world fold of Auto and approval marks (P13-13)', () => {
+  const mark = (events['approval_mark.added'] as Extract<Event, { type: 'approval_mark.added' }>)
+    .mark;
+
+  it('folds auto on the switch event and drops it when switched without auto', () => {
+    let w = applyEvent(emptyWorld(), env(1, { type: 'project.created', project: d.project }));
+    w = applyEvent(
+      w,
+      env(2, { type: 'waykeeper_approvals.set', projectId: 'p-1', on: true, auto: true, by: user }),
+    );
+    expect(w.projects['p-1']).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
+    w = applyEvent(
+      w,
+      env(3, { type: 'waykeeper_approvals.set', projectId: 'p-1', on: true, by: user }),
+    );
+    expect(w.projects['p-1']!.waykeeperApprovals).toBe(true);
+    expect('waykeeperAuto' in w.projects['p-1']!).toBe(false);
+  });
+
+  it('appends added marks and drops removed ones, and closing forgets Auto', () => {
+    let w = applyEvent(emptyWorld(), env(1, { type: 'project.created', project: d.project }));
+    w = applyEvent(
+      w,
+      env(2, { type: 'waykeeper_approvals.set', projectId: 'p-1', on: true, auto: true, by: user }),
+    );
+    w = applyEvent(w, env(3, { type: 'approval_mark.added', mark }));
+    expect(w.projects['p-1']!.approvalMarks).toEqual([mark]);
+    w = applyEvent(
+      w,
+      env(4, {
+        type: 'approval_mark.removed',
+        projectId: 'p-1',
+        markId: mark.id,
+        by: user,
+        reason: 'removed by the user',
+      }),
+    );
+    expect('approvalMarks' in w.projects['p-1']!).toBe(false);
+    w = applyEvent(
+      w,
+      env(5, {
+        type: 'project.state_changed',
+        projectId: 'p-1',
+        from: 'in_progress',
+        to: 'completed',
+        by: user,
+      }),
+    );
+    expect('waykeeperAuto' in w.projects['p-1']!).toBe(false);
+  });
+});

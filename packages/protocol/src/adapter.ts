@@ -77,6 +77,12 @@ export interface SpawnOptions {
   model?: string;
   /** Approved launch flags (P12): a Steward only; the adapter maps them to its runtime. */
   launchFlags?: LaunchFlag[];
+  /**
+   * The folder the agent's process and the tools it runs keep their temporary files in (P13-09:
+   * a project Steward's scratch folder, which the server creates first); the adapter maps it to
+   * its runtime's settings. Absent: the runtime's default.
+   */
+  tempDir?: string;
 }
 
 export interface SpawnHandle {

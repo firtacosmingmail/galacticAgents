@@ -6,8 +6,10 @@ import {
   DraftBody,
   AgentRuntime as AgentRuntimeName,
   AllowSimilarBody,
+  ApprovalMarkBody,
   StandingApprovalBody,
   WaykeeperApprovalsBody,
+  type ApprovalMarkResponse,
   type StandingApprovalResponse,
   type WaykeeperApprovalsResponse,
   AnswerBody,
@@ -775,6 +777,7 @@ export function registerAgentRoutes(
           await commands.setWaykeeperApprovals({
             projectId,
             on: body.on,
+            ...(body.auto !== undefined ? { auto: body.auto } : {}),
             by: USER,
             origin: originOf(req),
           });
@@ -790,6 +793,40 @@ export function registerAgentRoutes(
           await commands.removeStandingApproval({
             projectId: id,
             approvalId,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      // "Ask me next time" (P13-16): a mark from a logged Waykeeper approval, added and removed
+      // from anywhere (it only makes the Waykeeper ask); never from an agent's process.
+      app.post('/api/projects/:id/approval-marks', async (req, reply) => {
+        const body = parse(ApprovalMarkBody, req.body, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const projectId = (req.params as { id: string }).id;
+        try {
+          const { value } = await commands.addApprovalMark({
+            projectId,
+            seq: body.seq,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true, mark: value } satisfies ApprovalMarkResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.delete('/api/projects/:id/approval-marks/:markId', async (req, reply) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { id, markId } = req.params as { id: string; markId: string };
+        try {
+          await commands.removeApprovalMark({
+            projectId: id,
+            markId,
             by: USER,
             origin: originOf(req),
           });

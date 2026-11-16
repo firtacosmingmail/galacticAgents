@@ -10,7 +10,12 @@ import {
   SpendContext,
 } from './long-term-questions.js';
 import { LaunchContext, OffScriptContext } from './launch-flags.js';
-import { RecordedApproval, StandingApproval, WaykeeperForward } from './waykeeper-approvals.js';
+import {
+  ApprovalMark,
+  RecordedApproval,
+  StandingApproval,
+  WaykeeperForward,
+} from './waykeeper-approvals.js';
 import { Provider, UsageLimitContext } from './providers.js';
 import {
   AgentRole,
@@ -210,6 +215,13 @@ export const Project = z.object({
    * off. Changed only by `waykeeper_approvals.set`, never by a project update.
    */
   waykeeperApprovals: z.literal(true).optional(),
+  /**
+   * Auto mode (P13-13): with `waykeeperApprovals` on, the Waykeeper also approves what fits the
+   * task's marks and judge. Changed only by `waykeeper_approvals.set`; absent: off.
+   */
+  waykeeperAuto: z.literal(true).optional(),
+  /** The project's approval marks, oldest first; only `approval_mark.added` / `.removed`. */
+  approvalMarks: z.array(ApprovalMark).optional(),
   /**
    * The project's standing approvals (P13), oldest first; absent: none. Changed only by
    * `standing_approval.added` / `standing_approval.removed`; they end with the project.
@@ -621,6 +633,18 @@ export function dismissalOf(
   const by = Actor.safeParse(question.meta?.['cancelledBy']);
   const reason = question.meta?.['cancelReason'];
   return by.success && typeof reason === 'string' ? { by: by.data, reason } : undefined;
+}
+
+/** `meta.relaysQuestionId`: the question a question relays to the user (P13-10). */
+export const RELAYS_QUESTION_ID = 'relaysQuestionId';
+
+/**
+ * The id of the question `question` relays to the user (the Harmonizer's `ask_user` about a
+ * clarification it held, P13-10), from the row's `meta.relaysQuestionId`; `undefined` for none.
+ */
+export function relayedQuestionOf(question: Pick<Question, 'meta'> | undefined): Id | undefined {
+  const id = question?.meta?.[RELAYS_QUESTION_ID];
+  return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
 export const Cost = z.object({

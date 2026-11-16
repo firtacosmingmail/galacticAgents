@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { Id, Timestamp } from './primitives.js';
 import { SetAnswer } from './question-set.js';
 import { Provider } from './providers.js';
-import { RecordedApproval, StandingApproval } from './waykeeper-approvals.js';
+import {
+  ApprovalMark,
+  CommandPart,
+  RecordedApproval,
+  StandingApproval,
+} from './waykeeper-approvals.js';
 import { ReplyQuote } from './reply.js';
 import {
   AgentRole,
@@ -436,6 +441,10 @@ export const PermissionDecided = z.object({
    * launch-flag allows, also decided by an agent, never carry it.
    */
   waykeeperApproval: z.literal(true).optional(),
+  /** The parts of the request, for the approvals log and for making marks (P13-13). */
+  parts: z.array(CommandPart).optional(),
+  /** The Steward's working directory when it asked (P13-13). */
+  cwd: z.string().optional(),
 });
 
 /**
@@ -464,6 +473,8 @@ export const WaykeeperApprovalsSet = z.object({
   type: z.literal('waykeeper_approvals.set'),
   projectId: Id,
   on: z.boolean(),
+  /** Auto mode (P13-13); absent = false. */
+  auto: z.boolean().optional(),
   by: Actor,
 });
 
@@ -481,6 +492,24 @@ export const StandingApprovalRemoved = z.object({
   type: z.literal('standing_approval.removed'),
   projectId: Id,
   approvalId: Id,
+  by: Actor,
+  reason: z.string(),
+});
+
+/** An approval mark was added to a project (P13-13); appended to `Project.approvalMarks`. */
+export const ApprovalMarkAdded = z.object({
+  type: z.literal('approval_mark.added'),
+  mark: ApprovalMark,
+});
+
+/**
+ * An approval mark is gone (P13-13): removed by the user, or by the system when the project was
+ * closed, cancelled or archived. Dropped from `Project.approvalMarks`.
+ */
+export const ApprovalMarkRemoved = z.object({
+  type: z.literal('approval_mark.removed'),
+  projectId: Id,
+  markId: Id,
   by: Actor,
   reason: z.string(),
 });
@@ -606,7 +635,9 @@ export const ProjectChanges = Project.omit({
   permissionRules: true,
   // Nor do Waykeeper approvals (P13): their own events only.
   waykeeperApprovals: true,
+  waykeeperAuto: true,
   standingApprovals: true,
+  approvalMarks: true,
   recordedApprovals: true,
 })
   .extend({
@@ -1007,6 +1038,8 @@ export const Event = z.discriminatedUnion('type', [
   WaykeeperApprovalsSet,
   StandingApprovalAdded,
   StandingApprovalRemoved,
+  ApprovalMarkAdded,
+  ApprovalMarkRemoved,
   ApprovalRecorded,
   ProposalCreated,
   ProposalApproved,

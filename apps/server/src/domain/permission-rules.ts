@@ -1065,7 +1065,7 @@ function folderCovers(folder: string, f: Finding, k: CoverageInput): boolean {
 }
 
 /** Whether `host` is `site` or a subdomain of it, on a label boundary. */
-function onSite(host: string, site: string): boolean {
+export function onSite(host: string, site: string): boolean {
   const h = host.toLowerCase();
   const s = site.toLowerCase();
   if (s === '' || s.startsWith('.')) return false;

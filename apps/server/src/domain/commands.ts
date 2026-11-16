@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import { isAbsolute, relative, resolve } from 'node:path';
 import {
   AgentEvent,
   DISMISSED_BY_USER,
   QUESTION_SET_LIMITS,
+  RELAYS_QUESTION_ID,
   SetAnswer,
   SetQuestionInput,
   SUPERSEDED_BY_MESSAGE,
@@ -17,12 +19,17 @@ import {
   type OpenQuestionSetInput,
   type AllowSimilarInput,
   type RemoveStandingApprovalInput,
+  type AddApprovalMarkInput,
+  type ApprovalMark,
+  type RemoveApprovalMarkInput,
+  APPROVAL_MARK_DAYS,
+  isWaykeeperApproval,
   type SetWaykeeperApprovalsInput,
   type StandingApproval,
   type StandingApprovalResult,
   type StandingApprovalInput,
   SIMILAR_APPROVALS_THRESHOLD,
-  needsUserQuote,
+  isPushOrUpload,
   type PermissionRule,
   type Project,
   type RemovePermissionRuleInput,
@@ -148,10 +155,16 @@ import {
   RULES_END_IN,
 } from './project-rules.js';
 import {
+  addApprovalMark,
   addStandingApproval,
+  markExample,
+  removeApprovalMark,
   removeStandingApproval,
   setWaykeeperApprovals,
 } from './waykeeper-approvals.js';
+import { markFromApproval } from './approval-marks.js';
+import { scratchRoot } from '../workspace/workspaces.js';
+import { workspaceOfCwd } from '../brains/steward-prompt.js';
 import { precedentOf } from '../runtime/scope-watch.js';
 import type { ProposalOptions } from './approval.js';
 import {
@@ -812,7 +825,7 @@ export class Commands implements DomainCommands {
    * the same command, so no supervisor holds it on the way and none is woken by it.
    */
   openQuestion(input: OpenQuestionInput) {
-    const { toUser, ...rest } = input;
+    const { toUser, relays, ...rest } = input;
     if (toUser && rest.kind !== 'clarification') {
       return Promise.reject(
         new DomainError('invalid', 'only a clarification is opened for the user explicitly'),
@@ -824,7 +837,11 @@ export class Commands implements DomainCommands {
         {
           ...rest,
           id: `q-${randomUUID()}`,
-          meta: { source: COMMAND_SOURCE, ...(toUser ? { toUser: true } : {}) },
+          meta: {
+            source: COMMAND_SOURCE,
+            ...(toUser ? { toUser: true } : {}),
+            ...(relays ? { [RELAYS_QUESTION_ID]: relays } : {}),
+          },
         },
         this.questions,
         toUser ? { type: 'user' } : undefined,
@@ -1459,10 +1476,7 @@ export class Commands implements DomainCommands {
         `a standing approval needs ${SIMILAR_APPROVALS_THRESHOLD} similar approvals first`,
       );
     }
-    if (
-      question.context.permissionAction === 'push' ||
-      forward.parts.some((p) => p.categories.includes('push') || needsUserQuote(p))
-    ) {
+    if (isPushOrUpload(question.context)) {
       throw new DomainError(
         'invalid',
         'a push or an upload is never a standing approval: allow it once',
@@ -1516,23 +1530,19 @@ export class Commands implements DomainCommands {
     }
   }
 
-  /** The user turns a project's Waykeeper approvals on or off (P13-05): on needs the Mac. */
+  /**
+   * The user turns a project's Waykeeper approvals on, to Auto, or off (P13-05, P13-13), from the
+   * Mac or the phone (Cosmin, 2026-11-15; SPEC decision 160). Never an agent: the route refuses
+   * an agent's process, and only `by: user` is accepted here.
+   */
   setWaykeeperApprovals(input: SetWaykeeperApprovalsInput): Promise<CommandResult<Project>> {
     if (input.by.type !== 'user') {
       return Promise.reject(
         new DomainError('invalid', 'only the user switches Waykeeper approvals'),
       );
     }
-    if (input.on && !this.mayWriteRules(input.origin)) {
-      return Promise.reject(
-        new DomainError(
-          'remote_control',
-          'Waykeeper approvals are turned on only from this machine',
-        ),
-      );
-    }
     return this.run((ctx) => {
-      setWaykeeperApprovals(ctx, input.projectId, input.on, input.by);
+      setWaykeeperApprovals(ctx, input.projectId, input.on, input.by, input.auto === true);
       return must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
     });
   }
@@ -1552,6 +1562,83 @@ export class Commands implements DomainCommands {
         input.by,
         'removed by the user',
       ),
+    );
+  }
+
+  /**
+   * The user's "Ask me next time" (P13-16, design 2026-11-14 §4.5): a mark made from the
+   * Waykeeper approval logged at `seq`. Refused (`invalid`) unless that event is a Waykeeper
+   * approval of a Steward of `projectId` younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark
+   * only makes the Waykeeper ask.
+   */
+  addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user adds approval marks'));
+    }
+    const { tables } = this.log;
+    const project = tables.projects.get(input.projectId);
+    if (!project) return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    const env = this.log.eventsSince(input.seq - 1, 1)[0];
+    const e = env?.seq === input.seq ? env.event : undefined;
+    if (e?.type !== 'permission.decided' || !isWaykeeperApproval(e)) {
+      return Promise.reject(
+        new DomainError('invalid', `event ${input.seq} is not an approval by the Waykeeper`),
+      );
+    }
+    const agent = tables.agents.get(e.agentId);
+    const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
+    if ((task?.projectId ?? agent?.projectId) !== project.id) {
+      return Promise.reject(
+        new DomainError('invalid', `event ${input.seq} is not an approval of this project`),
+      );
+    }
+    const age = Date.parse(this.log.clock()) - Date.parse(env!.at);
+    if (!(age <= APPROVAL_MARK_DAYS * 24 * 60 * 60 * 1000)) {
+      return Promise.reject(
+        new DomainError(
+          'invalid',
+          `the approval is older than ${APPROVAL_MARK_DAYS} days: it takes no mark`,
+        ),
+      );
+    }
+    const approval = {
+      toolCall: e.toolCall,
+      parts: e.parts,
+      ...(e.action !== undefined ? { action: e.action } : {}),
+    };
+    // Folder paths in the Steward's worktree or scratch folder are kept relative to them, so the
+    // mark applies to every Steward of the project. An approval logged before the event carried
+    // its cwd ran in the task's worktree (or the workspace): that is the cwd and the worktree
+    // root. The scratch folder is found from that cwd, as the runtime's `scratchOf` does, so a
+    // cwd spelled another way than `project.workspace` still has its scratch folder tokenised.
+    const cwd = e.cwd ?? task?.worktreePath ?? project.workspace;
+    let scratch: string | undefined;
+    try {
+      scratch = agent?.taskId ? scratchRoot(workspaceOfCwd(cwd), agent.taskId) : undefined;
+    } catch {
+      scratch = undefined;
+    }
+    const match = markFromApproval(
+      approval,
+      { workspace: project.workspace, cwd, home: homedir() },
+      { worktree: cwd, scratch },
+    );
+    const made = {
+      example: markExample(e.toolCall),
+      fromSeq: input.seq,
+      by: input.by,
+      origin: input.origin ?? ('remote' as const),
+    };
+    return this.run((ctx) => addApprovalMark(ctx, project.id, match, made));
+  }
+
+  /** The user removes a project's approval mark (P13-16), from anywhere. */
+  removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
+    if (input.by.type !== 'user') {
+      return Promise.reject(new DomainError('invalid', 'only the user removes approval marks'));
+    }
+    return this.run((ctx) =>
+      removeApprovalMark(ctx, input.projectId, input.markId, input.by, 'removed by the user'),
     );
   }
 

@@ -23,7 +23,7 @@ import type {
   RunData,
   UsedSource,
 } from './dashboard.js';
-import type { StandingApproval } from './waykeeper-approvals.js';
+import type { ApprovalMark, StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
@@ -238,6 +238,12 @@ export interface OpenQuestionInput {
    * user's).
    */
   toUser?: boolean;
+  /**
+   * The question this one relays to the user (P13-10): the Harmonizer's `ask_user` about a
+   * clarification it holds. Kept on the row as `meta.relaysQuestionId` (`relayedQuestionOf`), so
+   * the user's answer counts among the asking project's own words (`userWordsFor`).
+   */
+  relays?: Id;
 }
 
 export interface AnswerQuestionInput {
@@ -366,6 +372,27 @@ export interface StandingApprovalResult {
 export interface SetWaykeeperApprovalsInput {
   projectId: Id;
   on: boolean;
+  /** Auto mode (P13-13); absent = false. Needs the Mac to turn on, like `on`. */
+  auto?: boolean;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/**
+ * The user's "Ask me next time" on a logged Waykeeper approval (P13-16): a mark made from the
+ * `permission.decided` at `seq`. From anywhere: a mark only makes the Waykeeper ask.
+ */
+export interface AddApprovalMarkInput {
+  projectId: Id;
+  seq: number;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/** The user removes a project's approval mark (P13-16), from anywhere. */
+export interface RemoveApprovalMarkInput {
+  projectId: Id;
+  markId: Id;
   by: Actor;
   origin?: RequestOrigin;
 }
@@ -733,6 +760,10 @@ export interface DomainCommands {
   removeStandingApproval(
     input: RemoveStandingApprovalInput,
   ): Promise<CommandResult<StandingApproval>>;
+  /** Adds an "Always asks me" mark from a Waykeeper approval (P13-16). */
+  addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
+  /** Removes a project's approval mark (P13-16). */
+  removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

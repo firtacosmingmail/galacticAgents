@@ -1070,3 +1070,83 @@ describe("an agent's own session tool-results folder (P14-11)", () => {
     expect(decisionOf('Read', { file_path: file }, { ...rctx, readableFolders: [] })).toBe('ask');
   });
 });
+
+describe("gh's --jq and --template values are not paths (P13-11)", () => {
+  const filters = [
+    "gh api repos/a/b/pulls/1/reviews --jq '.[].user.login'",
+    "gh api repos/a/b/pulls/1/reviews --jq '[.[] | {user: .user.login, state}] | group_by(.user) | map(.[-1])'",
+    "gh api repos/a/b/pulls/1/reviews --jq='.[].user.login'",
+    "gh pr view 1 --json reviews -q '.reviews[].author.login'",
+    "gh pr list --json title --template '{{range .}}{{.title}}/{{end}}'",
+    "gh api x -t '{{.a}}/../.git/x'",
+    "gh api x --template='{{.a}}/.claude/x'",
+  ];
+  it.each(filters)('%s: network only, not guarded', (command) => {
+    const c = classifyCommand(command, ctx);
+    expect(c.actions).toEqual(['network']);
+    expect(c.guarded).toBeUndefined();
+  });
+
+  it('a real guarded path in the same command is still guarded', () => {
+    const c = classifyCommand("gh api x --jq '.[].a' > ~/.gitconfig", ctx);
+    expect(c.guarded).toBe(true);
+    expect(c.actions).toContain('outside_workspace');
+    const d = classifyCommand('gh api x --jq .a --input .git/hooks/x', ctx);
+    expect(d.guarded).toBe(true);
+  });
+
+  it('the filter of another program is still read as before', () => {
+    expect(classifyCommand("jq '.[].user.login' x.json > .git/x", ctx).guarded).toBe(true);
+    expect(classifyCommand("curl https://x.example -o '.[].a'", ctx).guarded).toBe(true);
+  });
+});
+
+describe('symbolic links are refused (decision 158)', () => {
+  const allowAll: PermissionPolicy = {
+    rules: Object.fromEntries(
+      Object.keys(DEFAULT_PERMISSION_POLICY.rules).map((k) => [k, 'allow']),
+    ) as PermissionPolicy['rules'],
+    unclassified: 'allow',
+  };
+  const bash = (command: string) => ({ toolName: 'Bash', input: { command } });
+
+  it('ln -s, ln --symbolic and cp -s are refused whatever the table says', () => {
+    for (const command of [
+      'ln -s ../a b',
+      'ln -sf /etc l',
+      'ln -fns x y',
+      'ln --symbolic a b',
+      'sudo ln -s / l',
+      'gln -s a b',
+      'cp -s a b',
+      'cp -rs a b',
+      'cp --symbolic-link a b',
+      'mkdir x && ln -s /etc x/l',
+      `sh -c 'ln -s / l'`,
+      `python3 -c 'import os; os.symlink("/", "l")'`,
+      `node -e 'require("fs").symlinkSync("/", "l")'`,
+    ]) {
+      const v = evaluate(allowAll, bash(command), ctx);
+      expect(v.decision, command).toBe('deny');
+      expect(v.refused, command).toMatch(/symbolic links/);
+      expect(v.reasons[0], command).toMatch(/symbolic links/);
+    }
+  });
+
+  it('hard links, copies and text that only mentions a link are not refused', () => {
+    for (const command of [
+      'ln a b',
+      'ln -f a b',
+      'cp -r a b',
+      'cp -S .bak a b',
+      'ln -- -s b',
+      'grep -rn "ln -s" docs',
+      'git log --grep symlink',
+      `sh -c 'ln a b; grep -s x f'`,
+    ]) {
+      const v = evaluate(allowAll, bash(command), ctx);
+      expect(v.refused, command).toBeUndefined();
+      expect(v.decision, command).toBe('allow');
+    }
+  });
+});

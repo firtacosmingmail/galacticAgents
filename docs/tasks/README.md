@@ -20,9 +20,9 @@ Local, file-based task management. One file per phase; each phase file lists its
 | 10 — Long-term projects, area moons and recurring jobs | `PHASE_10_LONG_TERM_PROJECTS.md` | done (2026-10-27; merged into `phase-10`, then into `phase-11`, merged into `main` 2026-11-04) | 8/8 | — |
 | 11 — More AI providers (Codex, Antigravity) | `PHASE_11_AI_PROVIDERS.md` | done (2026-11-04; `p11-1-ai-providers` and `p11-2-fixes` merged into `phase-11`, merged into `main` 2026-11-04) | 15/15 | — |
 | 12 — Steward launch flags (`--chrome`) | `PHASE_12_LAUNCH_FLAGS.md` | done (2026-11-06; branch `agent-launch-flags`) | 10/10 | — |
-| 13 — Waykeeper approvals | `PHASE_13_WAYKEEPER_APPROVALS.md` | done (2026-11-11) | 8/8 | — |
+| 13 — Waykeeper approvals | `PHASE_13_WAYKEEPER_APPROVALS.md` | feature done (2026-11-11); follow-up P13-09–P13-12 done (2026-11-14); auto mode P13-13–P13-18 done (2026-11-14); switch from the phone P13-19 and git pushes in Auto P13-20 done (2026-11-15) | 20/20 | — |
 | 14 — "Allow similar" per reason | `PHASE_14_ALLOW_SIMILAR.md` | feature done (2026-11-09; branch `agent-allow-similar-reasons`); follow-up todo | 10/11 | P14-09 |
-| 15 — Project dashboard | `PHASE_15_DASHBOARD.md` | in progress (P15-10 waiting for Cosmin's real run) | 10/11 | P15-10 |
+| 15 — Project dashboard | `PHASE_15_DASHBOARD.md` | done (2026-11-14) | 11/11 | — |
 
 Phases run in order 0 → 1 → 2 → 2.5 → 3 → 4 → 5 → 6 → 7 → 9 → 10 → 11 → 12 → 13 → 14 → 15; Phase 8 tasks are picked whenever their dependencies are met. Phase 7 depends on Phase 5, not on Phase 6. Phase 9 (deliverables) needs Phase 5 and the Phase 8 tasks P8-02, P8-03, P8-06 and P8-11; it does not wait for P7-06.
 

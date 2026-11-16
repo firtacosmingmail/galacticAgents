@@ -15,6 +15,8 @@ import type {
   DismissResponse,
   RemovePermissionRuleResponse,
   SimilarPreviewResponse,
+  ApprovalMarkBody,
+  ApprovalMarkResponse,
   StandingApprovalBody,
   StandingApprovalResponse,
   WaykeeperApprovalsBody,
@@ -243,11 +245,24 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         } satisfies StandingApprovalBody,
       ),
     /** The project's "Waykeeper approves Stewards' requests" switch; "on" is the Mac's alone. */
-    setWaykeeperApprovals: (projectId: string, on: boolean) =>
+    setWaykeeperApprovals: (projectId: string, on: boolean, auto?: boolean) =>
       call<WaykeeperApprovalsResponse>(
         'PUT',
         `/api/projects/${encodeURIComponent(projectId)}/waykeeper-approvals`,
-        { on } satisfies WaykeeperApprovalsBody,
+        { on, ...(auto !== undefined ? { auto } : {}) } satisfies WaykeeperApprovalsBody,
+      ),
+    /** "Ask me next time": makes an approval mark from a Waykeeper approval (decision event `seq`). */
+    addApprovalMark: (projectId: string, seq: number) =>
+      call<ApprovalMarkResponse>(
+        'POST',
+        `/api/projects/${encodeURIComponent(projectId)}/approval-marks`,
+        { seq } satisfies ApprovalMarkBody,
+      ),
+    /** Removes an approval mark; applies to the next request. */
+    removeApprovalMark: (projectId: string, markId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'DELETE',
+        `/api/projects/${encodeURIComponent(projectId)}/approval-marks/${encodeURIComponent(markId)}`,
       ),
     /** Removes a project's standing approval; applies to the next request. */
     removeStandingApproval: (projectId: string, approvalId: string) =>

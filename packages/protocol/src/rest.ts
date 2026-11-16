@@ -18,7 +18,7 @@ import {
 import { ControlTarget } from './events.js';
 import { JobRun, LONG_TERM_LIMITS } from './long-term.js';
 import { Id, Timestamp } from './primitives.js';
-import { StandingApproval } from './waykeeper-approvals.js';
+import { ApprovalMark, StandingApproval } from './waykeeper-approvals.js';
 
 // ---------------------------------------------------------------------------
 // The small REST control surface (TECHNOLOGY §2.2; the ops console of P1-11). Results arrive on
@@ -265,12 +265,19 @@ export const StandingApprovalResponse = z.object({
 export type StandingApprovalResponse = z.infer<typeof StandingApprovalResponse>;
 
 /** `PUT /api/projects/:id/waykeeper-approvals` (P13-05): the project's switch. */
-export const WaykeeperApprovalsBody = z.object({ on: z.boolean() });
+export const WaykeeperApprovalsBody = z.object({ on: z.boolean(), auto: z.boolean().optional() });
 export type WaykeeperApprovalsBody = z.infer<typeof WaykeeperApprovalsBody>;
 
 /** `PUT …/waykeeper-approvals` and `DELETE …/standing-approvals/:approvalId`'s reply (P13-05). */
 export const WaykeeperApprovalsResponse = z.object({ ok: z.literal(true) });
 export type WaykeeperApprovalsResponse = z.infer<typeof WaykeeperApprovalsResponse>;
+
+/** `POST …/approval-marks` (P13-13): makes a mark from the decision event `seq`. */
+export const ApprovalMarkBody = z.object({ seq: z.number().int().positive() });
+export type ApprovalMarkBody = z.infer<typeof ApprovalMarkBody>;
+
+export const ApprovalMarkResponse = z.object({ ok: z.literal(true), mark: ApprovalMark });
+export type ApprovalMarkResponse = z.infer<typeof ApprovalMarkResponse>;
 
 /** A refused answer: `stale` when the question was answered or moved since `version`. */
 export const AnswerRefusal = z.object({

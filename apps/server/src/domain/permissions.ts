@@ -114,6 +114,12 @@ export interface Classification {
    * (decisions 22, 122): no "Allow similar" rule ever allows it (P9-17, decision 138).
    */
   guarded?: true;
+  /**
+   * Why the call is refused whatever the table, a rule or anyone says (decision 158): it creates
+   * a symbolic link. No agent creates one; a link would make a path outside the worktree look
+   * inside it.
+   */
+  refused?: string;
 }
 
 export interface PolicyVerdict extends Classification {
@@ -282,6 +288,7 @@ export function evaluate(
 ): PolicyVerdict {
   const classification = classifyToolCall(call, ctx);
   if (classification.alwaysAllow) return { ...classification, decision: 'allow' };
+  if (classification.refused) return { ...classification, decision: 'deny' };
   const decision = decide(policy, classification.actions, classification.unclassified === true);
   const merged = resolvePolicy(policy);
   const dominant = classification.actions.find((a) => ruleFor(merged, a) === decision);
@@ -611,6 +618,13 @@ export interface SimpleCommand {
    * command splitter only — the gate itself still treats a body as data).
    */
   heredocBody?: string;
+  /**
+   * It runs in the shell that reads the line, unconditionally and in order (P13-09: for the
+   * judge's command splitter only, which remembers a `NAME=value` it sets): at the top level of
+   * the line — not inside `( … )`, `{ … }`, a substitution or a control structure (`if`, `while`,
+   * `for`, `case`, …) — not piped or put in the background, and not after `&&` or `||`.
+   */
+  ownShell?: true;
 }
 
 export interface LexedLine {
@@ -661,6 +675,11 @@ class ShellLexer {
     let pendingOp: string | null = null;
     let depth = 0;
     let i = start;
+    // For `ownShell` (P13-09): open `{ … }` groups and control structures, and the operator that
+    // ended the previous command (`&&`, `||` and `|` are kept across empty commands: `a ||\n b`).
+    let braces = 0;
+    let control = 0;
+    let lastOp = '';
     // Where an unquoted `)` operator ended: zsh reads a `(` right after it as glob qualifiers (R-m).
     let closedAt = -1;
     // Where the current word starts in the raw text, and where this loop step started.
@@ -689,13 +708,31 @@ class ShellLexer {
       word = null;
       quoted = false;
     };
-    const flushCommand = (nextPiped: boolean) => {
+    const flushCommand = (nextPiped: boolean, op: string) => {
       flushWord();
       if (pendingOp !== null) {
         this.opaque.push(`redirection ${pendingOp} without a target`);
         pendingOp = null;
       }
-      if (cmd.words.length > 0 || cmd.redirects.length > 0) this.commands.push(cmd);
+      if (cmd.words.length > 0 || cmd.redirects.length > 0) {
+        if (
+          this.nesting === 0 &&
+          depth === 0 &&
+          braces === 0 &&
+          control === 0 &&
+          !cmd.piped &&
+          !nextPiped &&
+          op !== '&' &&
+          (lastOp === '' || lastOp === ';' || lastOp === '\n' || lastOp === '&')
+        ) {
+          cmd.ownShell = true;
+        }
+        const first = cmd.words[0];
+        if (first !== undefined && CONTROL_OPENERS.has(first)) control++;
+        else if (first !== undefined && CONTROL_CLOSERS.has(first) && control > 0) control--;
+        this.commands.push(cmd);
+        lastOp = op;
+      } else if (lastOp !== '&&' && lastOp !== '||' && lastOp !== '|') lastOp = op;
       cmd = newCommand(nextPiped);
     };
     const substitute = (from: number): number => {
@@ -716,7 +753,7 @@ class ShellLexer {
         flushWord();
         i++;
       } else if (c === '\n') {
-        flushCommand(false);
+        flushCommand(false, '\n');
         i = this.skipHeredocBodies(i + 1);
       } else if (c === '\\') {
         if (next === '\n') {
@@ -788,19 +825,19 @@ class ShellLexer {
           pendingOp = src[i + 2] === '>' ? '&>>' : '&>';
           i += pendingOp.length;
         } else {
-          flushCommand(false);
+          flushCommand(false, next === '&' ? '&&' : '&');
           i += next === '&' ? 2 : 1;
         }
       } else if (c === '|') {
         if (next === '|') {
-          flushCommand(false);
+          flushCommand(false, '||');
           i += 2;
         } else {
-          flushCommand(true);
+          flushCommand(true, '|');
           i += next === '&' ? 2 : 1;
         }
       } else if (c === ';') {
-        flushCommand(false);
+        flushCommand(false, ';');
         i++;
       } else if (c === '(' && word !== null && !/^\s*\)/.test(src.slice(i + 1))) {
         // zsh reads `word(…)` as glob qualifiers or modifiers (`a(:s/x/y/)` rewrites the path,
@@ -826,11 +863,11 @@ class ShellLexer {
           `zsh glob group or qualifier: ${src.slice(i, close < 0 ? src.length : close + 1)}`,
         );
       } else if (c === '(') {
-        flushCommand(false);
+        flushCommand(false, '(');
         depth++;
         i++;
       } else if (c === ')') {
-        flushCommand(false);
+        flushCommand(false, ')');
         i++;
         closedAt = i;
         if (depth === 0 && nested) return i;
@@ -846,7 +883,9 @@ class ShellLexer {
         cmd.redirects.length === 0 &&
         isWordEnd(next)
       ) {
-        flushCommand(false);
+        flushCommand(false, c);
+        if (c === '{') braces++;
+        else if (braces > 0) braces--;
         i++;
       } else if (
         c === '=' &&
@@ -865,7 +904,7 @@ class ShellLexer {
         i++;
       }
     }
-    flushCommand(false);
+    flushCommand(false, '');
     if (nested) this.opaque.push('unterminated $(');
     return i;
   }
@@ -955,6 +994,17 @@ const COMMAND_POSITION_WORDS: ReadonlySet<string> = new Set([
   'time',
   'coproc',
 ]);
+
+/** Words that open and close a control structure (`ownShell`). */
+const CONTROL_OPENERS: ReadonlySet<string> = new Set([
+  'if',
+  'while',
+  'until',
+  'for',
+  'case',
+  'select',
+]);
+const CONTROL_CLOSERS: ReadonlySet<string> = new Set(['fi', 'done', 'esac']);
 
 function newCommand(piped: boolean): SimpleCommand {
   return { words: [], redirects: [], piped, heredoc: false };
@@ -1998,6 +2048,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     }
   };
   let guarded = false;
+  let refused: string | undefined;
   const trimmed = command.trim();
   if (trimmed === '') {
     return { actions: [], reasons: ['empty command'], findings: [], unclassified: true };
@@ -2050,6 +2101,7 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
       opaque = true;
       reasons.push(`env with options the engine does not read: ${shown}`);
     }
+    refused ??= symlinkReason(simple.words);
     const hidden = hiddenProgram(simple) ?? unseenWords(simple.words);
     if (hidden) {
       opaque = true;
@@ -2176,12 +2228,15 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
     for (const why of mentionsPush(trimmed)) {
       note('push', why, { part: why });
     }
+    // A link made in code the engine cannot read is looked for in the raw text, as a push.
+    refused ??= mentionsSymlink(trimmed);
     return {
       actions: [...actions],
-      reasons,
+      reasons: refused ? [refused, ...reasons] : reasons,
       findings,
       unclassified: true,
       ...(guarded ? { guarded: true as const } : {}),
+      ...(refused ? { refused } : {}),
     };
   }
   if (actions.size === 0) {
@@ -2190,10 +2245,57 @@ export function classifyCommand(command: string, ctx: PolicyContext): Classifica
   }
   return {
     actions: [...actions],
-    reasons,
+    reasons: refused ? [refused, ...reasons] : reasons,
     findings,
     ...(guarded ? { guarded: true as const } : {}),
+    ...(refused ? { refused } : {}),
   };
+}
+
+/** Why no agent may run a command that makes a symbolic link (decision 158). */
+const SYMLINK_REFUSAL =
+  'agents may not create symbolic links (a link can make a path outside the worktree look inside it): copy the file or name its real path instead';
+
+/**
+ * Why `words` make a symbolic link (decision 158), or `undefined`: `ln` (or coreutils' `gln`)
+ * with `-s` in an option cluster or `--symbolic`, and `cp`/`gcp` with `-s` or
+ * `--symbolic-link`. Options are read up to `--`.
+ */
+export function symlinkReason(words: string[]): string | undefined {
+  const h = commandHead(words);
+  const head = words[h];
+  if (head === undefined) return undefined;
+  const name = baseName(head);
+  const long =
+    name === 'ln' || name === 'gln'
+      ? '--symbolic'
+      : name === 'cp' || name === 'gcp'
+        ? '--symbolic-link'
+        : undefined;
+  if (long === undefined) return undefined;
+  for (const w of words.slice(h + 1)) {
+    if (w === '--') break;
+    if (w === long || w.startsWith(`${long}=`) || /^-[A-Za-z]*s[A-Za-z]*$/.test(w)) {
+      return `${SYMLINK_REFUSAL}: ${words.slice(h).join(' ')}`;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Raw-text check of a command the engine cannot read (an inline script, `sh -c`, a heredoc body):
+ * `ln -s`/`ln --symbolic`, or a library call that makes a link (`os.symlink(`, `fs.symlinkSync(`,
+ * `File.symlink(`, `.symlink_to(`, `mklink`). Deliberately over-eager, like `mentionsPush`.
+ */
+export function mentionsSymlink(text: string): string | undefined {
+  const bare = text.replace(/["'`\\]/g, '');
+  const found =
+    /\bg?ln[^\S\n]+(?:[^\s;&|]+[^\S\n]+)*?(?:-[A-Za-z]*s[A-Za-z]*|--symbolic)(?:\s|$)/.test(bare) ||
+    /\bg?cp[^\S\n]+(?:[^\s;&|]+[^\S\n]+)*?(?:-[A-Za-z]*s[A-Za-z]*|--symbolic-link)(?:\s|$)/.test(
+      bare,
+    ) ||
+    /\bsymlink(?:Sync)?\s*\(|\.symlink_to\s*\(|\bmklink\b/i.test(bare);
+  return found ? `${SYMLINK_REFUSAL} (inside a command the engine cannot read)` : undefined;
 }
 
 /** `sed -n` with one script that only prints a line or a range (`1,80p`, `120p`, `$p`). */
@@ -2416,7 +2518,9 @@ function guardedTargets(
   }
   const name = command.words[h] !== undefined ? baseName(command.words[h]) : undefined;
   if (name !== undefined && !READ_ONLY_COMMANDS.has(name)) {
-    for (const w of command.words.slice(h + 1)) {
+    const text = textArguments(command.words);
+    for (const [k, w] of command.words.entries()) {
+      if (k <= h || text.has(k)) continue;
       // Each comma part too (`-Wl,-o,.git/hooks/x`): fail closed for any program.
       for (const part of w.includes(',') ? [w, ...w.split(',')] : [w]) {
         const values = part.startsWith('-') ? optionValues(part) : [];
@@ -2468,15 +2572,38 @@ export interface CommandPaths {
  * ../foo` is checked. `$HOME` and `$PWD` are expanded; any other `$VAR` or substitution inside
  * a path-like token makes it unresolvable, and so does `~user`.
  */
-export function pathsInCommand(command: string): Omit<CommandPaths, 'clustered'> {
+export function pathsInCommand(
+  command: string,
+  vars?: ReadonlyMap<string, string>,
+): Omit<CommandPaths, 'clustered'> {
   const out: Omit<CommandPaths, 'clustered'> = { paths: [], unresolvable: [] };
   for (const c of lexCommand(command).commands) {
-    const p = pathsOf(c);
+    const p = pathsOf(vars && vars.size > 0 ? withVars(c, vars) : c);
     // A caller that only reads `paths` judges the cluster readings too (fail closed).
     out.paths.push(...p.paths, ...p.clustered.map((x) => x.path));
     out.unresolvable.push(...p.unresolvable);
   }
   return out;
+}
+
+/**
+ * `command` with each `$NAME` / `${NAME}` of `vars` replaced by its value in its words and
+ * redirection targets (P13-09: the judge's command splitter places a target through a variable
+ * the line set earlier). Any other variable stays as it is, so it stays unresolvable.
+ */
+export function withVars(command: SimpleCommand, vars: ReadonlyMap<string, string>): SimpleCommand {
+  const sub = (word: string) =>
+    word.replace(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g, (m, a, b) => {
+      const value = vars.get((a ?? b) as string);
+      return value ?? m;
+    });
+  return {
+    ...command,
+    words: command.words.map(sub),
+    redirects: command.redirects.map((r) =>
+      r.op === '<<' || r.op === '<<-' ? r : { ...r, target: sub(r.target) },
+    ),
+  };
 }
 
 /**
@@ -2531,7 +2658,9 @@ function pathsOf(command: SimpleCommand): CommandPaths {
   const add = (word: string, isTarget: boolean) => {
     for (const alt of expandBraces(word) ?? [word]) pathToken(alt, isTarget, out, word, clusters);
   };
-  for (const w of command.words) {
+  const text = textArguments(command.words);
+  for (const [k, w] of command.words.entries()) {
+    if (text.has(k)) continue;
     const long = clusters ? undefined : COMPILER_PATH_OPTION.exec(w)?.[1];
     if (long !== undefined) add(long, false);
     add(w, false);
@@ -2547,6 +2676,29 @@ function pathsOf(command: SimpleCommand): CommandPaths {
     if (r.op === '<<' || r.op === '<<-' || r.op === '<<<') continue; // delimiter / string, not a file
     if ((r.op === '>&' || r.op === '<&') && /^(?:\d+-?|-)$/.test(r.target)) continue; // fd dup
     add(r.target, true);
+  }
+  return out;
+}
+
+/** gh's options whose value is a jq filter or a Go template (`--jq`/`-q`, `--template`/`-t`). */
+const GH_TEXT_OPTS = new Set(['--jq', '-q', '--template', '-t']);
+
+/**
+ * The indexes of a command's words that are text it reads, never a path (P13-11): the value of
+ * gh's `--jq`/`-q` and `--template`/`-t`, as the next word or glued with `=` (`--jq=.a`), for any
+ * gh subcommand. A filter like `.[].user.login` would otherwise read as a glob that may reach
+ * `.git`. Only the value: a redirection or another argument of the same command is still read.
+ */
+function textArguments(words: readonly string[]): Set<number> {
+  const out = new Set<number>();
+  const h = commandHead([...words]);
+  if (h >= words.length || baseName(words[h]!) !== 'gh') return out;
+  for (let k = h + 1; k < words.length; k++) {
+    const w = words[k]!;
+    if (w === '--') break;
+    const eq = w.indexOf('=');
+    if (w.startsWith('--') && eq > 0 && GH_TEXT_OPTS.has(w.slice(0, eq))) out.add(k);
+    else if (GH_TEXT_OPTS.has(w) && k + 1 < words.length) out.add(++k);
   }
   return out;
 }
