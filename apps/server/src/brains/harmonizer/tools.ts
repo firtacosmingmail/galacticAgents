@@ -942,7 +942,12 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
         provider: S.enum(Provider.options, 'The provider.'),
         model: S.str('An exact or loose model name; absent: the provider’s default.'),
         images: { type: 'boolean', description: 'The work makes images.' },
-        publishes: { type: 'boolean', description: 'The work publishes. Never Gemini.' },
+        publishes: {
+          type: 'boolean',
+          description:
+            'The work posts content in the user’s name (a social post, an article); pushing code ' +
+            'or opening a PR is not publishing. Never Gemini.',
+        },
       },
       ['provider'],
     ),
