@@ -15,7 +15,9 @@ import { SettingsError, SettingsService } from '../config/settings.js';
 import { buildSnapshot } from '../ws/snapshot.js';
 import { world } from '../test/world.js';
 import { DomainError } from './errors.js';
+import { applyControlState } from './cascade.js';
 import { closeProject, createProject } from './projects.js';
+import { setProjectState } from './states.js';
 import {
   addSendGrant,
   endSendGrants,
@@ -155,6 +157,50 @@ describe('grants end with the project', () => {
     });
     expect(tables.projects.get(project.id)!.sendGrants).toBeUndefined();
     expect(standaloneOf(tables).sendGrants).toEqual([standalone]);
+  });
+
+  it('a project that fails ends its grants as the system: project failed (final review I3)', () => {
+    const { run, tables, project } = setup();
+    const g = run((ctx) => addSendGrant(ctx, { ...base, projectId: project.id }, NOW)).value;
+    const failed = run((ctx) => setProjectState(ctx, project.id, 'failed'));
+    expect(failed.events).toContainEqual({
+      type: 'send_grant.removed',
+      grantId: g.id,
+      projectId: project.id,
+      by: { type: 'system' },
+      reason: 'project failed',
+    });
+    expect(tables.projects.get(project.id)!.sendGrants).toBeUndefined();
+    // Picked up again, it has none back.
+    run((ctx) => setProjectState(ctx, project.id, 'in_progress'));
+    expect(liveGrants(tables, { projectId: project.id }, NOW)).toEqual([]);
+  });
+
+  it('a cancelled project ends its grants once: project cancelled', () => {
+    const { run, project } = setup();
+    const g = run((ctx) => addSendGrant(ctx, { ...base, projectId: project.id }, NOW)).value;
+    const cancelled = run((ctx) =>
+      applyControlState(ctx, { kind: 'project', id: project.id }, 'cancel', USER),
+    );
+    const removed = cancelled.events.filter((e) => e.type === 'send_grant.removed');
+    expect(removed).toEqual([
+      {
+        type: 'send_grant.removed',
+        grantId: g.id,
+        projectId: project.id,
+        by: { type: 'system' },
+        reason: 'project cancelled',
+      },
+    ]);
+  });
+
+  it('refuses a grant for a failed project (final review I3)', () => {
+    const { run, tables, project } = setup();
+    run((ctx) => setProjectState(ctx, project.id, 'failed'));
+    expect(() => run((ctx) => addSendGrant(ctx, { ...base, projectId: project.id }, NOW))).toThrow(
+      expect.objectContaining({ code: 'invalid' }),
+    );
+    expect(tables.projects.get(project.id)!.sendGrants).toBeUndefined();
   });
 
   it('endSendGrants on a project without grants does nothing', () => {

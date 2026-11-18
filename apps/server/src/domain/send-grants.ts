@@ -12,13 +12,13 @@ import {
   type RequestOrigin,
   type SendGrant,
   type Settings,
+  type WorkState,
 } from '@galactic/protocol';
 import type { Database } from '../db/database.js';
 import type { Tables } from '../db/tables.js';
 import { redactSecrets } from '../runtime/redact.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
-import { RULES_END_IN } from './project-rules.js';
 import { saveStandalone, standaloneOf } from './waykeeper-approvals.js';
 
 /**
@@ -29,11 +29,18 @@ import { saveStandalone, standaloneOf } from './waykeeper-approvals.js';
  */
 
 const SYSTEM: Actor = { type: 'system' };
+/** A project in one of these takes no grant: closed, archived, or failed (a cancel too). */
+const GRANTS_END_IN: ReadonlySet<WorkState> = new Set<WorkState>([
+  'completed',
+  'archived',
+  'failed',
+]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Stores a grant; returns it. `endsAt` must be after `now` and at most `SEND_GRANT_MAX_DAYS`
- * ahead (`invalid`). Refused for a project that ended. `now` is epoch milliseconds.
+ * ahead (`invalid`). Refused for a project that ended: closed, archived, failed or cancelled.
+ * `now` is epoch milliseconds.
  */
 export function addSendGrant(
   ctx: CommandContext,
@@ -55,7 +62,7 @@ export function addSendGrant(
     saveStandalone(ctx.tables, { ...standalone, sendGrants: [...standalone.sendGrants, grant] });
   } else {
     const project = must(ctx.tables.projects.get(input.projectId), 'project', input.projectId);
-    if (RULES_END_IN.has(project.state)) {
+    if (GRANTS_END_IN.has(project.state)) {
       throw new DomainError(
         'invalid',
         `project ${project.id} is ${project.state}: it takes no send grants`,
@@ -191,10 +198,12 @@ export interface SendPermissionReply {
 }
 
 /**
- * The user's replies to the send-permission question `question` (P13-28; design §4.4 step 4),
- * oldest first: every `message.sent` from the user that replies to it, and every other chat line
- * of his to its decider `deciderId` since it opened — except one replying to another question.
- * The verbatim check of a grant's words runs against these texts only.
+ * The user's replies to the send-permission question `question` (P13-28; design §4.4 step 4;
+ * final review I2), oldest first, since it opened: every `message.sent` from the user that
+ * replies to it (`replyTo`), and every other chat line of his to its decider `deciderId` — not
+ * one replying to a question — sent while `question` was the decider's only open send-permission
+ * question. With two open, a plain "yes" answers neither. An allow needs one of these, and a
+ * grant's words are checked against these texts only.
  */
 export function sendPermissionReplies(
   db: Database,
@@ -203,7 +212,7 @@ export function sendPermissionReplies(
 ): SendPermissionReply[] {
   const rows = db
     .prepare(
-      `SELECT payload FROM events
+      `SELECT id, payload FROM events
         WHERE type = 'message.sent' AND at >= ?
           AND json_extract(payload, '$.sender.type') = 'user'
           AND (
@@ -215,10 +224,28 @@ export function sendPermissionReplies(
           )
         ORDER BY id`,
     )
-    .all(question.createdAt, question.id, deciderId) as { payload: string }[];
+    .all(question.createdAt, question.id, deciderId) as { id: number; payload: string }[];
+  // The decider's other send-permission questions, as event-id spans [opened, closed).
+  const others = db
+    .prepare(
+      `SELECT o.id AS opened,
+              (SELECT MIN(c.id) FROM events c
+                WHERE c.type IN ('question.answered', 'question.cancelled')
+                  AND json_extract(c.payload, '$.questionId') =
+                    json_extract(o.payload, '$.question.id')) AS closed
+         FROM events o
+        WHERE o.type = 'question.opened'
+          AND json_extract(o.payload, '$.question.context.sendPermission.deciderId') = ?
+          AND json_extract(o.payload, '$.question.id') != ?`,
+    )
+    .all(deciderId, question.id) as { opened: number; closed: number | null }[];
+  const anotherOpenAt = (id: number) =>
+    others.some((o) => o.opened < id && (o.closed === null || o.closed > id));
   return rows.flatMap((r) => {
     const e = JSON.parse(r.payload) as Event;
     if (e.type !== 'message.sent' || e.turn) return [];
+    const toThis = e.replyTo?.kind === 'question' && e.replyTo.id === question.id;
+    if (!toThis && anotherOpenAt(r.id)) return [];
     return [{ text: e.text, origin: e.origin ?? 'remote' }];
   });
 }
@@ -238,7 +265,9 @@ export function notAllowedText(replies: readonly SendPermissionReply[]): string 
 /**
  * The checks of a decider's answer to a send-permission question (P13-28; design §4.4): the
  * question is open, carries `sendPermission` and names `agentId` as its decider; an `allow` comes
- * only after the user replied, and its grant's `words` are a verbatim span of one of his replies.
+ * only after the user replied (`sendPermissionReplies`: a reply to it, or a chat line to the
+ * decider while it was the decider's only open one), and its grant's `words` are a verbatim span
+ * of one of those replies.
  * Throws the refusal (`stale`, `forbidden`, `invalid`); returns the replies and, for a grant, the
  * reply its words were found in.
  */

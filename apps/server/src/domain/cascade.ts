@@ -195,11 +195,12 @@ export function applyControlState(
       }
       if (project.state === 'proposed') archiveProject(ctx, project.id, by);
       else {
+        // Its send grants end as cancelled before the move to failed would end them as failed.
+        endSendGrants(ctx, project.id, 'project cancelled');
         setProjectState(ctx, project.id, 'failed', by);
         // A cancelled project's "Allow similar" rules end with it (P9-17, decision 138).
         endProjectRules(ctx, project.id, 'cancelled');
         endStandingApprovals(ctx, project.id, 'cancelled');
-        endSendGrants(ctx, project.id, 'project cancelled');
         // A cancelled long-term project's jobs stop and its area moons are freed, as on close.
         endProjectAreas(ctx, project.id, by, 'the project was cancelled');
       }

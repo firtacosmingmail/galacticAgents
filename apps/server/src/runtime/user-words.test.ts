@@ -127,6 +127,64 @@ describe('userWordsFor', () => {
     expect(userWordsFor(w.log, task.id)).toEqual(['semicolons, and push when green']);
   });
 
+  it('leaves out his replies and answers to send-permission questions (final review M1)', () => {
+    const w = setup();
+    const { task, wk, steward } = project(w);
+    const send: Question = {
+      id: 'q-send',
+      kind: 'permission',
+      originAgentId: steward.id,
+      holder: USER,
+      status: 'open',
+      context: {
+        text: 'Bash: curl -X POST instagram',
+        sendPermission: { summary: 'Post to Instagram', parts: [], grants: [], deciderId: wk.id },
+      },
+      version: 1,
+      createdAt: '2026-11-18T10:00:00.000Z',
+      updatedAt: '2026-11-18T10:00:00.000Z',
+    };
+    w.run((ctx) => {
+      ctx.tables.questions.insert(send);
+      answered(ctx, 'q-plain', steward.id, 'push the parser branch when green', USER);
+    });
+    w.run((ctx) => {
+      ctx.tables.questions.insert({
+        ...send,
+        id: 'q-send-2',
+        status: 'answered',
+        answeredBy: USER,
+        answer: "deny: don't post to Instagram today",
+      });
+    });
+    const reply = (agentId: Id, text: string, id: Id) =>
+      w.run((ctx) =>
+        ctx.emit({
+          type: 'message.sent',
+          messageId: `m-reply-${id}-${agentId}`,
+          agentId,
+          sender: USER,
+          text,
+          interrupt: false,
+          replyTo: { kind: 'question', id, sender: { type: 'agent', id: steward.id }, text: 'x' },
+        }),
+      );
+    reply(wk.id, "don't post to Instagram today", send.id);
+    reply(steward.id, "no, don't post to Instagram today", send.id);
+    reply(wk.id, 'yes, use semicolons as the delimiter', 'q-plain');
+    w.say(wk.id, 'also push the docs');
+    const words = userWordsFor(w.log, task.id);
+    expect(words).toEqual(
+      expect.arrayContaining([
+        'push the parser branch when green',
+        'yes, use semicolons as the delimiter',
+        'also push the docs',
+      ]),
+    );
+    expect(words.some((t) => t.includes('Instagram'))).toBe(false);
+    expect(quoteFound('post to Instagram today', words)).toBe(false);
+  });
+
   it('keeps the last five messages to the Harmonizer before the proposal, none after', () => {
     const w = setup();
     for (let i = 1; i <= 7; i++) w.say(w.hq.id, `before ${i}`);

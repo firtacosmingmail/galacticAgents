@@ -113,10 +113,17 @@ const DIFF_RUNS = (a: string) => /^-[a-zA-Z0-9]*l/.test(a) || a.startsWith('--p'
 const WRITING_FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 
 /**
+ * Where network and external file systems are mounted (final review M2): `/Volumes` (SMB, NFS,
+ * external disks on macOS) and `/net` (the automounter). A file put there may leave the machine.
+ */
+const NETWORK_MOUNTS = ['/Volumes', '/net'];
+
+/**
  * Whether a path is in a program folder (P13-26, review): a directory on PATH (or the folder
  * itself), or any path with a segment named `bin` or `sbin`. A file put there shadows a command
- * the next call runs. `~` and relative paths resolve against the Steward's home and cwd; on macOS
- * the comparison ignores case, as its file system does.
+ * the next call runs. A path under a network or external mount (`NETWORK_MOUNTS`) counts too: a
+ * file put there may leave the machine. `~` and relative paths resolve against the Steward's home
+ * and cwd; on macOS the comparison ignores case, as its file system does.
  */
 export type ProgramFolderTest = (path: string) => boolean;
 
@@ -135,10 +142,12 @@ export function programFolderTest(
     .split(':')
     .filter((d) => d.length > 0)
     .map((d) => fold(absolute(d)));
+  const mounts = NETWORK_MOUNTS.map(fold);
   return (raw: string) => {
     if (raw.length === 0) return false;
     const p = fold(absolute(raw));
     if (p.split(sep).some((seg) => seg === 'bin' || seg === 'sbin')) return true;
+    if (mounts.some((m) => p === m || p.startsWith(m + sep))) return true;
     return dirs.some((d) => p === d || p.startsWith(d.endsWith(sep) ? d : d + sep));
   };
 }
@@ -355,32 +364,33 @@ function hardRule(part: CommandPart): string | undefined {
 
 /**
  * The approval watch (P13-04; design 2026-11-09-waykeeper-approvals §5.2–5.5): a Steward's `ask`
- * request is held while the request judge looks at it, then approved in the Waykeeper's name or
- * forwarded to the user with the reason. Shares the scope watch's held-call machinery: the same
- * timeout, fail-closed failures and cancel race.
+ * request is held while the request judge looks at it, then answered in the Waykeeper's name.
+ * Shares the scope watch's held-call machinery: the same timeout and cancel race. Never throws
+ * into the runtime; a throw before any callback forwards the call to the user.
  *
- * The judge is not trusted. The hard rules are decided here, before it is called and without it:
- * a guarded write (by a part or by the whole call), a delete outside the worktree and the
- * Steward's scratch folder, a delete whose
- * target a substitution decides, an unreadable part, and inline code or a script file whose raw
- * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
- * if every push or upload part is granted by a quote the server finds in the user's own words,
- * any standing approval it names exists on the project (and never covers a push, an upload or an
- * opaque part), and the switch is still on.
+ * Two modes, chosen by `call.auto()` when the request arrives.
  *
- * Marks (P13-16; design 2026-11-14-waykeeper-auto-mode §4.5): after the hard rules and before
- * the judge, a request one of the project's "Always asks me" marks covers is forwarded.
- * The judge's reason is cut to `MAX_REASON_CHARS`.
- * Every failure — no judge, an error, a timeout, a malformed answer, a throw anywhere before a
- * callback — forwards. Never throws into the runtime.
+ * "Only what fits the task" (`task`): approved or forwarded to the user with the reason. The judge
+ * is not trusted. Decided here, before it is called and without it, and always forwarded: a
+ * guarded write (by a part or by the whole call), a delete outside the worktree and the Steward's
+ * scratch folder, a delete whose target a substitution decides, an unreadable part, inline code or
+ * a script file whose raw text mentions a push (`mentionsPush`), and a git push to the main branch
+ * or to a branch it cannot tell (decision 161). Then a request one of the project's "Always asks
+ * me" marks covers is forwarded (P13-16). After the judge, an approval is kept only if every push
+ * or upload part is granted by a quote the server finds in the user's own words, any standing
+ * approval it names exists on the project (and never covers a push, an upload or an opaque part),
+ * the switch is still on and no mark was added meanwhile. Every failure — no judge, an error, a
+ * timeout, a malformed answer — forwards. The judge's reason is cut to `MAX_REASON_CHARS`.
  *
- * Auto (P13-26; design 2026-11-18-auto-approves-all §4.2) replaces all of the above: no hard
- * rules, no push checks. A mark still forwards; a request that only touches files is approved
- * without the judge; anything else goes to the judge in `grants` mode and is approved when it
- * neither sends nor spends, when a grant live at verdict time covers it, or when the user's own
- * words ask for it (a quote the server finds); otherwise — or when the check fails — it is held
- * (`hold`) for the grant question. The switch or Auto turned off, or a mark added, while it was
- * judged forwards, as in task mode. A throw before any callback still forwards.
+ * Auto (P13-26; design 2026-11-18-auto-approves-all §4.2): everything is approved except a send
+ * or a spend, which needs a grant or the user's words; no hard rules, no push checks. A mark still
+ * forwards. A request that only touches files (`LOCAL_ONLY_CATEGORIES`, `onlyFileWork`; not into a
+ * program folder or a network mount, and no guarded write — a git hook or git configuration runs
+ * on the next approved git command) is approved without the judge. Anything else goes to the
+ * judge in `grants` mode and is approved when it neither sends nor spends, when a grant live at
+ * verdict time covers it, or when the user's own words ask for it (a quote the server finds);
+ * otherwise — or when the check fails — it is held (`hold`) for the grant question. The switch or
+ * Auto turned off, or a mark added, while it was judged forwards, as in task mode.
  */
 export class ApprovalWatch {
   private readonly calls: HeldJudgeCalls;
@@ -460,17 +470,15 @@ export class ApprovalWatch {
   }
 
   /**
-   * The request's git pushes (P13-20, decision 161): `forward` for a push to the main branch
-   * (`main`, `master`, the remote's default) or one whose branch cannot be told; otherwise the
-   * indexes of the parts that are a single git push to other branches (`cleared`). Other pushes
-   * (`gh pr create`, `npm publish`) are neither.
+   * Task mode's git pushes (P13-20, decision 161): a forward for a push to the main branch
+   * (`main`, `master`, the remote's default) or one whose branch cannot be told; `undefined`
+   * otherwise. Other pushes (`gh pr create`, `npm publish`) are not looked at here.
    */
   private async gitPushes(
     call: ApprovalWatchCall,
     parts: readonly CommandPart[],
-  ): Promise<{ cleared: number[] } | { forward: string; part: number }> {
-    const cleared: number[] = [];
-    if (call.toolCall.toolName !== 'Bash') return { cleared };
+  ): Promise<{ forward: string; part: number } | undefined> {
+    if (call.toolCall.toolName !== 'Bash') return undefined;
     let mains: string[] | undefined;
     for (const [i, part] of parts.entries()) {
       if (!part.categories.includes('push')) continue;
@@ -487,9 +495,8 @@ export class ApprovalWatch {
       if (pushesToMain(push.branches, mains)) {
         return { forward: 'it pushes to the main branch, which only the user can allow', part: i };
       }
-      cleared.push(i);
     }
-    return { cleared };
+    return undefined;
   }
 
   private async decide(call: ApprovalWatchCall): Promise<void> {
@@ -542,7 +549,7 @@ export class ApprovalWatch {
     }
     // -- git pushes (P13-20, decision 161): never to the main branch --------------------------
     const pushes = await this.gitPushes(call, parts);
-    if ('forward' in pushes) {
+    if (pushes) {
       return forward(`Never approved by the Waykeeper: ${pushes.forward}.`, unjudged, pushes.part);
     }
     const mode: RequestJudgeInput['mode'] = 'task';
@@ -715,11 +722,14 @@ export class ApprovalWatch {
     const categories = [...new Set([...call.categories, ...(whole?.actions ?? [])])];
     const localOnly = (cs: readonly PermissionAction[]) =>
       cs.length > 0 && cs.every((c) => LOCAL_ONLY_CATEGORIES.has(c));
+    // A guarded write (agent or git configuration, .git/hooks, the deliverables folder) goes to
+    // the judge: a hook or `core.fsmonitor` runs on the next approved git command (final review I1).
     if (
       whole !== undefined &&
       whole.unclassified !== true &&
+      whole.guarded !== true &&
       parts.length > 0 &&
-      parts.every((p) => p.opaque === undefined && localOnly(p.categories)) &&
+      parts.every((p) => p.opaque === undefined && !p.guarded && localOnly(p.categories)) &&
       localOnly(categories) &&
       onlyFileWork(
         call.toolCall,

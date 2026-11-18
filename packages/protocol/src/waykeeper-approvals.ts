@@ -277,15 +277,13 @@ export function isJudgedKind(kind: string): boolean {
 
 /** What the request judge is given (design §5.3). */
 export interface RequestJudgeInput {
-  /** `task`: a Steward's request against its task; `auto`: the Auto policy (design 4.2). */
-  mode: 'task' | 'auto' | 'grants';
+  /**
+   * `task`: a Steward's request against its task; `grants`: Auto (design 2026-11-18 §4.2) —
+   * whether it sends or spends, and which grant or words cover it.
+   */
+  mode: 'task' | 'grants';
   /** Grants mode: the live grants the request is matched against. */
   grants?: SendGrant[];
-  /**
-   * Auto only (P13-20, decision 161): every push in the request is a git push the server checked
-   * goes to a branch other than the main branch; it needs no quote of the user's words.
-   */
-  pushesCleared?: true;
   task: { title: string; description: string };
   workspace: string;
   cwd: string;

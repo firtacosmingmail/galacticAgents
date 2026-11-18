@@ -339,6 +339,45 @@ describe('answer_send_permission: allow and deny (P13-28)', () => {
     expect(c.answersTo(question.id)).toEqual([{ questionId: question.id, answer: 'allow' }]);
   });
 
+  it('with two open questions, a plain chat line answers neither; a reply to one allows only it (final review I2)', async () => {
+    const { c, waykeeper, project, steward, question, answer } = await projectHeld();
+    const second = await heldSteward(c, project.id, waykeeper.id);
+    c.say(waykeeper.id, 'yes, comment on the PRs this week');
+    for (const q of [question, second.question]) {
+      await expect(answer({ questionId: q.id, decision: 'allow' })).rejects.toMatchObject({
+        code: 'invalid',
+        message: expect.stringContaining('has not replied'),
+      });
+      await expect(
+        answer({
+          questionId: q.id,
+          decision: 'allow',
+          grant: { words: 'comment on the PRs this week', summary: 'PR comments' },
+        }),
+      ).rejects.toMatchObject({ code: 'invalid' });
+    }
+    expect(c.ofType('send_grant.added')).toEqual([]);
+    c.say(waykeeper.id, 'yes, this one', { replyTo: question });
+    await answer({ questionId: question.id, decision: 'allow' });
+    await until(() => c.ofType('agent.finished').some((e) => e.agentId === steward.id));
+    expect(decisionsOf(c, steward.id)[0]).toMatchObject({ allowedBy: 'allow_once' });
+    // The other is still unanswered: neither the chat line nor the reply to the first counts.
+    await expect(
+      answer({ questionId: second.question.id, decision: 'allow' }),
+    ).rejects.toMatchObject({
+      code: 'invalid',
+      message: expect.stringContaining('has not replied'),
+    });
+    expect(c.log.tables.questions.get(second.question.id)!.status).toBe('open');
+    expect(c.answersTo(second.question.id)).toEqual([]);
+    // Now the only one open: a plain chat line to the Waykeeper counts for it.
+    c.say(waykeeper.id, 'and the other one too');
+    await answer({ questionId: second.question.id, decision: 'allow' });
+    expect(c.answersTo(second.question.id)).toEqual([
+      { questionId: second.question.id, answer: 'allow' },
+    ]);
+  });
+
   it('deny refuses the call and tells the Steward his words', async () => {
     const { c, waykeeper, steward, question, answer } = await projectHeld();
     c.say(waykeeper.id, 'no, not on Instagram', { replyTo: question });

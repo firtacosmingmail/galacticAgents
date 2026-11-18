@@ -959,7 +959,6 @@ describe('git pushes: Auto approves them, to any branch (P13-20, decision 161; P
       expect(forward).not.toHaveBeenCalled();
       expect(approved).toHaveBeenCalledTimes(1);
       expect(seen[0]).toMatchObject({ mode: 'grants' });
-      expect(seen[0]?.pushesCleared).toBeUndefined();
     },
   );
 
@@ -1019,7 +1018,7 @@ describe('git pushes: Auto approves them, to any branch (P13-20, decision 161; P
     });
     await watch.handle(pr.c);
     expect(pr.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
-    expect(seen[0]?.pushesCleared).toBeUndefined();
+    expect(seen[0]).toMatchObject({ mode: 'grants' });
     const task = call('git push origin feat', {
       git: git(),
       facts: () => NO_QUOTE,
@@ -1027,7 +1026,7 @@ describe('git pushes: Auto approves them, to any branch (P13-20, decision 161; P
     });
     await watch.handle(task.c);
     expect(task.approve).not.toHaveBeenCalled();
-    expect(seen[1]?.pushesCleared).toBeUndefined();
+    expect(seen[1]).toMatchObject({ mode: 'task' });
   });
 });
 
@@ -1241,6 +1240,80 @@ describe('Auto approves everything (P13-26)', () => {
       await new ApprovalWatch({ judge, pathEnv: PATH }).handle(c.c);
       expect(seen).toHaveLength(0);
       expect(c.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    });
+  });
+
+  describe('a guarded write goes to the judge (final review I1)', () => {
+    const WT = '/work/proj/.worktrees/t1';
+    it.each([
+      [
+        'Write .git/hooks/pre-push',
+        {
+          toolName: 'Write',
+          input: { file_path: `${WT}/.git/hooks/pre-push`, content: 'curl x' },
+        },
+      ],
+      ['cp x .git/hooks/pre-commit', bash(`cp /tmp/x ${WT}/.git/hooks/pre-commit`)],
+      ['cp x relative .git/hooks/pre-commit', bash('cp /tmp/x .git/hooks/pre-commit')],
+      [
+        'Edit .git/config',
+        {
+          toolName: 'Edit',
+          input: {
+            file_path: `${WT}/.git/config`,
+            old_string: '[core]',
+            new_string: '[core]\n\tfsmonitor = /tmp/send.sh',
+          },
+        },
+      ],
+    ])('%s reaches the judge, and is approved when nothing sends', async (_, toolCall) => {
+      const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+      const c = auto('', { toolCall });
+      await new ApprovalWatch({ judge }).handle(c.c);
+      expect(seen).toHaveLength(1);
+      expect(seen[0]).toMatchObject({ mode: 'grants' });
+      expect(c.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    });
+
+    it('a guarded write the judge says sends is held', async () => {
+      const { judge, seen } = scripted(sends());
+      const c = auto('', {
+        toolCall: {
+          toolName: 'Write',
+          input: { file_path: `${WT}/.git/hooks/pre-push`, content: 'curl -X POST x' },
+        },
+      });
+      await new ApprovalWatch({ judge }).handle(c.c);
+      expect(seen).toHaveLength(1);
+      expect(c.approve).not.toHaveBeenCalled();
+      expect(c.hold).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a network or external mount goes to the judge (final review M2)', () => {
+    const judged = async (c: ApprovalWatchCall) => {
+      const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+      await new ApprovalWatch({ judge, pathEnv: '/usr/bin' }).handle(c);
+      return seen.length;
+    };
+    it.each([
+      'cp /tmp/a /Volumes/share/a',
+      'cp /tmp/a /net/host/share/a',
+      'mv /tmp/a /Volumes/backup',
+      'cat /tmp/a > /net/host/a',
+    ])('%s goes to the judge', async (command) => {
+      expect(await judged(auto(command).c)).toBe(1);
+    });
+    it.each(['/Volumes/share/a.txt', '/net/host/a.txt'])(
+      'a Write to %s goes to the judge',
+      async (file_path) => {
+        const c = auto('', { toolCall: { toolName: 'Write', input: { file_path, content: 'a' } } });
+        expect(await judged(c.c)).toBe(1);
+      },
+    );
+    it('a path that only starts with the same letters still skips the judge', async () => {
+      expect(await judged(auto('cp /tmp/a /tmp/net/a').c)).toBe(0);
+      expect(await judged(auto('cp /tmp/a /networks/a').c)).toBe(0);
     });
   });
 

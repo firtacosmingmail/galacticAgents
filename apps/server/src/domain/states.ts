@@ -141,6 +141,9 @@ export function setProjectState(ctx: CommandContext, projectId: Id, to: WorkStat
     // And its send grants (Auto, design 2026-11-18).
     endSendGrants(ctx, projectId, to === 'completed' ? 'project closed' : 'project archived');
   }
+  // A failed project's grants end too, and stay ended if it is picked up again (decision 164).
+  // A cancel ends them first, as 'project cancelled' (cascade.ts).
+  if (to === 'failed') endSendGrants(ctx, projectId, 'project failed');
   return ctx.tables.projects.get(projectId) ?? project;
 }
 

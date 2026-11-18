@@ -50,6 +50,10 @@ interface Said {
  *     `PICKED_OPTION_PREFIX`;
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
+ * Left out (final review M1): his replies (`replyTo`) and answers to send-permission questions.
+ * Those are for the grant question alone; a denial ("don't post to Instagram today") must never
+ * become task words a send is approved by.
+ *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
  * Never throws: whatever cannot be read counts as no words (a push then goes to the user).
  */
@@ -78,11 +82,16 @@ function collect(log: EventLogReader, taskId: Id): string[] {
     : [];
 
   const said: Said[] = [];
+  /** A send-permission question (Auto): his reply to it is for its grant, never a task word. */
+  const isSendQuestion = (id: Id) => tables.questions.get(id)?.context.sendPermission !== undefined;
   const messagesTo = (agentId: Id, limit: number, until?: string): Said[] =>
     log
       .latestOf('message.sent', agentId, limit, until)
       .flatMap(({ seq, at, event }) =>
-        event.type === 'message.sent' && event.sender.type === 'user' && event.text.trim()
+        event.type === 'message.sent' &&
+        event.sender.type === 'user' &&
+        event.text.trim() &&
+        !(event.replyTo?.kind === 'question' && isSendQuestion(event.replyTo.id))
           ? [{ at, seq, text: event.text }]
           : [],
       );
@@ -104,6 +113,7 @@ function collect(log: EventLogReader, taskId: Id): string[] {
       q.status === 'answered' &&
       q.answeredBy?.type === 'user' &&
       typeof q.answer === 'string' &&
+      q.context.sendPermission === undefined &&
       (asking.has(q.originAgentId) || relaysProject(q))
     ) {
       const texts = [...pickedActionsOf(q, q.answer), freeTextOf(q, q.answer)];
