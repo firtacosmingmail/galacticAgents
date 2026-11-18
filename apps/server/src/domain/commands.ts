@@ -157,6 +157,7 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
+import { removeSendGrant } from './send-grants.js';
 import {
   addApprovalMark,
   addStandingApproval,
@@ -1645,9 +1646,9 @@ export class Commands implements DomainCommands {
     );
   }
 
-  /** The user removes a send grant (P13-23 declares it; the behaviour comes with the grant tasks). */
-  removeSendGrant(_input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
-    return Promise.reject(new DomainError('invalid', 'send grants are not implemented yet'));
+  /** The user removes a send grant, from anywhere; the held calls it covered are not re-opened. */
+  removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
+    return this.run((ctx) => removeSendGrant(ctx, input.grantId, input.by, 'removed by the user'));
   }
 
   /** Answers a send-permission question (P13-23 declares it; the behaviour comes later). */

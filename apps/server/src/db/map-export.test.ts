@@ -749,3 +749,43 @@ describe('map export and import (P8-03)', () => {
     expect(rows.projects).toEqual([]);
   });
 });
+
+describe('standalone approvals through an import (P13-24)', () => {
+  it('the standalone row (grants and marks) is rebuilt from the log', async () => {
+    const dir = tempDir();
+    const source = join(dir, 'source.sqlite');
+    const db = openDatabase(source);
+    const log = new EventLog(db);
+    const user: Actor = { type: 'user' };
+    const grant = {
+      id: 'sg-1',
+      words: 'push my branches',
+      summary: 'push branches',
+      createdAt: '2026-11-18T10:00:00.000Z',
+      createdBy: user,
+      origin: 'local' as const,
+      questionId: 'q-1',
+    };
+    log.runCommand(({ tables, emit }) => {
+      tables.standalone.upsert({
+        id: 'standalone',
+        approvalMarks: [],
+        sendGrants: [grant],
+        recordedApprovals: [],
+      });
+      emit({ type: 'send_grant.added', grant });
+    });
+    const exported = exportMap(db);
+    db.close();
+    const target = join(dir, 'target.sqlite');
+    await importMap(target, JSON.parse(JSON.stringify(exported)));
+    const imported = openDatabase(target);
+    expect(new EventLog(imported).tables.standalone.get('standalone')).toEqual({
+      id: 'standalone',
+      approvalMarks: [],
+      sendGrants: [grant],
+      recordedApprovals: [],
+    });
+    imported.close();
+  });
+});

@@ -194,8 +194,13 @@ export class SettingsService {
   update(given: SettingsPatch, write: PolicyWrite = {}): SettingsResponse {
     const patch = given;
     const remote = writableFor(write) === 'limited';
+    // Turning standalone Auto off works from anywhere; on, only like a project's Auto (decision
+    // 160): from this machine or with `autoApproveRemote` (a remote client is not `all`).
     const refused = (Object.keys(patch) as SettingName[]).filter(
-      (k) => patch[k] !== undefined && !REMOTE_WRITABLE.includes(k),
+      (k) =>
+        patch[k] !== undefined &&
+        !REMOTE_WRITABLE.includes(k) &&
+        !(k === 'standaloneAuto' && patch.standaloneAuto === false),
     );
     if (remote && refused.length > 0) {
       throw new SettingsError(
@@ -256,6 +261,8 @@ export class SettingsService {
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
     if (patch.brainUserMcp !== undefined) next.brainUserMcp = patch.brainUserMcp;
+    if (patch.standaloneAuto === true) next.standaloneAuto = true;
+    else if (patch.standaloneAuto === false) delete next.standaloneAuto;
     if (patch.budgets?.warnAtPercent !== undefined) {
       next.budgets = { ...next.budgets, warnAtPercent: patch.budgets.warnAtPercent };
     }
@@ -371,6 +378,7 @@ export class SettingsService {
       ...(c.appName ? { appName: c.appName } : {}),
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
       brainUserMcp: c.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
+      ...(c.standaloneAuto ? { standaloneAuto: true } : {}),
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.defaultProvider ? { defaultProvider: c.defaultProvider } : {}),
@@ -408,6 +416,8 @@ export class SettingsService {
     if (patch.stewardsLoadUserSettings !== undefined)
       raw['stewardsLoadUserSettings'] = next.stewardsLoadUserSettings;
     if (patch.brainUserMcp !== undefined) raw['brainUserMcp'] = next.brainUserMcp;
+    if (patch.standaloneAuto === true) raw['standaloneAuto'] = true;
+    else if (patch.standaloneAuto === false) delete raw['standaloneAuto'];
     if (patch.budgets?.warnAtPercent !== undefined) {
       raw['budgets'] = { ...((raw['budgets'] as object | undefined) ?? {}), ...next.budgets };
     }
@@ -464,6 +474,10 @@ export class SettingsService {
   }
 
   private apply(patch: SettingsPatch, next: Settings): void {
+    if (patch.standaloneAuto !== undefined) {
+      if (next.standaloneAuto) this.config.standaloneAuto = true;
+      else delete this.config.standaloneAuto;
+    }
     if (patch.defaultPermissionPolicy !== undefined) {
       setGlobalDefaultPolicy(next.defaultPermissionPolicy);
       this.config.defaultPermissionPolicy = next.defaultPermissionPolicy;
