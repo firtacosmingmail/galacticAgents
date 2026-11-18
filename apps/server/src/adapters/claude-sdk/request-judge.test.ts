@@ -461,6 +461,13 @@ describe('SDK request judge: grants mode (P13-25)', () => {
     expect(v.quote).toBe('Please review PR 42 of this repo.');
   });
 
+  it('forwards a send whose quote is not in the user words', async () => {
+    const { judge } = setup(
+      json({ ...answer, grantId: undefined, quote: 'Post everything to every channel' }),
+    );
+    expect((await judge.judge(grants, signal())).verdict).toBe('forward');
+  });
+
   it('forwards a send nothing covers, even when the model said approve', async () => {
     const { judge } = setup(json({ ...answer, grantId: undefined }));
     const v = await judge.judge(grants, signal());

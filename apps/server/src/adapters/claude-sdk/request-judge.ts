@@ -339,8 +339,10 @@ function hardRuleViolation(
  * spends, or a grant or a quote covers it; forward otherwise. The server re-checks the grant's
  * liveness and the quote (quoteFound) before it acts on either.
  */
-function grantsVerdict(v: RequestVerdict): RequestVerdict {
-  const covered = v.grantId !== undefined || (v.quote !== undefined && v.quote.trim() !== '');
+function grantsVerdict(v: RequestVerdict, input: RequestJudgeInput): RequestVerdict {
+  const covered =
+    v.grantId !== undefined ||
+    (v.quote !== undefined && v.quote.trim() !== '' && quoteFound(v.quote, input.userWords));
   const approve = v.sendsOrSpends === false || covered;
   if (approve === (v.verdict === 'approve')) return v;
   return {
@@ -365,7 +367,7 @@ export function createSdkRequestJudge(opts: { sdk: SdkSurface; model?: string })
       if (!r.ok) return forward(`the judge failed: ${r.error}`);
       const v = parseVerdict(r.text, input);
       if (!v) return unreadable();
-      if (input.mode === 'grants') return grantsVerdict(v);
+      if (input.mode === 'grants') return grantsVerdict(v, input);
       return hardRuleViolation(v, input) ?? v;
     },
   };
