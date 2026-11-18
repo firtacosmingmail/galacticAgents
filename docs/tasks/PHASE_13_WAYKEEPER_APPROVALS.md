@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-31 · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29, P13-30 done (2026-11-19) (branch `agent-auto-grants`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 30/31
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-31 done (2026-11-19) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 31/31
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -156,36 +156,36 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
 ### P13-23 — Protocol shapes, events, projection, migration, board (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-22 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 1 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 1 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-24 — Domain — grants and the standalone scope (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-23 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 2 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 2 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-25 — The request judge's `grants` mode (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-23 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 3 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 3 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-26 — The approval watch's new Auto path (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-24, P13-25 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 4 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 4 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-27 — Runtime — no bypass paths; holding a send (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-26 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 5 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 5 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-28 — The Waykeeper's `answer_send_permission` (added 2026-11-18)
 - **Status:** done (2026-11-18) · **Depends on:** P13-27 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 6 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 6 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-29 — `request_publish` in Auto (added 2026-11-18)
 - **Status:** done (2026-11-19) · **Depends on:** P13-27 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 7 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 7 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-30 — Web — grants, the send card, standalone settings, log labels (added 2026-11-18)
 - **Status:** done (2026-11-19) · **Depends on:** P13-24, P13-28 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 8 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 8 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-31 — Docs and the board (added 2026-11-18)
-- **Status:** todo · **Depends on:** P13-29, P13-30 · **Parallel with:** —
-- Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 9 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+- **Status:** done (2026-11-19) · **Depends on:** P13-29, P13-30 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 9 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
