@@ -6,6 +6,7 @@ import {
   type RequestJudge,
   type RequestJudgeInput,
   type RequestVerdict,
+  type SendGrant,
 } from '@galactic/protocol';
 import { redactSecrets } from '../../runtime/redact.js';
 import { dataFence, parseJsonObject, runOneShot } from './one-shot-judge.js';
@@ -92,12 +93,18 @@ const SYSTEM_PROMPT = [
   '{"verdict": "approve" | "forward", "reason": "<one short sentence>", "kind": "<kind>", "failingPart": <part index, optional>, "standingApprovalId": "<id, optional>", "similarTo": [<indexes>], "quote": "<Cosmin\'s sentence, optional>"}',
 ].join('\n');
 
+/** What a send or a spend is: shared by the Auto and grants prompts. */
+const SEND_SPEND_DEFINITION =
+  'A part that **sends** (messages, emails, chat posts, comments, replies, form submissions, anything delivering content to people or an outside service on his behalf, by any means: curl, an MCP tool, a script) or that **spends** (ads, purchases, paid API calls, starting paid cloud resources).';
+
 const AUTO_SYSTEM_PROMPT = [
   'You decide, on behalf of Cosmin (the user), whether a coding agent (a Steward) may be given a permission it asked for. The project\'s Waykeeper delegated this to you. Cosmin turned on Auto: you answer "approve" for everything except a part that sends or spends, and "forward" (Cosmin decides) for the rest. When you are unsure, forward.',
   '',
   UNTRUSTED_PARAGRAPH,
   '',
-  'What goes to Cosmin. A part that **sends** (messages, emails, chat posts, comments, replies, form submissions, anything delivering content to people or an outside service on his behalf, by any means: curl, an MCP tool, a script) or that **spends** (ads, purchases, paid API calls, starting paid cloud resources). Set "sendsOrSpends" to true when any part sends or spends, and to false otherwise. Reading, building, testing, editing files in the worktree, running the repository\'s own scripts and deleting its own build output do not send or spend: approve them. A push (category "push": git push, gh pr create, ...) or an upload of a screenshot or image also goes to Cosmin, except that when the request says "Pushes cleared: yes" the server already checked that every git push in it goes to a branch other than the main branch: approve those pushes without a quote; a git push to a branch is not a send. When you are unsure whether something sends or spends, forward.',
+  'What goes to Cosmin. ' +
+    SEND_SPEND_DEFINITION +
+    ' Set "sendsOrSpends" to true when any part sends or spends, and to false otherwise. Reading, building, testing, editing files in the worktree, running the repository\'s own scripts and deleting its own build output do not send or spend: approve them. A push (category "push": git push, gh pr create, ...) or an upload of a screenshot or image also goes to Cosmin, except that when the request says "Pushes cleared: yes" the server already checked that every git push in it goes to a branch other than the main branch: approve those pushes without a quote; a git push to a branch is not a send. When you are unsure whether something sends or spends, forward.',
   '',
   "Approve a part that sends or spends, or a push, only with a verbatim quote of Cosmin's words that asks for it. " +
     QUOTE_RULES,
@@ -114,6 +121,35 @@ const AUTO_SYSTEM_PROMPT = [
   '{"verdict": "approve" | "forward", "reason": "<one short sentence>", "kind": "<kind>", "sendsOrSpends": true | false, "failingPart": <part index, optional>, "standingApprovalId": "<id, optional>", "similarTo": [<indexes>], "quote": "<Cosmin\'s sentence, optional>"}',
 ].join('\n');
 
+/** The grants mode prompt: is it a send or spend, and what covers it. The server re-checks the cover. */
+const GRANTS_SYSTEM_PROMPT = [
+  'You decide, on behalf of Cosmin (the user), whether a coding agent (a Steward) may run a call it asked for. Cosmin turned on Auto: everything is approved except a call that sends or spends, and that needs a grant or his own words. You answer "approve" when the call does not send or spend, or when a grant or his words cover it, and "forward" (Cosmin decides) otherwise.',
+  '',
+  UNTRUSTED_PARAGRAPH,
+  '',
+  'What sends or spends. ' +
+    SEND_SPEND_DEFINITION +
+    ' Reading, building, testing, editing files in the worktree, running the repository\'s own scripts and deleting its own build output do not send or spend. A git push to a branch and a pull request are not sends: set "sendsOrSpends" to false for them. Set "sendsOrSpends" to true when any part of the call sends or spends. When unsure, sendsOrSpends is true.',
+  '',
+  'What covers a send or spend. The request lists the grants that are live: each has an id, a one-line summary, Cosmin\'s own words and an end time. When a grant covers the whole call (the same kind of send or spend, to what the grant names, within its words), give its id in "grantId". The server checks again that the grant still counts when your answer arrives; you only say which grant fits. Otherwise, when the call is asked for in Cosmin\'s own words in the task or in his answers, give a verbatim "quote". ' +
+    QUOTE_RULES,
+  '',
+  'Give a "summary": one line saying what the call does (what is sent or spent, and where), whether or not it sends or spends. When nothing covers a send or spend, forward.',
+  '',
+  AUTO_PARTS_RULES,
+  '',
+  KIND_PARAGRAPH,
+  '',
+  'Reply with strict JSON and nothing else:',
+  '{"verdict": "approve" | "forward", "reason": "<one short sentence>", "kind": "<kind>", "sendsOrSpends": true | false, "grantId": "<id of the covering grant, optional>", "quote": "<Cosmin\'s sentence, optional>", "summary": "<one line>", "failingPart": <part index, optional>, "similarTo": [<indexes>]}',
+].join('\n');
+
+const SYSTEM_PROMPTS: Record<RequestJudgeInput['mode'], string> = {
+  task: SYSTEM_PROMPT,
+  auto: AUTO_SYSTEM_PROMPT,
+  grants: GRANTS_SYSTEM_PROMPT,
+};
+
 const partLine = (p: CommandPart, i: number): string => {
   const flags = [
     p.opaque ? `opaque=${p.opaque}` : '',
@@ -126,6 +162,12 @@ const partLine = (p: CommandPart, i: number): string => {
 };
 
 const list = (items: string[]): string => (items.length ? items.join('\n') : '(none)');
+
+const grantEnd = (g: SendGrant): string => {
+  if (g.endsAt === undefined) return 'no end';
+  const ms = Date.parse(g.endsAt);
+  return Number.isNaN(ms) ? g.endsAt : new Date(ms).toISOString();
+};
 
 function buildBody(input: RequestJudgeInput): string {
   return [
@@ -153,6 +195,17 @@ function buildBody(input: RequestJudgeInput): string {
     'Recorded approvals (index, kind, summary):',
     list(input.recordedApprovals.map((r, i) => `${i}. ${r.kind}: ${r.summary}`)),
     '',
+    ...(input.mode === 'grants'
+      ? [
+          "Live grants (id, summary, end time, Cosmin's words):",
+          list(
+            (input.grants ?? []).map(
+              (g) => `id=${g.id} summary: ${g.summary}; ends: ${grantEnd(g)}; words: ${g.words}`,
+            ),
+          ),
+          '',
+        ]
+      : []),
     `Request: tool ${input.request.toolName}`,
     `Input: ${JSON.stringify(input.request.input ?? null)}`,
     `Categories: ${input.request.categories.join(', ') || '(none)'}`,
@@ -194,6 +247,7 @@ function parseVerdict(text: string, input: RequestJudgeInput): RequestVerdict | 
   const v = parseJsonObject(text);
   if (!v) return undefined;
   const { verdict, reason, kind, failingPart, standingApprovalId, similarTo, quote } = v;
+  const { grantId, summary } = v;
   if (verdict !== 'approve' && verdict !== 'forward') return undefined;
   if (typeof reason !== 'string' || typeof kind !== 'string' || !kind.trim()) return undefined;
   if (!Array.isArray(similarTo)) return undefined;
@@ -211,7 +265,11 @@ function parseVerdict(text: string, input: RequestJudgeInput): RequestVerdict | 
   if (quote !== undefined && typeof quote !== 'string') return undefined;
   const { sendsOrSpends } = v;
   if (sendsOrSpends !== undefined && typeof sendsOrSpends !== 'boolean') return undefined;
-  if (input.mode === 'auto' && sendsOrSpends === undefined) return undefined;
+  if ((input.mode === 'auto' || input.mode === 'grants') && sendsOrSpends === undefined) {
+    return undefined;
+  }
+  if (grantId !== undefined && !input.grants?.some((g) => g.id === grantId)) return undefined;
+  if (summary !== undefined && typeof summary !== 'string') return undefined;
   return {
     verdict,
     reason: redactSecrets(reason),
@@ -223,6 +281,8 @@ function parseVerdict(text: string, input: RequestJudgeInput): RequestVerdict | 
     similarTo: similar as number[],
     ...(quote !== undefined ? { quote: redactSecrets(quote) } : {}),
     ...(sendsOrSpends !== undefined ? { sendsOrSpends } : {}),
+    ...(grantId !== undefined ? { grantId: grantId as string } : {}),
+    ...(summary !== undefined ? { summary: redactSecrets(summary).slice(0, 200) } : {}),
   };
 }
 
@@ -236,6 +296,7 @@ function hardRuleViolation(
   input: RequestJudgeInput,
 ): RequestVerdict | undefined {
   if (v.verdict !== 'approve') return undefined;
+  if (input.mode === 'grants') return undefined;
   const parts = input.request.parts;
   const bad = parts.findIndex((p) => p.opaque === 'unreadable' || p.outsideCwd || p.guarded);
   if (bad >= 0) {
@@ -273,6 +334,22 @@ function hardRuleViolation(
   return undefined;
 }
 
+/**
+ * Grants mode: the verdict follows the facts, not the model's word. Approve when nothing sends or
+ * spends, or a grant or a quote covers it; forward otherwise. The server re-checks the grant's
+ * liveness and the quote (quoteFound) before it acts on either.
+ */
+function grantsVerdict(v: RequestVerdict): RequestVerdict {
+  const covered = v.grantId !== undefined || (v.quote !== undefined && v.quote.trim() !== '');
+  const approve = v.sendsOrSpends === false || covered;
+  if (approve === (v.verdict === 'approve')) return v;
+  return {
+    ...v,
+    verdict: approve ? 'approve' : 'forward',
+    reason: approve ? v.reason : "a send or spend needs a grant or a quote of the user's own words",
+  };
+}
+
 /** One turn, no tools, strict JSON back; anything unreadable, failed or aborted is forward. */
 export function createSdkRequestJudge(opts: { sdk: SdkSurface; model?: string }): RequestJudge {
   return {
@@ -280,7 +357,7 @@ export function createSdkRequestJudge(opts: { sdk: SdkSurface; model?: string })
       const r = await runOneShot({
         sdk: opts.sdk,
         model: opts.model ?? DEFAULT_REQUEST_JUDGE_MODEL,
-        systemPrompt: input.mode === 'auto' ? AUTO_SYSTEM_PROMPT : SYSTEM_PROMPT,
+        systemPrompt: SYSTEM_PROMPTS[input.mode],
         prompt: buildPrompt(input),
         signal,
         denyMessage: 'The request judge never uses tools.',
@@ -288,6 +365,7 @@ export function createSdkRequestJudge(opts: { sdk: SdkSurface; model?: string })
       if (!r.ok) return forward(`the judge failed: ${r.error}`);
       const v = parseVerdict(r.text, input);
       if (!v) return unreadable();
+      if (input.mode === 'grants') return grantsVerdict(v);
       return hardRuleViolation(v, input) ?? v;
     },
   };
