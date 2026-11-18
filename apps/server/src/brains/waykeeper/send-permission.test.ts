@@ -19,6 +19,7 @@ import { openDatabase } from '../../db/database.js';
 import { setWaykeeperApprovals } from '../../domain/waykeeper-approvals.js';
 import { composeRuntime, type ComposedRuntime } from '../../runtime/compose.js';
 import type { BrainToolContext } from '../definition.js';
+import { brainHarness, type BrainHarness } from '../testing/index.js';
 import { harmonizerBrain, HARMONIZER_SYSTEM_PROMPT } from '../harmonizer/index.js';
 import { answerSendPermissionTool, localStamp } from '../send-permission-tool.js';
 import { WAKE_RULES, wakeLine, type WakeScope } from '../wake.js';
@@ -559,4 +560,93 @@ describe('the prompts on send permission questions (P13-28)', () => {
       }
     });
   }
+});
+
+describe('a reply to a send permission question wakes its decider from any chat (P13-28)', () => {
+  const harnesses: BrainHarness[] = [];
+  afterEach(async () => {
+    for (const h of harnesses.splice(0)) await h.dispose().catch(() => {});
+  });
+
+  it("a reply in the Harmonizer's chat wakes the Waykeeper once; one in its own chat, once", async () => {
+    const script: JudgeScript = { seen: [], covers: false };
+    const h = brainHarness({
+      compose: { requestJudge: judgeOf(script) },
+      adapter: { scenarios: SCRIPTS },
+    });
+    harnesses.push(h);
+    const hq = await h.startHarmonizer();
+    const project = (
+      await h.commands.createProject(
+        { name: 'Site', workspace: '/w/site', permissionPolicy: POLICY },
+        { origin: 'local' },
+      )
+    ).value;
+    h.log.runCommand((ctx) => setWaykeeperApprovals(ctx, project.id, true, USER, true));
+    const wk = await h.startBrain(
+      waykeeperDefinition(),
+      { runtime: 'fake', projectId: project.id, supervisorId: hq.agentId },
+      { scriptOptions: { strict: false } },
+    );
+    const task = (await h.commands.createTask({ description: 'comment', projectId: project.id }))
+      .value;
+    const steward = (
+      await h.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:send',
+        taskId: task.id,
+        supervisorId: wk.agentId,
+      })
+    ).value;
+    await h.until(() =>
+      h.log.tables.questions
+        .all()
+        .some((q) => q.originAgentId === steward.id && q.context.sendPermission !== undefined),
+    );
+    const question = h.log.tables.questions.all().find((q) => q.originAgentId === steward.id)!;
+    expect(question.context.sendPermission?.deciderId).toBe(wk.agentId);
+    let n = 0;
+    const reply = (agentId: Id, text: string) =>
+      h.log.runCommand((ctx) =>
+        ctx.emit({
+          type: 'message.sent',
+          messageId: `m-reply-${++n}`,
+          agentId,
+          sender: USER,
+          text,
+          interrupt: false,
+          origin: 'local',
+          replyTo: {
+            kind: 'question',
+            id: question.id,
+            sender: { type: 'agent', id: steward.id },
+            text: question.context.text,
+          },
+        }),
+      );
+    reply(hq.agentId, 'typed in the Harmonizer chat: yes today');
+    reply(wk.agentId, 'typed in the Waykeeper chat: yes today');
+    await h.settle();
+    const count = (prompts: string[], text: string) => prompts.join('\n').split(text).length - 1;
+    const wkPrompts = wk.prompts();
+    expect(count(wkPrompts, 'typed in the Harmonizer chat: yes today')).toBe(1);
+    expect(count(wkPrompts, 'typed in the Waykeeper chat: yes today')).toBe(1);
+    const lines = wkPrompts
+      .join('\n')
+      .split('\n')
+      .filter((l) => l.includes('typed in the'));
+    for (const line of lines) {
+      expect(line).toContain('answer_send_permission');
+      expect(line).toContain('local time now');
+    }
+    // The Harmonizer, who does not decide it, hears its own chat's reply as before.
+    const hqLines = hq
+      .prompts()
+      .join('\n')
+      .split('\n')
+      .filter((l) => l.includes('typed in the'));
+    expect(hqLines).toHaveLength(1);
+    expect(hqLines[0]).toContain("only the user's buttons");
+  });
 });

@@ -137,6 +137,13 @@ const decidesId = (questionId: Id, scope: WakeScope): boolean => {
   return q !== undefined && decides(q, scope);
 };
 
+/** A user's reply to an open held send's question this brain decides (P13-28), from any chat. */
+function repliesToDecided(e: EventOfType<'message.sent'>, scope: WakeScope): boolean {
+  if (e.sender.type !== 'user' || e.replyTo?.kind !== 'question') return false;
+  const q = scope.question(e.replyTo.id);
+  return q?.status === 'open' && decides(q, scope);
+}
+
 /**
  * A held send's question, for its decider (P13-28; design §4.4 step 2): which Steward, what it
  * sends or spends, the call, and the grants that did not cover it — every text redacted.
@@ -298,17 +305,20 @@ export const WAKE_RULES: WakeRules = {
     // are sent by the system and never wake it.
     // A finding's "Implement it" (P10-05) is the one system message that wakes a brain: the
     // project's Waykeeper learns what the user wants planned. The brain's supervisor may pass a
-    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`).
+    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`). A user's reply to an open
+    // held send's question also wakes the brain that decides it, in whichever chat it was typed
+    // (P13-28: the card's reply box sends to the chat that shows the card).
     wakes: (e, s) =>
-      e.agentId === s.brainId &&
-      (e.sender.type === 'user' ||
-        (e.sender.type === 'system' &&
-          (e.fromFinding !== undefined || e.fromPanel !== undefined) &&
-          !e.turn) ||
-        (e.sender.type === 'agent' &&
-          (s.supervises(e.sender.id) ||
-            (s.below?.(e.sender.id) ?? false) ||
-            (s.supervisedBy?.(e.sender.id) ?? false)))),
+      repliesToDecided(e, s) ||
+      (e.agentId === s.brainId &&
+        (e.sender.type === 'user' ||
+          (e.sender.type === 'system' &&
+            (e.fromFinding !== undefined || e.fromPanel !== undefined) &&
+            !e.turn) ||
+          (e.sender.type === 'agent' &&
+            (s.supervises(e.sender.id) ||
+              (s.below?.(e.sender.id) ?? false) ||
+              (s.supervisedBy?.(e.sender.id) ?? false))))),
     describe: (e, s) => {
       if (e.sender.type === 'system' && e.fromPanel !== undefined) {
         return `the system said: ${quote(e.text)}`;
