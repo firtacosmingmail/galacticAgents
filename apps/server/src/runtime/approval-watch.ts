@@ -143,17 +143,70 @@ export function programFolderTest(
   };
 }
 
+/** The characters the shell expands in a word when unquoted: globs, braces, `~`, `$`, … */
+const UNQUOTED_EXPANSION = new Set(['*', '?', '[', ']', '{', '}', '$', '`', '\\', '~']);
+/** The characters the shell still expands inside double quotes. */
+const DOUBLE_QUOTED_EXPANSION = new Set(['$', '`', '\\']);
+
+/**
+ * Whether a shell part's raw text holds any expansion (P13-26, review): an unquoted glob or
+ * brace (`*`, `?`, `[`, `]`, `{`, `}`), a `$`, a backtick or a backslash (unquoted or in double
+ * quotes), or a `~` other than a word's leading `~/` or a bare `~`. The words checked against
+ * program folders are then the words the command gets. Inside single quotes all is literal.
+ */
+export function hasShellExpansion(text: string): boolean {
+  let quote: "'" | '"' | undefined;
+  let wordStart = true;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const atWordStart = wordStart;
+    wordStart = false;
+    if (quote === "'") {
+      if (c === "'") quote = undefined;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = undefined;
+      else if (DOUBLE_QUOTED_EXPANSION.has(c)) return true;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      wordStart = true;
+      continue;
+    }
+    if (c === '~') {
+      const next = text[i + 1];
+      if (atWordStart && (next === undefined || next === '/' || /\s/.test(next))) continue;
+      return true;
+    }
+    if (UNQUOTED_EXPANSION.has(c)) return true;
+  }
+  return false;
+}
+
+/** The commands whose `-t DIR` / `--target-directory=DIR` names where files go. */
+const TARGET_DIRECTORY_COMMANDS = new Set(['cp', 'mv', 'ln']);
+
 /**
  * The path a shell word names, or `undefined` for an option: a redirect's target (`>x`, `2>>x`,
- * `&>x`) and a long option's value (`--target-directory=x`) count.
+ * `&>x`), a long option's value (`--target-directory=x`) and, for cp/mv/ln, an attached `-t`
+ * value (`-tDIR`, `-sftDIR`) count.
  */
-function pathOfWord(word: string): string | undefined {
+function pathOfWord(word: string, head: string): string | undefined {
   const w = word.replace(/^(?:\d*>>?|&>>?|<)/, '');
   if (w.startsWith('--')) {
     const eq = w.indexOf('=');
     return eq >= 0 ? w.slice(eq + 1) : undefined;
   }
-  if (w.startsWith('-')) return undefined;
+  if (w.startsWith('-')) {
+    if (!TARGET_DIRECTORY_COMMANDS.has(head)) return undefined;
+    const attached = /^-[A-Za-z]*t(.+)$/.exec(w);
+    return attached ? attached[1] : undefined;
+  }
   return w;
 }
 
@@ -176,14 +229,14 @@ function isFileCommand(text: string, inProgramFolder: ProgramFolderTest): boolea
   if (head === 'find' && args.some((a) => FIND_RUNS.has(a))) return false;
   if (head === 'diff' && args.some(DIFF_RUNS)) return false;
   return !args.some((a) => {
-    const path = pathOfWord(a);
+    const path = pathOfWord(a, head);
     return path !== undefined && inProgramFolder(path);
   });
 }
 
 /**
  * Whether a request only reads or changes files (P13-26, review C1): a file tool, or a Bash
- * request whose every part is a readable `LOCAL_FILE_COMMANDS` command. The categories alone do
+ * request with no shell expansion whose every part is a readable `LOCAL_FILE_COMMANDS` command. The categories alone do
  * not tell: the gate tags any command naming a path outside the workspace `outside_workspace`.
  */
 function onlyFileWork(
@@ -199,6 +252,10 @@ function onlyFileWork(
     return typeof target === 'string' && !inProgramFolder(target);
   }
   if (toolName !== 'Bash') return false;
+  // The splitter re-quotes a part's words (`b?n` becomes `'b?n'`): the raw command tells
+  // what the shell expands.
+  const command = ((toolCall.input ?? {}) as Record<string, unknown>)['command'];
+  if (typeof command !== 'string' || hasShellExpansion(command)) return false;
   return parts.every((p) => p.opaque === undefined && isFileCommand(p.text, inProgramFolder));
 }
 

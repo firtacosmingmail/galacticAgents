@@ -1198,12 +1198,36 @@ describe('Auto approves everything (P13-26)', () => {
       expect(await judged(c.c)).toBe(1);
     });
 
-    it.each(['cp a /tmp/b', 'cat /tmp/a', 'mkdir -p /tmp/a'])(
-      '%s still skips the judge',
-      async (command) => {
-        expect(await judged(auto(command).c)).toBe(0);
-      },
-    );
+    it.each([
+      'cp /tmp/cat /opt/homebrew/b?n/',
+      'cp /tmp/cat /opt/homebrew/b*/',
+      'ln -s /tmp/cat /Users/me/.local/b[i]n/',
+      'cp /tmp/cat ~/.local/bi*/',
+      'cp /tmp/cat /Users/me/tool?/',
+      'cp /tmp/cat /opt/homebrew/b{i,i}n/',
+      'cp /tmp/cat $HOME/tools/cat',
+      'cp /tmp/cat ${HOME}/tools/cat',
+      'cp /tmp/cat $PWD/cat',
+      'cp /tmp/cat "$HOME/tools/cat"',
+      'cp /tmp/cat ~root/bin/',
+      'cp /tmp/cat /opt/homebrew/b\\in/cat',
+      'cp -t/opt/homebrew/bin /tmp/cat',
+      'ln -sft/Users/me/.local/bin /tmp/cat',
+      'cp -t /opt/homebrew/bin /tmp/cat',
+    ])('%s goes to the judge (shell expansion, -t)', async (command) => {
+      expect(await judged(auto(command).c)).toBe(1);
+    });
+
+    it.each([
+      'cp a /tmp/b',
+      'cat /tmp/a',
+      'mkdir -p /tmp/a',
+      "cat '/tmp/a*b'",
+      'ls ~/',
+      'mkdir -p ~/x',
+    ])('%s still skips the judge', async (command) => {
+      expect(await judged(auto(command).c)).toBe(0);
+    });
 
     it('a Write into the worktree still skips the judge', async () => {
       const c = auto('', {
