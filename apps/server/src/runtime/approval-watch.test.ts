@@ -6,6 +6,8 @@ import {
   type RequestJudgeInput,
   type RequestVerdict,
   type ApprovalMark,
+  type SendGrant,
+  type SendPermissionContext,
   type StandingApproval,
   type WaykeeperForward,
 } from '@galactic/protocol';
@@ -13,6 +15,7 @@ import { createFakeRequestJudge } from '../adapters/fake/fake-request-judge.js';
 import type { PolicyContext } from '../domain/permissions.js';
 import {
   ApprovalWatch,
+  LOCAL_ONLY_CATEGORIES,
   type ApprovalFacts,
   type ApprovalWatchCall,
   type WaykeeperApproval,
@@ -72,6 +75,7 @@ const forwardVerdict = (over: Partial<RequestVerdict> = {}): RequestVerdict => (
 function call(command: string, over: Partial<ApprovalWatchCall> = {}) {
   const approveFn = vi.fn<(d: WaykeeperApproval) => void>();
   const forward = vi.fn<(context: WaykeeperForward) => void>();
+  const hold = vi.fn<(context: SendPermissionContext) => void>();
   const c: ApprovalWatchCall = {
     agentId: 'a-1',
     projectId: 'p-1',
@@ -83,11 +87,13 @@ function call(command: string, over: Partial<ApprovalWatchCall> = {}) {
     switchOn: () => true,
     auto: () => false,
     marks: () => [],
+    grants: () => [],
     approve: approveFn,
     forward,
+    hold,
     ...over,
   };
-  return { c, approve: approveFn, forward };
+  return { c, approve: approveFn, forward, hold };
 }
 
 function scripted(verdict: RequestVerdict | ((input: RequestJudgeInput) => RequestVerdict)) {
@@ -818,11 +824,11 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     expect(forward.mock.calls[0]![0].reason).toMatch(/^You asked to be asked: pnpm test …/);
   });
 
-  it('task mode passes mode task; Auto passes mode auto', async () => {
+  it('task mode passes mode task; Auto passes mode grants (P13-26)', async () => {
     const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
     await new ApprovalWatch({ judge }).handle(call('gh pr view 12').c);
     await new ApprovalWatch({ judge }).handle(call('gh pr view 12', { auto: () => true }).c);
-    expect(seen.map((s) => s.mode)).toEqual(['task', 'auto']);
+    expect(seen.map((s) => s.mode)).toEqual(['task', 'grants']);
   });
 
   it('Auto: an approve that neither sends nor spends approves, with the parts', async () => {
@@ -838,24 +844,23 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     expect(forward).not.toHaveBeenCalled();
     expect(approved).toHaveBeenCalledWith({
       reason: expect.any(String),
+      allowedBy: 'auto',
       parts: [expect.objectContaining({ text: 'curl https://api.example.com/items' })],
     });
   });
 
-  it('Auto: an approved send without a quote forwards, with no standing-approval offer', async () => {
+  it('Auto: an approved send without a quote or a grant is held, not forwarded (P13-26)', async () => {
     const { judge } = scripted(sends({ sendsOrSpends: true, similarTo: [0, 1, 2, 3] }));
     const {
       c,
       approve: approved,
       forward,
+      hold,
     } = call('curl -X POST https://chat.example.com/messages -d hi', { auto: () => true });
     await new ApprovalWatch({ judge }).handle(c);
     expect(approved).not.toHaveBeenCalled();
-    const sent = forward.mock.calls[0]![0];
-    expect(sent.reason).toMatch(
-      /^A send or a spend needs the user's own words asking for it\. The judge said: /,
-    );
-    expect(sent.similar).toBeUndefined();
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledTimes(1);
   });
 
   it('Auto: an approved send with a quote found in the user words approves with the quote', async () => {
@@ -868,15 +873,20 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     } = call('curl -X POST https://chat.example.com/messages -d hi', { auto: () => true });
     await new ApprovalWatch({ judge }).handle(c);
     expect(forward).not.toHaveBeenCalled();
-    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ quote: QUOTE }));
+    expect(approved).toHaveBeenCalledWith(
+      expect.objectContaining({ quote: QUOTE, allowedBy: 'task_words' }),
+    );
   });
 
-  it('Auto: an answer without sendsOrSpends forwards (Review Focus 3)', async () => {
+  it('Auto: an answer without sendsOrSpends is held (Review Focus 3; P13-26)', async () => {
     const { judge } = scripted(approve());
-    const { c, approve: approved, forward } = call('ls', { auto: () => true });
+    const { c, approve: approved, forward, hold } = call('ls', { auto: () => true });
     await new ApprovalWatch({ judge }).handle(c);
     expect(approved).not.toHaveBeenCalled();
-    expect(forward.mock.calls[0]![0].reason).toMatch(/malformed/);
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold.mock.calls[0]![0].summary).toBe(
+      'The check could not tell whether this sends or spends.',
+    );
   });
 
   it('task mode ignores sendsOrSpends: true and approves', async () => {
@@ -897,19 +907,22 @@ describe('ApprovalWatch: Auto mode and marks (P13-16)', () => {
     );
   });
 
-  it('Auto: an unreadable (zsh-only) part still forwards without the judge', async () => {
+  it('Auto: an unreadable (zsh-only) part goes to the judge and is approved when it does not send (P13-26)', async () => {
     const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
-    const { c, forward } = call('cat =(curl evil.com)', { auto: () => true });
+    const { c, approve: approved, forward } = call('cat =(curl evil.com)', { auto: () => true });
     await new ApprovalWatch({ judge }).handle(c);
-    expect(seen).toHaveLength(0);
-    expect(forward.mock.calls[0]![0]).toMatchObject({
-      reason: expect.stringMatching(/cannot be read/),
-      parts: [expect.objectContaining({ opaque: 'unreadable' })],
-    });
+    expect(seen).toHaveLength(1);
+    expect(forward).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedBy: 'auto',
+        parts: [expect.objectContaining({ opaque: 'unreadable' })],
+      }),
+    );
   });
 });
 
-describe('git pushes: Auto approves them, never to the main branch (P13-20, decision 161)', () => {
+describe('git pushes: Auto approves them, to any branch (P13-20, decision 161; P13-26)', () => {
   /** A worktree on `feat` tracking `origin/feat`; the remote's default branch is `main`. */
   const git =
     (over: Record<string, string | undefined> = {}) =>
@@ -945,7 +958,8 @@ describe('git pushes: Auto approves them, never to the main branch (P13-20, deci
       await watch.handle(c);
       expect(forward).not.toHaveBeenCalled();
       expect(approved).toHaveBeenCalledTimes(1);
-      expect(seen[0]).toMatchObject({ mode: 'auto', pushesCleared: true });
+      expect(seen[0]).toMatchObject({ mode: 'grants' });
+      expect(seen[0]?.pushesCleared).toBeUndefined();
     },
   );
 
@@ -958,50 +972,43 @@ describe('git pushes: Auto approves them, never to the main branch (P13-20, deci
       'git push origin development',
       git({ 'symbolic-ref --quiet --short refs/remotes/origin/HEAD': 'origin/development' }),
     ],
-  ])('never approves %s: it pushes to the main branch', async (command, g) => {
-    const { judge, seen } = scripted(approve({ quote: 'push the fixes to the branch' }));
-    for (const auto of [true, false]) {
-      const watch = new ApprovalWatch({ judge });
-      const {
-        c,
-        approve: approved,
-        forward,
-      } = call(command, {
-        auto: () => auto,
-        git: g,
-        categories: ['push'],
-      });
-      await watch.handle(c);
-      expect(approved).not.toHaveBeenCalled();
-      expect(forward.mock.calls[0]![0].reason).toMatch(/pushes to the main branch/);
-    }
-    expect(seen).toHaveLength(0);
-  });
+  ])(
+    'task mode never approves %s: it pushes to the main branch; Auto approves it',
+    async (command, g) => {
+      const { judge, seen } = scripted(
+        approve({ quote: 'push the fixes to the branch', sendsOrSpends: false }),
+      );
+      const task = call(command, { git: g, categories: ['push'] });
+      await new ApprovalWatch({ judge }).handle(task.c);
+      expect(task.approve).not.toHaveBeenCalled();
+      expect(task.forward.mock.calls[0]![0].reason).toMatch(/pushes to the main branch/);
+      expect(seen).toHaveLength(0);
+      const auto = call(command, { auto: () => true, git: g, categories: ['push'] });
+      await new ApprovalWatch({ judge }).handle(auto.c);
+      expect(auto.forward).not.toHaveBeenCalled();
+      expect(auto.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    },
+  );
 
   it.each([
     'git push --all origin',
     'git push origin $BRANCH',
     'cd ../other && git push',
     'git -C ../other push',
-  ])('forwards %s: its branch cannot be told', async (command) => {
+  ])('task mode forwards %s: its branch cannot be told; Auto approves it', async (command) => {
     const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
-    const watch = new ApprovalWatch({ judge });
-    const {
-      c,
-      approve: approved,
-      forward,
-    } = call(command, {
-      auto: () => true,
-      git: git(),
-      categories: ['push'],
-    });
-    await watch.handle(c);
-    expect(approved).not.toHaveBeenCalled();
-    expect(forward.mock.calls[0]![0].reason).toMatch(/cannot tell which branch/);
+    const task = call(command, { git: git(), categories: ['push'] });
+    await new ApprovalWatch({ judge }).handle(task.c);
+    expect(task.approve).not.toHaveBeenCalled();
+    expect(task.forward.mock.calls[0]![0].reason).toMatch(/cannot tell which branch/);
     expect(seen).toHaveLength(0);
+    const auto = call(command, { auto: () => true, git: git(), categories: ['push'] });
+    await new ApprovalWatch({ judge }).handle(auto.c);
+    expect(auto.forward).not.toHaveBeenCalled();
+    expect(auto.approve).toHaveBeenCalledTimes(1);
   });
 
-  it('in Auto still needs the user’s words for gh pr create, and in task mode for any push', async () => {
+  it('in Auto approves gh pr create without the user’s words; task mode needs them for any push', async () => {
     const { judge, seen } = scripted(approve({ kind: 'push', sendsOrSpends: false }));
     const watch = new ApprovalWatch({ judge });
     const pr = call('gh pr create --fill', {
@@ -1011,7 +1018,7 @@ describe('git pushes: Auto approves them, never to the main branch (P13-20, deci
       categories: ['push'],
     });
     await watch.handle(pr.c);
-    expect(pr.approve).not.toHaveBeenCalled();
+    expect(pr.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
     expect(seen[0]?.pushesCleared).toBeUndefined();
     const task = call('git push origin feat', {
       git: git(),
@@ -1021,5 +1028,274 @@ describe('git pushes: Auto approves them, never to the main branch (P13-20, deci
     await watch.handle(task.c);
     expect(task.approve).not.toHaveBeenCalled();
     expect(seen[1]?.pushesCleared).toBeUndefined();
+  });
+});
+
+describe('Auto approves everything (P13-26)', () => {
+  const T0 = Date.parse('2026-11-18T12:00:00.000Z');
+  const grant = (over: Partial<SendGrant> = {}): SendGrant => ({
+    id: 'sg-1',
+    projectId: 'p-1',
+    words: 'post the sale announcements in #shop today',
+    summary: 'Slack posts in #shop, today',
+    createdAt: '2026-11-18T09:00:00.000Z',
+    endsAt: '2026-11-18T22:00:00.000Z',
+    createdBy: { type: 'user' },
+    origin: 'local',
+    questionId: 'q-g',
+    ...over,
+  });
+  const POST = 'curl -X POST https://slack.com/api/chat.postMessage -d text=sale';
+  const sends = (over: Partial<RequestVerdict> = {}) =>
+    forwardVerdict({
+      kind: 'post a message',
+      reason: 'posts to a Slack channel',
+      sendsOrSpends: true,
+      summary: 'Post a message in Slack #shop',
+      ...over,
+    });
+  const auto = (command: string, over: Partial<ApprovalWatchCall> = {}) =>
+    call(command, { auto: () => true, ...over });
+
+  it('LOCAL_ONLY_CATEGORIES holds only the file categories', () => {
+    expect([...LOCAL_ONLY_CATEGORIES].sort()).toEqual([
+      'destructive',
+      'edit_workspace',
+      'outside_workspace',
+      'read_workspace',
+    ]);
+  });
+
+  it('rm -rf /etc/x is approved without the judge', async () => {
+    const { judge, seen } = scripted(sends());
+    const {
+      c,
+      approve: approved,
+      forward,
+      hold,
+    } = auto('rm -rf /etc/x', {
+      categories: ['destructive', 'outside_workspace'],
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith({
+      reason: expect.any(String),
+      allowedBy: 'auto',
+      parts: [expect.objectContaining({ text: 'rm -rf /etc/x', outsideCwd: true })],
+    });
+  });
+
+  it('a Write outside the workspace is approved without the judge; an MCP tool goes to the judge', async () => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const write = auto('', {
+      toolCall: { toolName: 'Write', input: { file_path: '/etc/x', content: 'a' } },
+    });
+    await new ApprovalWatch({ judge }).handle(write.c);
+    expect(seen).toHaveLength(0);
+    expect(write.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    const mcp = auto('', { toolCall: { toolName: 'mcp__slack__post', input: {} } });
+    await new ApprovalWatch({ judge }).handle(mcp.c);
+    expect(seen).toHaveLength(1);
+    expect(mcp.approve).toHaveBeenCalledTimes(1);
+  });
+
+  it('git push origin main is approved when the judge says it does not send', async () => {
+    const { judge, seen } = scripted(approve({ kind: 'git push', sendsOrSpends: false }));
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = auto('git push origin main', {
+      categories: ['push'],
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(1);
+    expect(forward).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+  });
+
+  it('code it cannot read, even code that mentions a push, is approved when it does not send', async () => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const {
+      c,
+      approve: approved,
+      forward,
+    } = auto(`python -c "import os; os.system('git push origin main')"`);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(1);
+    expect(forward).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+  });
+
+  it('a send with no grant is held with the judge summary, the parts and the live grants', async () => {
+    const other = grant({ id: 'sg-2', summary: 'Instagram posts as @myshop' });
+    const { judge, seen } = scripted(sends());
+    const { c, approve: approved, forward, hold } = auto(POST, { grants: () => [other] });
+    await new ApprovalWatch({ judge, now: () => T0 }).handle(c);
+    expect(seen[0]).toMatchObject({ mode: 'grants', grants: [other] });
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledTimes(1);
+    expect(hold).toHaveBeenCalledWith({
+      summary: 'Post a message in Slack #shop',
+      parts: [expect.objectContaining({ text: expect.stringContaining('chat.postMessage') })],
+      grants: [other],
+    });
+  });
+
+  it('a held send without a judge summary falls back to the kind', async () => {
+    const { summary: _none, ...unsummarised } = sends();
+    const { judge } = scripted(unsummarised);
+    const { c, hold } = auto(POST);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(hold.mock.calls[0]![0].summary).toBe('post a message');
+  });
+
+  it('a send a live grant covers is approved, with the grant id', async () => {
+    const g = grant();
+    const { judge } = scripted(sends({ grantId: g.id, verdict: 'approve' }));
+    const { c, approve: approved, hold } = auto(POST, { grants: () => [g] });
+    await new ApprovalWatch({ judge, now: () => T0 }).handle(c);
+    expect(hold).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedBy: 'grant', grantId: 'sg-1' }),
+    );
+  });
+
+  it('grant expired while judged holds', async () => {
+    let now = T0;
+    const g = grant({ endsAt: new Date(T0 + 1000).toISOString() });
+    const { judge, seen } = scripted(() => {
+      now = T0 + 2000;
+      return sends({ grantId: g.id, verdict: 'approve' });
+    });
+    const { c, approve: approved, hold } = auto(POST, { grants: () => [g] });
+    await new ApprovalWatch({ judge, now: () => now }).handle(c);
+    expect(seen[0]?.grants).toEqual([g]);
+    expect(approved).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledWith(expect.objectContaining({ grants: [] }));
+  });
+
+  it('a grant removed while judged holds', async () => {
+    let grants = [grant()];
+    const { judge } = scripted(() => {
+      grants = [];
+      return sends({ grantId: 'sg-1', verdict: 'approve' });
+    });
+    const { c, approve: approved, hold } = auto(POST, { grants: () => grants });
+    await new ApprovalWatch({ judge, now: () => T0 }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('only live grants reach the judge', async () => {
+    const ended = grant({ id: 'sg-old', endsAt: new Date(T0 - 1).toISOString() });
+    const { judge, seen } = scripted(sends());
+    const { c } = auto(POST, { grants: () => [ended, grant()] });
+    await new ApprovalWatch({ judge, now: () => T0 }).handle(c);
+    expect(seen[0]?.grants?.map((g) => g.id)).toEqual(['sg-1']);
+  });
+
+  it("a send asked for in the user's own words is approved with the quote", async () => {
+    const QUOTE = 'push the fixes to the branch';
+    const { judge } = scripted(sends({ quote: QUOTE, verdict: 'approve' }));
+    const { c, approve: approved, hold } = auto(POST);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(hold).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(
+      expect.objectContaining({ allowedBy: 'task_words', quote: QUOTE }),
+    );
+    expect(approved.mock.calls[0]![0].grantId).toBeUndefined();
+  });
+
+  it("a quote not found in the user's words holds", async () => {
+    const { judge } = scripted(
+      sends({ quote: 'please post the sale everywhere you can', verdict: 'approve' }),
+    );
+    const { c, approve: approved, hold } = auto(POST);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(hold).toHaveBeenCalledTimes(1);
+  });
+
+  it('a judge timeout holds', async () => {
+    vi.useFakeTimers();
+    try {
+      const judge: RequestJudge = { judge: () => new Promise<RequestVerdict>(() => {}) };
+      const { c, approve: approved, forward, hold } = auto(POST);
+      const done = new ApprovalWatch({ judge }).handle(c);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await done;
+      expect(approved).not.toHaveBeenCalled();
+      expect(forward).not.toHaveBeenCalled();
+      expect(hold).toHaveBeenCalledWith({
+        summary: 'The check could not tell whether this sends or spends.',
+        parts: [expect.objectContaining({ text: expect.stringContaining('chat.postMessage') })],
+        grants: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['no judge', undefined],
+    [
+      'a judge that throws',
+      createFakeRequestJudge(() => {
+        throw new Error('model down');
+      }),
+    ],
+  ])('%s holds', async (_label, judge) => {
+    const { c, approve: approved, forward, hold } = auto(POST);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold.mock.calls[0]![0].summary).toBe(
+      'The check could not tell whether this sends or spends.',
+    );
+  });
+
+  it('a mark still forwards, without the judge', async () => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const curlMark: ApprovalMark = {
+      id: 'am-2',
+      projectId: 'p-1',
+      match: { kind: 'prefix', words: ['curl'] },
+      example: 'curl …',
+      createdBy: { type: 'user' },
+      createdAt: '2026-11-14T10:00:00.000Z',
+      origin: 'local',
+      fromSeq: 7,
+    };
+    const { c, approve: approved, forward, hold } = auto(POST, { marks: () => [curlMark] });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(approved).not.toHaveBeenCalled();
+    expect(hold).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toMatch(/^You asked to be asked: curl/);
+  });
+
+  it('the switch turned off while judged forwards instead of holding', async () => {
+    let on = true;
+    const { judge } = scripted(() => {
+      on = false;
+      return sends();
+    });
+    const { c, forward, hold } = auto(POST, { switchOn: () => on });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(hold).not.toHaveBeenCalled();
+    expect(forward.mock.calls[0]![0].reason).toMatch(/turned off while the request was judged/);
+  });
+
+  it('an agent no longer active gets no callback', async () => {
+    const { judge } = scripted(sends());
+    const { c, approve: approved, forward, hold } = auto(POST, { active: () => false });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(approved).not.toHaveBeenCalled();
+    expect(forward).not.toHaveBeenCalled();
+    expect(hold).not.toHaveBeenCalled();
   });
 });

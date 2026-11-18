@@ -42,6 +42,8 @@ import {
   type RequestJudge,
   type ScopeJudge,
   type WaykeeperForward,
+  type SendPermissionContext,
+  type AllowedBy,
   OFF_SCRIPT_ACTIONS,
 } from '@galactic/protocol';
 import { isStorageFailure } from '../db/database.js';
@@ -72,6 +74,7 @@ import {
   type PolicyContext,
 } from '../domain/permissions.js';
 import { RULES_END_IN } from '../domain/project-rules.js';
+import { liveGrants } from '../domain/send-grants.js';
 import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { workspaceOfCwd } from '../brains/steward-prompt.js';
@@ -2334,6 +2337,7 @@ export class AgentRuntime {
       switchOn: () => this.approvalsOn(projectId),
       auto: () => this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true,
       marks: () => this.opts.log.tables.projects.get(projectId)?.approvalMarks ?? [],
+      grants: () => liveGrants(tables, { projectId }, Date.now()),
       ...(cwd ? { git: gitReader(cwd) } : {}),
       approve: (d) => {
         this.permissionDecided(
@@ -2349,6 +2353,8 @@ export class AgentRuntime {
               ? { standingApprovalId: d.standingApprovalId }
               : {}),
             ...(d.quote !== undefined ? { quote: d.quote } : {}),
+            ...(d.allowedBy !== undefined ? { allowedBy: d.allowedBy } : {}),
+            ...(d.grantId !== undefined ? { grantId: d.grantId } : {}),
             parts: d.parts,
             ...(cwd ? { cwd } : {}),
           },
@@ -2367,6 +2373,16 @@ export class AgentRuntime {
           openFromNeedsInput(ctx, forwarded, this.questions);
         });
         this.asked(live, forwarded);
+      },
+      // Auto (P13-26): a send or a spend nothing covers. For now it asks the user like a forward,
+      // with the send-permission context; P13-27 makes it the grant question.
+      hold: (context: SendPermissionContext) => {
+        const held = { ...event, question: { ...event.question, sendPermission: context } };
+        this.command((ctx) => {
+          ctx.emit(held);
+          openFromNeedsInput(ctx, held, this.questions);
+        });
+        this.asked(live, held);
       },
     });
     return true;
@@ -2404,6 +2420,10 @@ export class AgentRuntime {
       standingApprovalId?: Id;
       /** The user's words that granted a push or an upload (P13-04). */
       quote?: string;
+      /** Auto (P13-26): what allowed it, for the approvals log. */
+      allowedBy?: AllowedBy;
+      /** Auto (P13-26): the send grant that covered it. */
+      grantId?: Id;
       /** The Waykeeper's request judge approved it (P13-04): never set by the scope watch. */
       waykeeperApproval?: true;
       /** The request's parts, texts already redacted (P13-16): for the approvals log and marks. */
@@ -2433,6 +2453,8 @@ export class AgentRuntime {
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
       ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
+      ...(d.allowedBy ? { allowedBy: d.allowedBy } : {}),
+      ...(d.grantId ? { grantId: d.grantId } : {}),
       ...(d.parts && d.parts.length > 0 ? { parts: d.parts } : {}),
       ...(d.cwd ? { cwd: d.cwd } : {}),
     };

@@ -15,6 +15,7 @@ import { FakeAdapter } from '../adapters/fake/fake-adapter.js';
 import { createFakeRequestJudge } from '../adapters/fake/fake-request-judge.js';
 import { SCENARIOS, type FakeScenario } from '../adapters/fake/scenario.js';
 import { openDatabase } from '../db/database.js';
+import { addSendGrant } from '../domain/send-grants.js';
 import { addApprovalMark, setWaykeeperApprovals } from '../domain/waykeeper-approvals.js';
 import { composeRuntime, type ComposedRuntime } from './compose.js';
 
@@ -67,7 +68,10 @@ function scriptedJudge(seen: RequestJudgeInput[]) {
       kind: push ? 'PR comment' : 'read-only gh query',
       similarTo: [],
       ...(push ? { quote: 'Comment on the PR when the review is done' } : {}),
-      ...(input.mode === 'auto' ? { sendsOrSpends: push } : {}),
+      ...(input.mode !== 'task' ? { sendsOrSpends: push } : {}),
+      ...(push && input.mode === 'grants' && input.grants?.[0]
+        ? { grantId: input.grants[0].id, summary: 'Comment on PR 12' }
+        : {}),
     };
   });
 }
@@ -97,6 +101,8 @@ async function hierarchy(opts: {
   auto?: boolean;
   /** An "Always asks me" mark on these first words (P13-16). */
   markWords?: string[];
+  /** A live send grant on the project (P13-26). */
+  grant?: boolean;
 }) {
   const adapter = new FakeAdapter({ speed: 0, scenarios: SCRIPTS });
   if (opts.forge) {
@@ -145,6 +151,22 @@ async function hierarchy(opts: {
         project.id,
         { kind: 'prefix', words },
         { example: words.join(' '), fromSeq: 1, by: USER, origin: 'local' },
+      ),
+    );
+  }
+  if (opts.grant) {
+    c.log.runCommand((ctx) =>
+      addSendGrant(
+        ctx,
+        {
+          projectId: project.id,
+          words: 'comment on the PRs you review',
+          summary: 'PR comments',
+          createdBy: USER,
+          origin: 'local',
+          questionId: 'q-grant',
+        },
+        Date.now(),
       ),
     );
   }
@@ -267,7 +289,7 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     expect(approved!.cwd).toEqual(expect.any(String));
   });
 
-  it('in Auto, the judge is asked in auto mode; a mark forwards without it (P13-16)', async () => {
+  it('in Auto, the judge is asked in grants mode; a mark forwards without it (P13-16, P13-26)', async () => {
     const seen: RequestJudgeInput[] = [];
     const h = await hierarchy({
       switchOn: true,
@@ -283,11 +305,33 @@ describe('Waykeeper approvals end to end (P13-04)', () => {
     expect(seen).toHaveLength(0);
     await h.commands.answerQuestion({ questionId: first!.id, answer: 'allow', by: USER });
     await until(() => h.ofType('question.opened').length === 2);
-    // The PR comment reached the judge, in Auto mode; a push without the user's words, forwarded.
+    // The PR comment reached the judge, in grants mode; a send no grant covers, held (P13-26).
     expect(seen.map((s) => [s.mode, s.request.parts.map((p) => p.text)])).toEqual([
-      ['auto', [COMMENT]],
+      ['grants', [COMMENT]],
     ]);
     expect(h.ofType('permission.decided').filter((e) => e.waykeeperApproval)).toHaveLength(0);
+    const second = h.log.tables.questions.all()[1]!;
+    expect(second.context.waykeeper).toBeUndefined();
+    expect(second.context.sendPermission).toMatchObject({
+      summary: 'PR comment',
+      parts: [{ text: expect.stringContaining('gh pr comment 12') }],
+      grants: [],
+    });
+  });
+
+  it('in Auto, approvals log what allowed them; a live grant covers a send (P13-26)', async () => {
+    const seen: RequestJudgeInput[] = [];
+    const h = await hierarchy({ switchOn: true, seen, auto: true, grant: true });
+    await until(
+      () => h.ofType('permission.decided').filter((e) => e.waykeeperApproval).length === 2,
+    );
+    const [view, comment] = h.ofType('permission.decided').filter((e) => e.waykeeperApproval);
+    expect(view).toMatchObject({ allowedBy: 'auto' });
+    expect(view!.grantId).toBeUndefined();
+    const grantId = h.log.tables.projects.get(h.project.id)!.sendGrants![0]!.id;
+    expect(comment).toMatchObject({ allowedBy: 'grant', grantId });
+    expect(seen[1]!.grants?.map((g) => g.id)).toEqual([grantId]);
+    expect(h.ofType('question.opened')).toHaveLength(0);
   });
 
   it('leaves "Approved by <Waykeeper>: <reason>" in the Steward’s transcript (P13-06)', async () => {
