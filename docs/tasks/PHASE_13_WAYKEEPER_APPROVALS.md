@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-23 · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23 in progress (branch `agent-auto-grants`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 22/31
+**Current task:** P13-24, P13-25 · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23 done (2026-11-18) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 23/31
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -155,7 +155,7 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Acceptance:** the Waykeeper's prompt plans what needs nobody first (fetch, read, implement, review, test locally) and the outward steps last (push and PR, database changes and deploys to shared environments, account or settings changes, publishing, cleanup): a Steward may push its own branch and open its PR as the last step of its task; every other outward step and every publish is its own final task, blockedBy the tasks it needs, naming only those commands; questions about the final steps wait for the final task. A publishing task waits only for the tasks it needs (Cosmin: "a publishing task should wait for tasks that it needs for the publishing"); no server check, since the server cannot tell which those are. Every Steward's etiquette says the same order, and that a question only about a final step waits until the rest is done. Tests in `providers.test.ts` and `steward-prompt.test.ts`.
 
 ### P13-23 — Protocol shapes, events, projection, migration, board (added 2026-11-18)
-- **Status:** in progress · **Depends on:** P13-22 · **Parallel with:** —
+- **Status:** done (2026-11-18) · **Depends on:** P13-22 · **Parallel with:** —
 - Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 1 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-24 — Domain — grants and the standalone scope (added 2026-11-18)
