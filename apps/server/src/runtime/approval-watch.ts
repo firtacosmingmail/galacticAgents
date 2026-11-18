@@ -68,8 +68,10 @@ export const LOCAL_FILE_TOOLS: ReadonlySet<string> = new Set([
 /**
  * The shell commands that only read or change files (P13-26): a Bash request each of whose
  * parts runs one of these, by its bare name, is approved in Auto without the judge. A path to a
- * binary, `sudo`/`doas` or any other wrapper or runner in front, `find` with `-exec`/`-execdir`/
- * `-ok`/`-okdir`, and `sed` without `-n` or with `-i` all go to the judge.
+ * binary, `sudo`/`doas` or any other wrapper or runner in front, an environment assignment other
+ * than `LANG`/`LC_*` (`PATH`, `LD_PRELOAD`, … change what runs), `find` with `-exec`/`-execdir`/
+ * `-ok`/`-okdir`, and `rg` with `--pre`/`--pre-glob` (it runs a program on each file) all go to
+ * the judge. `sed` is not here: its `e` flag and command run shell code.
  */
 export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
   'cat',
@@ -91,9 +93,10 @@ export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
   'rmdir',
   'ln',
   'chmod',
-  'sed',
 ]);
 
+/** The only environment assignments a file command may carry: the locale. */
+const LOCALE_ASSIGNMENT = /^(?:LANG|LC_[A-Za-z0-9_]*)=/;
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** What may run something else or reach the network from inside a file command's words. */
 const HIDDEN_RUN = /\$\(|`|<\(|>\(|\/dev\/(?:tcp|udp)\//;
@@ -104,15 +107,17 @@ function isFileCommand(text: string): boolean {
   if (HIDDEN_RUN.test(text)) return false;
   const words = text.trim().split(/\s+/);
   let i = 0;
-  while (i < words.length && ENV_ASSIGNMENT.test(words[i]!)) i++;
+  while (i < words.length && ENV_ASSIGNMENT.test(words[i]!)) {
+    if (!LOCALE_ASSIGNMENT.test(words[i]!)) return false;
+    i++;
+  }
   const head = words[i];
   if (head === undefined || !LOCAL_FILE_COMMANDS.has(head)) return false;
-  const args = words.slice(i + 1);
+  // Quotes do not hide an option from the shell: `'--pre'` is `--pre`.
+  const args = words.slice(i + 1).map((a) => a.replace(/['"]/g, ''));
   if (head === 'find') return !args.some((a) => FIND_RUNS.has(a));
-  if (head === 'sed')
-    return (
-      args[0] === '-n' && !args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place'))
-    );
+  if (head === 'rg')
+    return !args.some((a) => a === '--pre' || a.startsWith('--pre=') || a.startsWith('--pre-glob'));
   return true;
 }
 
