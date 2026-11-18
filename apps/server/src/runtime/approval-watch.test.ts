@@ -1142,6 +1142,84 @@ describe('Auto approves everything (P13-26)', () => {
     expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
   });
 
+  describe('writing into a program folder goes to the judge (review: PATH shadowing)', () => {
+    const PATH = '/Users/me/.local/bin:/opt/homebrew/bin:/opt/tools:/usr/bin';
+    const judged = async (c: ApprovalWatchCall, deps: { caseInsensitivePaths?: boolean } = {}) => {
+      const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+      await new ApprovalWatch({ judge, pathEnv: PATH, ...deps }).handle(c);
+      return seen.length;
+    };
+
+    it.each([
+      'ln -sf /tmp/send.sh /Users/me/.local/bin/cat',
+      'cp /tmp/send.sh /opt/homebrew/bin/cat',
+      'cp /tmp/send.sh /opt/tools/cat',
+      'cp /tmp/send.sh /opt/tools',
+      'mv /tmp/send.sh /usr/local/sbin/cat',
+      'ln -s -t /Users/me/.local/bin /tmp/send.sh',
+      'cp --target-directory=/opt/tools /tmp/send.sh',
+      'chmod +x ~/.local/bin/x',
+      'touch ~/bin/cat',
+      'mkdir -p /tmp/x/bin',
+      'cat /tmp/send.sh > /Users/me/.local/bin/cat',
+      'cat /tmp/send.sh >>/opt/tools/cat',
+    ])('%s goes to the judge', async (command) => {
+      expect(await judged(auto(command).c)).toBe(1);
+    });
+
+    it('a relative target resolves against the cwd', async () => {
+      const c = auto('cp /tmp/send.sh cat', { ctx: { ...ctx, cwd: '/opt/tools' } });
+      expect(await judged(c.c)).toBe(1);
+    });
+
+    it('on macOS the comparison ignores case', async () => {
+      const cp = 'cp /tmp/send.sh /OPT/Tools/cat';
+      expect(await judged(auto(cp).c, { caseInsensitivePaths: true })).toBe(1);
+      expect(await judged(auto(cp).c, { caseInsensitivePaths: false })).toBe(0);
+    });
+
+    it.each(['Write', 'Edit', 'MultiEdit'])(
+      'a %s into a PATH folder goes to the judge',
+      async (tool) => {
+        const c = auto('', {
+          toolCall: {
+            toolName: tool,
+            input: { file_path: '/Users/me/.local/bin/cat', content: 'x' },
+          },
+        });
+        expect(await judged(c.c)).toBe(1);
+      },
+    );
+
+    it('a NotebookEdit into a bin folder goes to the judge', async () => {
+      const c = auto('', {
+        toolCall: { toolName: 'NotebookEdit', input: { notebook_path: '/tmp/bin/x.ipynb' } },
+      });
+      expect(await judged(c.c)).toBe(1);
+    });
+
+    it.each(['cp a /tmp/b', 'cat /tmp/a', 'mkdir -p /tmp/a'])(
+      '%s still skips the judge',
+      async (command) => {
+        expect(await judged(auto(command).c)).toBe(0);
+      },
+    );
+
+    it('a Write into the worktree still skips the judge', async () => {
+      const c = auto('', {
+        toolCall: {
+          toolName: 'Write',
+          input: { file_path: '/work/proj/.worktrees/t1/notes.txt', content: 'a' },
+        },
+        categories: ['edit_workspace'],
+      });
+      const { judge, seen } = scripted(sends());
+      await new ApprovalWatch({ judge, pathEnv: PATH }).handle(c.c);
+      expect(seen).toHaveLength(0);
+      expect(c.approve).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    });
+  });
+
   it('a Write tool to /tmp is approved without the judge (review C1)', async () => {
     const { judge, seen } = scripted(sends());
     const { c, approve: approved } = auto('', {

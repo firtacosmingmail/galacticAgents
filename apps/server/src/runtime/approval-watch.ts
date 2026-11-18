@@ -20,6 +20,8 @@ import {
   type ToolCall,
   type WaykeeperForward,
 } from '@galactic/protocol';
+import { homedir } from 'node:os';
+import { isAbsolute, resolve, sep } from 'node:path';
 import { markCovers } from '../domain/approval-marks.js';
 import {
   gitPushOf,
@@ -107,8 +109,59 @@ const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
  */
 const DIFF_RUNS = (a: string) => /^-[a-zA-Z0-9]*l/.test(a) || a.startsWith('--p');
 
-/** Whether one readable shell part runs a `LOCAL_FILE_COMMANDS` command and nothing else. */
-function isFileCommand(text: string): boolean {
+/** The file tools that write: their target must not be a program folder. */
+const WRITING_FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/**
+ * Whether a path is in a program folder (P13-26, review): a directory on PATH (or the folder
+ * itself), or any path with a segment named `bin` or `sbin`. A file put there shadows a command
+ * the next call runs. `~` and relative paths resolve against the Steward's home and cwd; on macOS
+ * the comparison ignores case, as its file system does.
+ */
+export type ProgramFolderTest = (path: string) => boolean;
+
+export function programFolderTest(
+  ctx: PolicyContext,
+  pathEnv: string | undefined,
+  caseInsensitive: boolean,
+): ProgramFolderTest {
+  const fold = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+  const cwd = ctx.cwd ?? ctx.workspace;
+  const absolute = (p: string): string => {
+    if (p === '~' || p.startsWith('~/')) return resolve(ctx.home ?? homedir(), p.slice(2));
+    return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
+  };
+  const dirs = (pathEnv ?? '')
+    .split(':')
+    .filter((d) => d.length > 0)
+    .map((d) => fold(absolute(d)));
+  return (raw: string) => {
+    if (raw.length === 0) return false;
+    const p = fold(absolute(raw));
+    if (p.split(sep).some((seg) => seg === 'bin' || seg === 'sbin')) return true;
+    return dirs.some((d) => p === d || p.startsWith(d.endsWith(sep) ? d : d + sep));
+  };
+}
+
+/**
+ * The path a shell word names, or `undefined` for an option: a redirect's target (`>x`, `2>>x`,
+ * `&>x`) and a long option's value (`--target-directory=x`) count.
+ */
+function pathOfWord(word: string): string | undefined {
+  const w = word.replace(/^(?:\d*>>?|&>>?|<)/, '');
+  if (w.startsWith('--')) {
+    const eq = w.indexOf('=');
+    return eq >= 0 ? w.slice(eq + 1) : undefined;
+  }
+  if (w.startsWith('-')) return undefined;
+  return w;
+}
+
+/**
+ * Whether one readable shell part runs a `LOCAL_FILE_COMMANDS` command and nothing else, naming
+ * no program folder (any path word: a copy, link, move, touch, mkdir or chmod target, a redirect).
+ */
+function isFileCommand(text: string, inProgramFolder: ProgramFolderTest): boolean {
   if (HIDDEN_RUN.test(text)) return false;
   const words = text.trim().split(/\s+/);
   let i = 0;
@@ -120,9 +173,12 @@ function isFileCommand(text: string): boolean {
   if (head === undefined || !LOCAL_FILE_COMMANDS.has(head)) return false;
   // Quotes do not hide an option from the shell: `'-exec'` is `-exec`.
   const args = words.slice(i + 1).map((a) => a.replace(/['"]/g, ''));
-  if (head === 'find') return !args.some((a) => FIND_RUNS.has(a));
-  if (head === 'diff') return !args.some(DIFF_RUNS);
-  return true;
+  if (head === 'find' && args.some((a) => FIND_RUNS.has(a))) return false;
+  if (head === 'diff' && args.some(DIFF_RUNS)) return false;
+  return !args.some((a) => {
+    const path = pathOfWord(a);
+    return path !== undefined && inProgramFolder(path);
+  });
 }
 
 /**
@@ -130,10 +186,20 @@ function isFileCommand(text: string): boolean {
  * request whose every part is a readable `LOCAL_FILE_COMMANDS` command. The categories alone do
  * not tell: the gate tags any command naming a path outside the workspace `outside_workspace`.
  */
-function onlyFileWork(toolName: string, parts: readonly CommandPart[]): boolean {
-  if (LOCAL_FILE_TOOLS.has(toolName)) return true;
+function onlyFileWork(
+  toolCall: ToolCall,
+  parts: readonly CommandPart[],
+  inProgramFolder: ProgramFolderTest,
+): boolean {
+  const { toolName } = toolCall;
+  if (LOCAL_FILE_TOOLS.has(toolName)) {
+    if (!WRITING_FILE_TOOLS.has(toolName)) return true;
+    const input = (toolCall.input ?? {}) as Record<string, unknown>;
+    const target = input['file_path'] ?? input['notebook_path'];
+    return typeof target === 'string' && !inProgramFolder(target);
+  }
   if (toolName !== 'Bash') return false;
-  return parts.every((p) => p.opaque === undefined && isFileCommand(p.text));
+  return parts.every((p) => p.opaque === undefined && isFileCommand(p.text, inProgramFolder));
 }
 
 /** The held summary when the check fails: treated as a send or a spend with no grant. */
@@ -268,6 +334,10 @@ export class ApprovalWatch {
       onError?: (error: unknown) => void;
       /** Epoch ms, for whether a grant is live (default `Date.now`). */
       now?: () => number;
+      /** The PATH whose folders are program folders (default `process.env.PATH`). */
+      pathEnv?: string;
+      /** Whether paths compare ignoring case (default: on macOS). */
+      caseInsensitivePaths?: boolean;
     },
   ) {
     this.calls = new HeldJudgeCalls(deps.timeoutMs ?? SCOPE_JUDGE_TIMEOUT_MS);
@@ -593,7 +663,15 @@ export class ApprovalWatch {
       parts.length > 0 &&
       parts.every((p) => p.opaque === undefined && localOnly(p.categories)) &&
       localOnly(categories) &&
-      onlyFileWork(call.toolCall.toolName, parts)
+      onlyFileWork(
+        call.toolCall,
+        parts,
+        programFolderTest(
+          call.ctx,
+          'pathEnv' in this.deps ? this.deps.pathEnv : process.env['PATH'],
+          this.deps.caseInsensitivePaths ?? process.platform === 'darwin',
+        ),
+      )
     ) {
       if (!call.active()) return;
       call.approve({
