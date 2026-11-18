@@ -9,12 +9,14 @@ import { Backups } from './Backups.js';
 import { DeviceQuality } from './DeviceQuality.js';
 import { IDE } from './IdeSetting.js';
 import { PreflightCheck } from './PreflightCheck.js';
+import { StandaloneApprovals } from '../status/StandingApprovals.js';
 import { useSettingsData } from './SettingsData.js';
 import {
   LATER_SECTIONS,
   SaveButton,
   SECTIONS,
   SectionFrame,
+  STANDALONE_AUTO,
   TRANSCRIPT_RETENTION,
   useSection,
   type AnySectionSpec,
@@ -71,6 +73,10 @@ export function SettingsPage({ token }: { token: string }) {
       )}
       {data.status === 'ready' &&
         LATER_SECTIONS.map((spec) => <PageSection key={spec.field} spec={spec} />)}
+      {/* P13-30: standalone tasks' Auto, marks, grants and log; only a server that has it. */}
+      {data.status === 'ready' && data.response?.settings.standaloneAuto !== undefined && (
+        <StandaloneSection />
+      )}
       {/* P9-03: the IDE Open in IDE uses; only a server that has the setting sends it. */}
       {data.status === 'ready' && data.response?.settings.deliverables && (
         <PageSection spec={IDE} />
@@ -110,4 +116,24 @@ export function SettingsPage({ token }: { token: string }) {
 function PageSection({ spec }: { spec: AnySectionSpec }) {
   const state = useSection(spec);
   return <SectionFrame state={state} footer={<SaveButton state={state} />} />;
+}
+
+/** The "Standalone tasks" section: the Auto switch with its Save, then the scope's approvals. */
+function StandaloneSection() {
+  const state = useSection(STANDALONE_AUTO);
+  const standalone = useAppStore((s) => s.world.standalone);
+  return (
+    <SectionFrame
+      state={state}
+      footer={
+        <>
+          <SaveButton state={state} />
+          <StandaloneApprovals
+            standalone={standalone}
+            autoOn={state.settings?.standaloneAuto === true}
+          />
+        </>
+      }
+    />
+  );
 }

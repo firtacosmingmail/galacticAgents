@@ -78,15 +78,23 @@ function findGrant(tables: Tables, grantId: Id): SendGrant {
   throw new DomainError('not_found', `no send grant ${grantId}`);
 }
 
-/** Removes a grant on the user's say; `forbidden` for anyone else. Returns it. */
+/**
+ * Removes a grant on the user's say; `forbidden` for anyone else. With `scope`, a grant of
+ * another scope (a project's, or standalone's when `scope.projectId` is absent) is `not_found`.
+ * Returns it.
+ */
 export function removeSendGrant(
   ctx: CommandContext,
   grantId: Id,
   by: Actor,
   reason: string,
+  scope?: { projectId?: Id },
 ): SendGrant {
   if (by.type !== 'user') {
     throw new DomainError('forbidden', 'only the user removes a send grant');
+  }
+  if (scope && findGrant(ctx.tables, grantId).projectId !== scope.projectId) {
+    throw new DomainError('not_found', `no send grant ${grantId} here`);
   }
   return takeGrant(ctx, grantId, by, reason);
 }

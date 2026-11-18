@@ -136,6 +136,9 @@ function fakeServer(initial: SettingsResponse) {
       return json(result);
     }
     if (url.endsWith('/messages')) return json({ messages: [] });
+    if (url.startsWith('/api/history/standalone-decisions')) {
+      return json({ events: standaloneDecisions, seq: standaloneDecisions.length, hasMore: false });
+    }
     return json({});
   });
   return {
@@ -151,8 +154,11 @@ function fakeServer(initial: SettingsResponse) {
 }
 
 let server: ReturnType<typeof fakeServer>;
+/** What `GET /api/history/standalone-decisions` serves (P13-30). */
+let standaloneDecisions: unknown[] = [];
 
 beforeEach(() => {
+  standaloneDecisions = [];
   FakeWebSocket.instances = [];
   localStorage.clear();
   localStorage.setItem('galactic.token', TOKEN);
@@ -730,5 +736,127 @@ describe('token hand-over from the QR code (P7-02)', () => {
     expect(window.location.href).not.toContain('from-the-qr');
     expect(window.location.hash).toBe('');
     expect(localStorage.getItem('galactic.token')).toBe('from-the-qr-0123456789');
+  });
+});
+
+describe('standalone tasks (P13-30)', () => {
+  const done = (standaloneAuto?: boolean): SettingsResponse => {
+    const r = { ...freshSettings(), setupCompletedAt: '2026-10-01T00:00:00.000Z' };
+    if (standaloneAuto !== undefined) r.settings.standaloneAuto = standaloneAuto;
+    return r;
+  };
+  const grant = {
+    id: 'sg-1',
+    words: 'post them this week',
+    summary: 'Instagram posts as @myshop, this week',
+    createdAt: '2026-11-18T10:00:00.000Z',
+    createdBy: { type: 'user' as const },
+    origin: 'remote' as const,
+    questionId: 'q-9',
+  };
+  const mark = {
+    id: 'am-1',
+    match: { kind: 'site' as const, host: 'api.example.com' },
+    example: 'curl https://api.example.com',
+    createdBy: { type: 'user' as const },
+    createdAt: '2026-11-18T10:00:00.000Z',
+    origin: 'local' as const,
+    fromSeq: 4,
+  };
+  async function withStandalone() {
+    const socket = FakeWebSocket.instances[0]!;
+    await act(async () => {
+      socket.serverSends({
+        ...snapshot,
+        seq: 2,
+        standalone: { approvalMarks: [mark], sendGrants: [grant], recordedApprovals: [] },
+      } as ServerMessage);
+    });
+  }
+
+  it('is not shown by a server that sends no standaloneAuto', async () => {
+    await open('/settings', done());
+    await screen.findByRole('region', { name: 'Caps' });
+    expect(screen.queryByRole('region', { name: 'Standalone tasks' })).toBeNull();
+  });
+
+  it('shows the switch, the grants (paused while off), the marks and the log', async () => {
+    standaloneDecisions = [
+      {
+        seq: 7,
+        at: new Date().toISOString(),
+        event: {
+          type: 'permission.decided',
+          agentId: fx.harmonizer.id,
+          toolCall: { toolName: 'Bash', input: { command: 'curl -X POST x' } },
+          decision: 'allow',
+          decidedBy: { type: 'agent', id: fx.harmonizer.id },
+          waykeeperApproval: true,
+          allowedBy: 'grant',
+          grantId: 'sg-1',
+          parts: [{ text: 'curl -X POST x', categories: ['network'] }],
+        },
+      },
+    ];
+    await open('/settings', done(false));
+    await withStandalone();
+    const standalone = await screen.findByRole('region', { name: 'Standalone tasks' });
+    const toggle = within(standalone).getByRole('checkbox', {
+      name: 'Auto for standalone tasks',
+    }) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    const grants = within(standalone).getByRole('list', { name: 'send grants' });
+    expect(grants.textContent).toContain(
+      '"Instagram posts as @myshop, this week" · "post them this week" · no end',
+    );
+    expect(within(grants).getByText('paused (Auto is off)')).toBeTruthy();
+    expect(within(grants).getByText('from the phone')).toBeTruthy();
+    expect(await within(grants).findByText('used 1×')).toBeTruthy();
+    expect(within(standalone).getByRole('list', { name: 'always asks me' }).textContent).toContain(
+      'calls to api.example.com',
+    );
+    await click(within(standalone).getByRole('button', { name: 'Network · 1' }));
+    expect(
+      within(standalone).getByText(/under grant: Instagram posts as @myshop, this week/),
+    ).toBeTruthy();
+
+    await click(toggle);
+    await click(within(standalone).getByRole('button', { name: 'Save standalone tasks' }));
+    expect(server.patches.at(-1)).toEqual({ standaloneAuto: true });
+    expect(within(standalone).queryByText('paused (Auto is off)')).toBeNull();
+  });
+
+  it('Remove and Ask me next time use the standalone routes', async () => {
+    standaloneDecisions = [
+      {
+        seq: 7,
+        at: new Date().toISOString(),
+        event: {
+          type: 'permission.decided',
+          agentId: fx.harmonizer.id,
+          toolCall: { toolName: 'Bash', input: { command: 'curl x' } },
+          decision: 'allow',
+          decidedBy: { type: 'agent', id: fx.harmonizer.id },
+          waykeeperApproval: true,
+          parts: [{ text: 'curl x', categories: ['network'] }],
+        },
+      },
+    ];
+    await open('/settings', done(true));
+    await withStandalone();
+    const standalone = await screen.findByRole('region', { name: 'Standalone tasks' });
+    await click(
+      within(within(standalone).getByRole('list', { name: 'send grants' })).getByRole('button', {
+        name: /Remove/,
+      }),
+    );
+    await click(await within(standalone).findByRole('button', { name: 'Network · 1' }));
+    await click(within(standalone).getByRole('button', { name: 'Ask me next time' }));
+    const calls = server.fetchImpl.mock.calls.map(([url, init]) => [
+      (init as RequestInit | undefined)?.method ?? 'GET',
+      url,
+    ]);
+    expect(calls).toContainEqual(['DELETE', '/api/standalone/send-grants/sg-1']);
+    expect(calls).toContainEqual(['POST', '/api/standalone/approval-marks']);
   });
 });

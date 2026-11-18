@@ -261,8 +261,8 @@ export class SettingsService {
     if (patch.stewardsLoadUserSettings !== undefined)
       next.stewardsLoadUserSettings = patch.stewardsLoadUserSettings;
     if (patch.brainUserMcp !== undefined) next.brainUserMcp = patch.brainUserMcp;
-    if (patch.standaloneAuto === true) next.standaloneAuto = true;
-    else if (patch.standaloneAuto === false) delete next.standaloneAuto;
+    // Always sent, off included: the panel shows the standalone section only for a server that has it.
+    if (patch.standaloneAuto !== undefined) next.standaloneAuto = patch.standaloneAuto;
     if (patch.budgets?.warnAtPercent !== undefined) {
       next.budgets = { ...next.budgets, warnAtPercent: patch.budgets.warnAtPercent };
     }
@@ -378,7 +378,7 @@ export class SettingsService {
       ...(c.appName ? { appName: c.appName } : {}),
       stewardsLoadUserSettings: c.stewardsLoadUserSettings ?? true,
       brainUserMcp: c.brainUserMcp ?? DEFAULT_BRAIN_USER_MCP,
-      ...(c.standaloneAuto ? { standaloneAuto: true } : {}),
+      standaloneAuto: c.standaloneAuto === true,
       transcriptRetention: { ...(c.transcriptRetention ?? DEFAULT_TRANSCRIPT_RETENTION) },
       budgets: { warnAtPercent: c.budgets?.warnAtPercent ?? DEFAULT_BUDGET_WARN_PERCENT },
       ...(c.defaultProvider ? { defaultProvider: c.defaultProvider } : {}),

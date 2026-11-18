@@ -4,6 +4,8 @@ import {
   AgentRuntime as RuntimeName,
   ConversationQuery,
   HistoryEventsQuery,
+  StandaloneDecisionsQuery,
+  type StandaloneDecisionsResponse,
   HistoryQuestionsQuery,
   HistoryWorkParams,
   HistoryWorkQuery,
@@ -165,6 +167,12 @@ export function registerPanelRoutes(
       if (!q) return;
       if (!replay.has(q.projectId)) return reply.code(404).send({ error: 'not_found' });
       return replay.read(q) satisfies HistoryEventsResponse;
+    });
+    // The approvals log of standalone tasks (P13-30): decisions of agents in no project.
+    app.get('/api/history/standalone-decisions', async (req, reply) => {
+      const q = parse(StandaloneDecisionsQuery, req.query, reply, 'invalid_query');
+      if (!q) return;
+      return replay.readStandaloneDecisions(q) satisfies StandaloneDecisionsResponse;
     });
 
     app.get('/api/notifications', async (req, reply) => {

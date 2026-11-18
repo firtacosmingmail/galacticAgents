@@ -1590,16 +1590,20 @@ export class Commands implements DomainCommands {
   /**
    * The user's "Ask me next time" (P13-16, design 2026-11-14 §4.5): a mark made from the
    * Waykeeper approval logged at `seq`. Refused (`invalid`) unless that event is a Waykeeper
-   * approval of a Steward of `projectId` younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark
-   * only makes the Waykeeper ask.
+   * approval of a Steward of `projectId` — absent: of an agent of standalone work, in no project
+   * (design 2026-11-18 §4.5) — younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark only
+   * makes the Waykeeper ask.
    */
   addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
     if (input.by.type !== 'user') {
       return Promise.reject(new DomainError('invalid', 'only the user adds approval marks'));
     }
     const { tables } = this.log;
-    const project = tables.projects.get(input.projectId);
-    if (!project) return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    const project =
+      input.projectId !== undefined ? tables.projects.get(input.projectId) : undefined;
+    if (input.projectId !== undefined && !project) {
+      return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    }
     const env = this.log.eventsSince(input.seq - 1, 1)[0];
     const e = env?.seq === input.seq ? env.event : undefined;
     if (e?.type !== 'permission.decided' || !isWaykeeperApproval(e)) {
@@ -1609,9 +1613,12 @@ export class Commands implements DomainCommands {
     }
     const agent = tables.agents.get(e.agentId);
     const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
-    if ((task?.projectId ?? agent?.projectId) !== project.id) {
+    if (!agent || (task?.projectId ?? agent.projectId) !== project?.id) {
       return Promise.reject(
-        new DomainError('invalid', `event ${input.seq} is not an approval of this project`),
+        new DomainError(
+          'invalid',
+          `event ${input.seq} is not an approval of ${project ? 'this project' : 'standalone work'}`,
+        ),
       );
     }
     const age = Date.parse(this.log.clock()) - Date.parse(env!.at);
@@ -1633,7 +1640,15 @@ export class Commands implements DomainCommands {
     // its cwd ran in the task's worktree (or the workspace): that is the cwd and the worktree
     // root. The scratch folder is found from that cwd, as the runtime's `scratchOf` does, so a
     // cwd spelled another way than `project.workspace` still has its scratch folder tokenised.
-    const cwd = e.cwd ?? task?.worktreePath ?? project.workspace;
+    const standaloneWs = task?.meta?.['workspace'];
+    const workspace =
+      project?.workspace ??
+      workspaceOfCwd(
+        e.cwd ??
+          task?.worktreePath ??
+          (typeof standaloneWs === 'string' && standaloneWs ? standaloneWs : homedir()),
+      );
+    const cwd = e.cwd ?? task?.worktreePath ?? workspace;
     let scratch: string | undefined;
     try {
       scratch = agent?.taskId ? scratchRoot(workspaceOfCwd(cwd), agent.taskId) : undefined;
@@ -1642,7 +1657,7 @@ export class Commands implements DomainCommands {
     }
     const match = markFromApproval(
       approval,
-      { workspace: project.workspace, cwd, home: homedir() },
+      { workspace, cwd, home: homedir() },
       { worktree: cwd, scratch },
     );
     const made = {
@@ -1651,10 +1666,10 @@ export class Commands implements DomainCommands {
       by: input.by,
       origin: input.origin ?? ('remote' as const),
     };
-    return this.run((ctx) => addApprovalMark(ctx, project.id, match, made));
+    return this.run((ctx) => addApprovalMark(ctx, project?.id, match, made));
   }
 
-  /** The user removes a project's approval mark (P13-16), from anywhere. */
+  /** The user removes a project's (absent: standalone work's) approval mark (P13-16), from anywhere. */
   removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
     if (input.by.type !== 'user') {
       return Promise.reject(new DomainError('invalid', 'only the user removes approval marks'));
@@ -1666,7 +1681,9 @@ export class Commands implements DomainCommands {
 
   /** The user removes a send grant, from anywhere; the held calls it covered are not re-opened. */
   removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
-    return this.run((ctx) => removeSendGrant(ctx, input.grantId, input.by, 'removed by the user'));
+    return this.run((ctx) =>
+      removeSendGrant(ctx, input.grantId, input.by, 'removed by the user', input.scope),
+    );
   }
 
   /**

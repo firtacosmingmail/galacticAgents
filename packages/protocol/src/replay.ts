@@ -48,6 +48,24 @@ export const HistoryEventsResponse = z.object({
 export type HistoryEventsResponse = z.infer<typeof HistoryEventsResponse>;
 
 /**
+ * `GET /api/history/standalone-decisions?after=&limit=` (P13-30; design 2026-11-18 §4.5): the
+ * `permission.decided` events of agents in no project (asteroid Stewards, the Harmonizer), for
+ * the approvals log of standalone tasks. Oldest first, paged forward by `seq` as the history read.
+ */
+export const StandaloneDecisionsQuery = z.object({
+  after: z.coerce.number().int().nonnegative().optional(),
+  limit: z.coerce.number().int().min(1).max(2_000).default(500),
+});
+export type StandaloneDecisionsQuery = z.input<typeof StandaloneDecisionsQuery>;
+export type StandaloneDecisionsParams = z.output<typeof StandaloneDecisionsQuery>;
+
+export const StandaloneDecisionsResponse = HistoryEventsResponse.omit({
+  projectId: true,
+  membership: true,
+});
+export type StandaloneDecisionsResponse = z.infer<typeof StandaloneDecisionsResponse>;
+
+/**
  * Event types the replay never returns: they change nothing the scene draws. The chat
  * (`message.*`) has its own endpoint, panel actions (`control.*`) arrive as their domain events,
  * and the rest are notifications or process bookkeeping.

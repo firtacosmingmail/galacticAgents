@@ -1,6 +1,13 @@
-import { markLabel, type Project, type StandingApproval } from '@galactic/protocol';
+import {
+  markLabel,
+  type ApprovalMark,
+  type Project,
+  type StandaloneApprovals as Standalone,
+  type StandingApproval,
+} from '@galactic/protocol';
 import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
-import { ApprovalsLog, when } from './ApprovalsLog.js';
+import { ApprovalsLogView, grantUses, useApprovalsLog, when } from './ApprovalsLog.js';
+import { SendGrants } from './SendGrants.js';
 
 /**
  * A project's Waykeeper approvals (P13-06, design §5.6; SPEC decision 154), beside its "Allow
@@ -39,11 +46,19 @@ const CHOICES: {
   },
 ];
 
-/** "Always asks me (n)": the marks that make the Waykeeper ask the user again (design §4.1). */
-function ApprovalMarks({ project }: { project: Project }) {
+/**
+ * "Always asks me (n)": the marks that make the Waykeeper ask the user again (design §4.1), of a
+ * project or of standalone work (`projectId` undefined).
+ */
+function ApprovalMarks({
+  marks,
+  projectId,
+}: {
+  marks: readonly ApprovalMark[];
+  projectId: string | undefined;
+}) {
   const api = useApi();
   const { run, error, busy } = useAction();
-  const marks = project.approvalMarks ?? [];
   if (marks.length === 0) return null;
   return (
     <div className="approval-marks">
@@ -59,7 +74,7 @@ function ApprovalMarks({ project }: { project: Project }) {
               className="secondary"
               disabled={busy}
               aria-label={`Remove the mark ${markLabel(m.match)}`}
-              onClick={() => void run(() => api.removeApprovalMark(project.id, m.id))}
+              onClick={() => void run(() => api.removeApprovalMark(projectId, m.id))}
             >
               Remove
             </button>
@@ -71,9 +86,36 @@ function ApprovalMarks({ project }: { project: Project }) {
   );
 }
 
+/**
+ * Standalone work's approvals (P13-30; design 2026-11-18 §4.5), in the settings next to the
+ * "Auto for standalone tasks" switch: its marks, its send grants and its approvals log.
+ */
+export function StandaloneApprovals({
+  standalone,
+  autoOn,
+}: {
+  standalone: Standalone;
+  autoOn: boolean;
+}) {
+  const log = useApprovalsLog(undefined);
+  return (
+    <div className="standing-approvals">
+      <ApprovalMarks marks={standalone.approvalMarks} projectId={undefined} />
+      <SendGrants
+        grants={standalone.sendGrants}
+        projectId={undefined}
+        autoOn={autoOn}
+        uses={grantUses(log, standalone.recordedApprovals)}
+      />
+      <ApprovalsLogView projectId={undefined} log={log} grants={standalone.sendGrants} />
+    </div>
+  );
+}
+
 export function StandingApprovals({ project }: { project: Project }) {
   const api = useApi();
   const { run, error, busy } = useAction();
+  const log = useApprovalsLog(project.id);
   const approvals: StandingApproval[] = project.standingApprovals ?? [];
   const mode: Mode =
     project.waykeeperApprovals !== true ? 'off' : project.waykeeperAuto ? 'auto' : 'task';
@@ -104,8 +146,14 @@ export function StandingApprovals({ project }: { project: Project }) {
         </div>
       )}
       <ErrorLine error={error} />
-      <ApprovalMarks project={project} />
-      <ApprovalsLog project={project} />
+      <ApprovalMarks marks={project.approvalMarks ?? []} projectId={project.id} />
+      <SendGrants
+        grants={project.sendGrants ?? []}
+        projectId={project.id}
+        autoOn={project.waykeeperApprovals === true && project.waykeeperAuto === true}
+        uses={grantUses(log, project.recordedApprovals)}
+      />
+      <ApprovalsLogView projectId={project.id} log={log} grants={project.sendGrants ?? []} />
       {approvals.length === 0 ? (
         <p className="muted sts-empty">
           No standing approvals yet. A forwarded card offers one after three similar approvals; it

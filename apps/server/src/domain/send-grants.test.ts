@@ -224,12 +224,15 @@ describe('standaloneAuto setting', () => {
   it('persists from this machine and survives a restart', () => {
     const { settings, file, env } = settingsSetup();
     expect(standaloneAutoOn(settings.current())).toBe(false);
+    // Sent when off too (P13-30): the panel shows the standalone section only when it is there.
+    expect(settings.response().settings.standaloneAuto).toBe(false);
     const on = settings.update({ standaloneAuto: true }, { origin: 'local' });
     expect(on.settings.standaloneAuto).toBe(true);
     expect(file()['standaloneAuto']).toBe(true);
     const again = new SettingsService({ config: loadConfig(env).config });
     expect(standaloneAutoOn(again.current())).toBe(true);
-    settings.update({ standaloneAuto: false }, { origin: 'local' });
+    const off = settings.update({ standaloneAuto: false }, { origin: 'local' });
+    expect(off.settings.standaloneAuto).toBe(false);
     expect('standaloneAuto' in file()).toBe(false);
     expect(standaloneAutoOn(settings.current())).toBe(false);
   });

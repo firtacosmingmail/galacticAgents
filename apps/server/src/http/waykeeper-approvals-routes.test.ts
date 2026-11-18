@@ -8,6 +8,8 @@ import { openDatabase } from '../db/database.js';
 import { composeRuntime, type ComposedRuntime } from '../runtime/compose.js';
 import { startTestApp, testConfig, TEST_TOKEN } from '../test/harness.js';
 import type { PeerCheck } from './peer-guard.js';
+import { addSendGrant } from '../domain/send-grants.js';
+import { standaloneOf } from '../domain/waykeeper-approvals.js';
 
 /**
  * P13-05: the routes of the Waykeeper approvals — the standing approval from a forwarded card,
@@ -402,5 +404,143 @@ describe('PUT /api/projects/:id/waykeeper-approvals with auto (P13-16)', () => {
     });
     expect(res.status).toBe(200);
     expect(project(p.id)).toMatchObject({ waykeeperApprovals: true, waykeeperAuto: true });
+  });
+});
+
+/** A Waykeeper-style approval of a standalone task's Steward (no project), logged; its seq. */
+async function standaloneDecided(over: { waykeeperApproval?: boolean } = {}): Promise<number> {
+  const task = (await composed.commands.createTask({ description: 'tidy up' })).value;
+  const ws = join(root, 'loose');
+  mkdirSync(ws, { recursive: true });
+  const spawned = await composed.runtime.spawn({
+    role: 'steward',
+    runtime: 'fake',
+    prompt: 'scenario:idle',
+    cwd: ws,
+    taskId: task.id,
+  });
+  if (!spawned.ok) throw new Error(spawned.reason);
+  composed.log.runCommand((ctx) =>
+    ctx.emit({
+      type: 'permission.decided',
+      agentId: spawned.agent.id,
+      toolCall: { toolName: 'Bash', input: { command: 'curl https://api.example.com' } },
+      decision: 'allow',
+      action: 'network',
+      decidedBy: { type: 'agent', id: 'a-harmonizer' },
+      ...(over.waykeeperApproval === false ? {} : { waykeeperApproval: true as const }),
+      parts: [{ text: 'curl https://api.example.com', categories: ['network'] }],
+      cwd: ws,
+    }),
+  );
+  return composed.log
+    .eventsSince(0, Number.MAX_SAFE_INTEGER)
+    .filter((e) => e.event.type === 'permission.decided')
+    .at(-1)!.seq;
+}
+
+describe('standalone approval marks (P13-30)', () => {
+  it('a mark from a standalone approval, from a remote client; DELETE removes it, then 404', async () => {
+    await setup();
+    const seq = await standaloneDecided();
+    const made = await call('POST', '/api/standalone/approval-marks', { seq }, REMOTE);
+    expect(made.status).toBe(200);
+    const mark = made.body['mark'] as Record<string, unknown>;
+    expect(mark).toMatchObject({
+      match: { kind: 'site', host: 'api.example.com' },
+      fromSeq: seq,
+      origin: 'remote',
+    });
+    expect(mark['projectId']).toBeUndefined();
+    expect(standaloneOf(composed.log.tables).approvalMarks.map((m) => m.id)).toEqual([mark['id']]);
+    const path = `/api/standalone/approval-marks/${String(mark['id'])}`;
+    expect(await call('DELETE', path, undefined, REMOTE)).toEqual({
+      status: 200,
+      body: { ok: true },
+    });
+    expect(standaloneOf(composed.log.tables).approvalMarks).toEqual([]);
+    expect((await call('DELETE', path)).status).toBe(404);
+  });
+
+  it('refuses a project’s approval on the standalone route, and a standalone one on a project’s', async () => {
+    await setup();
+    const p = await newProject();
+    const ours = await decided(p);
+    const loose = await standaloneDecided();
+    const plain = await standaloneDecided({ waykeeperApproval: false });
+    for (const seq of [ours, plain]) {
+      const res = await call('POST', '/api/standalone/approval-marks', { seq });
+      expect(res.status, `seq ${seq}`).toBe(400);
+      expect(res.body['error']).toBe('invalid');
+    }
+    const res = await call('POST', `/api/projects/${p.id}/approval-marks`, { seq: loose });
+    expect(res.status).toBe(400);
+    expect(standaloneOf(composed.log.tables).approvalMarks).toEqual([]);
+    expect(project(p.id).approvalMarks).toBeUndefined();
+  });
+
+  it('is refused to an agent’s process (403 agent_peer)', async () => {
+    await setup({ rulesPeer: async () => ({ refused: 'from an agent' }) });
+    expect((await call('POST', '/api/standalone/approval-marks', { seq: 1 })).status).toBe(403);
+    expect((await call('DELETE', '/api/standalone/approval-marks/x')).status).toBe(403);
+  });
+});
+
+describe('DELETE send grants (P13-30)', () => {
+  const grant = (projectId?: Id) =>
+    composed.log.runCommand((ctx) =>
+      addSendGrant(
+        ctx,
+        {
+          ...(projectId !== undefined ? { projectId } : {}),
+          words: 'post it today',
+          summary: 'Instagram posts today',
+          createdBy: { type: 'user' },
+          origin: 'local',
+          questionId: 'q-1',
+        },
+        now,
+      ),
+    ).value;
+
+  it('removes a project’s grant and a standalone one, from a remote client; another scope’s is 404', async () => {
+    await setup();
+    const p = await newProject();
+    const ours = grant(p.id);
+    const loose = grant();
+    expect((await call('DELETE', `/api/standalone/send-grants/${ours.id}`)).status).toBe(404);
+    expect((await call('DELETE', `/api/projects/${p.id}/send-grants/${loose.id}`)).status).toBe(
+      404,
+    );
+    expect(
+      await call('DELETE', `/api/projects/${p.id}/send-grants/${ours.id}`, undefined, REMOTE),
+    ).toEqual({ status: 200, body: { ok: true } });
+    expect(project(p.id).sendGrants).toBeUndefined();
+    expect(
+      await call('DELETE', `/api/standalone/send-grants/${loose.id}`, undefined, REMOTE),
+    ).toEqual({ status: 200, body: { ok: true } });
+    expect(standaloneOf(composed.log.tables).sendGrants).toEqual([]);
+    expect(types().filter((t) => t === 'send_grant.removed')).toHaveLength(2);
+    expect((await call('DELETE', `/api/standalone/send-grants/${loose.id}`)).status).toBe(404);
+  });
+
+  it('is refused to an agent’s process (403 agent_peer)', async () => {
+    await setup({ rulesPeer: async () => ({ refused: 'from an agent' }) });
+    expect((await call('DELETE', '/api/standalone/send-grants/x')).status).toBe(403);
+    expect((await call('DELETE', '/api/projects/p/send-grants/x')).status).toBe(403);
+  });
+});
+
+describe('GET /api/history/standalone-decisions (P13-30)', () => {
+  it('returns the decisions of agents in no project, not a project’s', async () => {
+    await setup();
+    const p = await newProject();
+    await decided(p);
+    const loose = await standaloneDecided();
+    const res = await call('GET', '/api/history/standalone-decisions?limit=10');
+    expect(res.status).toBe(200);
+    const seqs = (res.body['events'] as { seq: number }[]).map((e) => e.seq);
+    expect(seqs).toEqual([loose]);
+    expect(res.body['hasMore']).toBe(false);
   });
 });

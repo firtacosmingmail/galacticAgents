@@ -383,15 +383,16 @@ export interface SetWaykeeperApprovalsInput {
  * `permission.decided` at `seq`. From anywhere: a mark only makes the Waykeeper ask.
  */
 export interface AddApprovalMarkInput {
-  projectId: Id;
+  /** Absent: an approval of standalone work (asteroids and the Harmonizer's own). */
+  projectId?: Id;
   seq: number;
   by: Actor;
   origin?: RequestOrigin;
 }
 
-/** The user removes a project's approval mark (P13-16), from anywhere. */
+/** The user removes a project's (absent: standalone work's) approval mark (P13-16), from anywhere. */
 export interface RemoveApprovalMarkInput {
-  projectId: Id;
+  projectId?: Id;
   markId: Id;
   by: Actor;
   origin?: RequestOrigin;
@@ -400,6 +401,11 @@ export interface RemoveApprovalMarkInput {
 /** The user removes a send grant (a project's or standalone's), from anywhere. */
 export interface RemoveSendGrantInput {
   grantId: Id;
+  /**
+   * The scope the grant must be of (a route's): a project's, or standalone work's when
+   * `projectId` is absent; another scope's grant is `not_found`. Absent: any scope.
+   */
+  scope?: { projectId?: Id };
   by: Actor;
   origin?: RequestOrigin;
 }

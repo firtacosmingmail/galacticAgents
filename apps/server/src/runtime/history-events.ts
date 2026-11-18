@@ -8,6 +8,8 @@ import {
   type HistoryEventsParams,
   type HistoryEventsResponse,
   type Id,
+  type StandaloneDecisionsParams,
+  type StandaloneDecisionsResponse,
 } from '@galactic/protocol';
 
 /**
@@ -122,6 +124,47 @@ export class HistoryEvents {
       // A full page stops at its last event; otherwise the whole window was read.
       const seq = filled ?? Math.max(after, Math.min(end, last));
       return { projectId, events, seq, hasMore: seq < last, membership };
+    })();
+  }
+
+  /**
+   * The `permission.decided` events of standalone work (P13-30; design 2026-11-18 §4.5): of the
+   * agents in no project now — the Harmonizer, and Stewards whose task has no project — paged as
+   * `read` pages, one window at a time.
+   */
+  readStandaloneDecisions(query: StandaloneDecisionsParams): StandaloneDecisionsResponse {
+    const { limit } = query;
+    const after = query.after ?? 0;
+    return this.db.transaction(() => {
+      const agents = new Set(
+        (
+          this.stmt(
+            `SELECT a.id AS id FROM agents a LEFT JOIN tasks t ON t.id = a.task_id
+              WHERE a.project_id IS NULL AND t.project_id IS NULL`,
+          ).all() as { id: Id }[]
+        ).map((r) => r.id),
+      );
+      const end = after + this.window;
+      const rows = this.stmt(
+        `SELECT id, at, payload FROM events
+          WHERE id > ? AND id <= ? AND type = 'permission.decided' ORDER BY id LIMIT ?`,
+      ).all(after, end, this.window) as { id: number; at: string; payload: string }[];
+      const events: EventEnvelope[] = [];
+      let filled: number | undefined;
+      for (const row of rows) {
+        const event = JSON.parse(row.payload) as Event;
+        if (event.type !== 'permission.decided' || !agents.has(event.agentId)) continue;
+        events.push({ seq: row.id, at: row.at, event });
+        if (events.length >= limit) {
+          filled = row.id;
+          break;
+        }
+      }
+      const last = (
+        this.stmt('SELECT COALESCE(MAX(id), 0) AS seq FROM events').get() as { seq: number }
+      ).seq;
+      const seq = filled ?? Math.max(after, Math.min(end, last));
+      return { events, seq, hasMore: seq < last };
     })();
   }
 
