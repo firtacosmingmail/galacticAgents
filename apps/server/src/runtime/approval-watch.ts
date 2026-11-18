@@ -41,9 +41,10 @@ export const MAX_REASON_CHARS = 300;
 
 /**
  * The categories that stay on this machine (P13-26; design 2026-11-18 §4.2 step 2): reads,
- * writes, edits and deletes of files, anywhere. A request whose every part is only these, and
- * none opaque, is approved in Auto without the judge. Anything else — running a command, the
- * network, a push, an unclassified call — may send or spend and goes to the judge.
+ * writes, edits and deletes of files, anywhere. A request whose every part is only these, none
+ * opaque, and that is a file tool or only `LOCAL_FILE_COMMANDS` (`onlyFileWork`) is approved in
+ * Auto without the judge. Anything else — running a command, the network, a push, an
+ * unclassified call — may send or spend and goes to the judge.
  */
 export const LOCAL_ONLY_CATEGORIES: ReadonlySet<PermissionAction> = new Set<PermissionAction>([
   'read_workspace',
@@ -51,6 +52,80 @@ export const LOCAL_ONLY_CATEGORIES: ReadonlySet<PermissionAction> = new Set<Perm
   'destructive',
   'outside_workspace',
 ]);
+
+/** The tools that only read or change files: approved in Auto without the judge (P13-26). */
+export const LOCAL_FILE_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'Glob',
+  'Grep',
+  'LS',
+]);
+
+/**
+ * The shell commands that only read or change files (P13-26): a Bash request each of whose
+ * parts runs one of these, by its bare name, is approved in Auto without the judge. A path to a
+ * binary, `sudo`/`doas` or any other wrapper or runner in front, `find` with `-exec`/`-execdir`/
+ * `-ok`/`-okdir`, and `sed` without `-n` or with `-i` all go to the judge.
+ */
+export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'ls',
+  'find',
+  'grep',
+  'rg',
+  'diff',
+  'stat',
+  'file',
+  'mkdir',
+  'touch',
+  'cp',
+  'mv',
+  'rm',
+  'rmdir',
+  'ln',
+  'chmod',
+  'sed',
+]);
+
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** What may run something else or reach the network from inside a file command's words. */
+const HIDDEN_RUN = /\$\(|`|<\(|>\(|\/dev\/(?:tcp|udp)\//;
+const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+
+/** Whether one readable shell part runs a `LOCAL_FILE_COMMANDS` command and nothing else. */
+function isFileCommand(text: string): boolean {
+  if (HIDDEN_RUN.test(text)) return false;
+  const words = text.trim().split(/\s+/);
+  let i = 0;
+  while (i < words.length && ENV_ASSIGNMENT.test(words[i]!)) i++;
+  const head = words[i];
+  if (head === undefined || !LOCAL_FILE_COMMANDS.has(head)) return false;
+  const args = words.slice(i + 1);
+  if (head === 'find') return !args.some((a) => FIND_RUNS.has(a));
+  if (head === 'sed')
+    return (
+      args[0] === '-n' && !args.some((a) => /^-[a-zA-Z]*i/.test(a) || a.startsWith('--in-place'))
+    );
+  return true;
+}
+
+/**
+ * Whether a request only reads or changes files (P13-26, review C1): a file tool, or a Bash
+ * request whose every part is a readable `LOCAL_FILE_COMMANDS` command. The categories alone do
+ * not tell: the gate tags any command naming a path outside the workspace `outside_workspace`.
+ */
+function onlyFileWork(toolName: string, parts: readonly CommandPart[]): boolean {
+  if (LOCAL_FILE_TOOLS.has(toolName)) return true;
+  if (toolName !== 'Bash') return false;
+  return parts.every((p) => p.opaque === undefined && isFileCommand(p.text));
+}
 
 /** The held summary when the check fails: treated as a send or a spend with no grant. */
 export const UNCHECKED_SEND_SUMMARY = 'The check could not tell whether this sends or spends.';
@@ -508,7 +583,8 @@ export class ApprovalWatch {
       whole.unclassified !== true &&
       parts.length > 0 &&
       parts.every((p) => p.opaque === undefined && localOnly(p.categories)) &&
-      localOnly(categories)
+      localOnly(categories) &&
+      onlyFileWork(call.toolCall.toolName, parts)
     ) {
       if (!call.active()) return;
       call.approve({
