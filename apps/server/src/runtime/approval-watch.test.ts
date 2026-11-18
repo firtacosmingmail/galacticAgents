@@ -1086,6 +1086,14 @@ describe('Auto approves everything (P13-26)', () => {
     'PATH=/tmp/evil cat x',
     'LD_PRELOAD=/tmp/e.so cat x',
     'DYLD_INSERT_LIBRARIES=/tmp/e.dylib rg x',
+    'rg x /etc/hosts',
+    'rg --hostname-bin=/tmp/send.sh x /tmp',
+    'rg --hostname-bin /tmp/s --hyperlink-format=x x /tmp',
+    'diff -l /etc/hosts /tmp/a',
+    'diff -ul /etc/hosts /tmp/a',
+    'diff --paginate /etc/hosts /tmp/a',
+    'diff --pag /etc/hosts /tmp/a',
+    "find /tmp '-exec' curl x ;",
   ])('%s goes to the judge (review C1)', async (command) => {
     const { judge, seen } = scripted(approve({ sendsOrSpends: false }));
     const { c, approve: approved } = auto(command);
@@ -1104,8 +1112,8 @@ describe('Auto approves everything (P13-26)', () => {
     'ls /etc',
     'find /tmp -name x',
     'grep x /etc/hosts',
-    'rg x /etc/hosts',
     'diff /etc/hosts /etc/hosts.bak',
+    'diff -u -L a /etc/hosts /tmp/a',
     'stat /etc/hosts',
     'file /etc/hosts',
     'touch /tmp/a',

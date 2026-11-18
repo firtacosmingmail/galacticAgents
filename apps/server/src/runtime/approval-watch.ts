@@ -70,8 +70,9 @@ export const LOCAL_FILE_TOOLS: ReadonlySet<string> = new Set([
  * parts runs one of these, by its bare name, is approved in Auto without the judge. A path to a
  * binary, `sudo`/`doas` or any other wrapper or runner in front, an environment assignment other
  * than `LANG`/`LC_*` (`PATH`, `LD_PRELOAD`, … change what runs), `find` with `-exec`/`-execdir`/
- * `-ok`/`-okdir`, and `rg` with `--pre`/`--pre-glob` (it runs a program on each file) all go to
- * the judge. `sed` is not here: its `e` flag and command run shell code.
+ * `-ok`/`-okdir`, and `diff` with `-l`/`--paginate` (it runs `pr`) all go to the judge. Not here:
+ * `sed` (its `e` flag and command run shell code) and `rg` (`--pre`, `--hostname-bin` and more
+ * run a program).
  */
 export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
   'cat',
@@ -81,7 +82,6 @@ export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
   'ls',
   'find',
   'grep',
-  'rg',
   'diff',
   'stat',
   'file',
@@ -101,6 +101,11 @@ const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** What may run something else or reach the network from inside a file command's words. */
 const HIDDEN_RUN = /\$\(|`|<\(|>\(|\/dev\/(?:tcp|udp)\//;
 const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/**
+ * `diff -l`/`--paginate` pipes through `pr` (GNU and BSD): a short-option group holding `l`, or
+ * any long option starting `--p` (GNU takes an unambiguous prefix: `--pag` is `--paginate`).
+ */
+const DIFF_RUNS = (a: string) => /^-[a-zA-Z0-9]*l/.test(a) || a.startsWith('--p');
 
 /** Whether one readable shell part runs a `LOCAL_FILE_COMMANDS` command and nothing else. */
 function isFileCommand(text: string): boolean {
@@ -113,11 +118,10 @@ function isFileCommand(text: string): boolean {
   }
   const head = words[i];
   if (head === undefined || !LOCAL_FILE_COMMANDS.has(head)) return false;
-  // Quotes do not hide an option from the shell: `'--pre'` is `--pre`.
+  // Quotes do not hide an option from the shell: `'-exec'` is `-exec`.
   const args = words.slice(i + 1).map((a) => a.replace(/['"]/g, ''));
   if (head === 'find') return !args.some((a) => FIND_RUNS.has(a));
-  if (head === 'rg')
-    return !args.some((a) => a === '--pre' || a.startsWith('--pre=') || a.startsWith('--pre-glob'));
+  if (head === 'diff') return !args.some(DIFF_RUNS);
   return true;
 }
 
