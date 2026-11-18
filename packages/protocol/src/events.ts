@@ -537,10 +537,13 @@ export const SendGrantRemoved = z.object({
   reason: z.string(),
 });
 
-/** The Waykeeper's approval was recorded on the project (P13); keeps the newest 100. */
+/**
+ * The Waykeeper's approval was recorded on the project (P13), or on standalone work's approvals
+ * when `projectId` is absent (P13-27); keeps the newest 100.
+ */
 export const ApprovalRecorded = z.object({
   type: z.literal('approval.recorded'),
-  projectId: Id,
+  projectId: Id.optional(),
   approval: RecordedApproval,
 });
 

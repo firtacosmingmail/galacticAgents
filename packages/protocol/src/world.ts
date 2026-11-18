@@ -542,6 +542,18 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       };
     }
     case 'approval.recorded': {
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: {
+            ...standalone,
+            recordedApprovals: [...standalone.recordedApprovals, event.approval].slice(
+              -MAX_RECORDED_APPROVALS,
+            ),
+          },
+        };
+      }
       const project = next.projects[event.projectId];
       if (!project) return next;
       const recorded = [...(project.recordedApprovals ?? []), event.approval].slice(

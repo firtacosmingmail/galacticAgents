@@ -295,7 +295,8 @@ export interface WaykeeperApproval {
  */
 export interface ApprovalWatchCall {
   agentId: Id;
-  projectId: Id;
+  /** The Steward's project; absent for an asteroid's Steward (standalone work, P13-27). */
+  projectId?: Id;
   /** The raw call: the watch redacts what the judge and the card see. */
   toolCall: ToolCall;
   /** The categories the gate classified the call under. */

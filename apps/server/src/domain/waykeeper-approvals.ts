@@ -198,14 +198,24 @@ export function removeApprovalMark(
 }
 
 /**
- * Records an approval on the project, keeping the newest `MAX_RECORDED_APPROVALS`. Refused for a
- * project that ended: its records are gone and stay gone.
+ * Records an approval on the project — or on standalone work's approvals when `projectId` is
+ * undefined (P13-27) — keeping the newest `MAX_RECORDED_APPROVALS`. Refused for a project that
+ * ended: its records are gone and stay gone.
  */
 export function recordApproval(
   ctx: CommandContext,
-  projectId: Id,
+  projectId: Id | undefined,
   approval: RecordedApproval,
 ): void {
+  if (projectId === undefined) {
+    const standalone = standaloneOf(ctx.tables);
+    saveStandalone(ctx.tables, {
+      ...standalone,
+      recordedApprovals: [...standalone.recordedApprovals, approval].slice(-MAX_RECORDED_APPROVALS),
+    });
+    ctx.emit({ type: 'approval.recorded', approval });
+    return;
+  }
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (RULES_END_IN.has(project.state)) {
     throw new DomainError(
@@ -334,14 +344,28 @@ export function recordForwardedAllow(
   if (!isJudgedKind(forward.kind)) return;
   // A push or an upload can never become a standing approval (P13-10): no repeat to count.
   if (isPushOrUpload(question.context)) return;
-  const projectId = projectIdOfAsker(ctx, question);
-  const project = projectId ? ctx.tables.projects.get(projectId) : undefined;
-  if (!project || RULES_END_IN.has(project.state)) return;
-  recordApproval(ctx, project.id, {
+  const approval: RecordedApproval = {
     kind: forward.kind,
     summary: precedentOf(call),
     agentId: question.originAgentId,
     questionId: question.id,
     at: ctx.now,
-  });
+  };
+  const projectId = projectIdOfAsker(ctx, question);
+  if (projectId === undefined) {
+    // An asteroid's Steward (P13-27): its approvals are standalone work's, the Harmonizer's.
+    if (isAsteroidSteward(ctx, question.originAgentId)) recordApproval(ctx, undefined, approval);
+    return;
+  }
+  const project = ctx.tables.projects.get(projectId);
+  if (!project || RULES_END_IN.has(project.state)) return;
+  recordApproval(ctx, project.id, approval);
+}
+
+/** A Steward of a task outside any project (an asteroid). */
+function isAsteroidSteward(ctx: CommandContext, agentId: Id): boolean {
+  const agent = ctx.tables.agents.get(agentId);
+  if (agent?.role !== 'steward' || !agent.taskId || agent.projectId) return false;
+  const task = ctx.tables.tasks.get(agent.taskId);
+  return task !== undefined && task.projectId === undefined;
 }

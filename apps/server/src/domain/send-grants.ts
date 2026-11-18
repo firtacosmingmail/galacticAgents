@@ -4,6 +4,7 @@ import {
   SEND_GRANT_MAX_DAYS,
   type Actor,
   type Id,
+  type Question,
   type SendGrant,
   type Settings,
 } from '@galactic/protocol';
@@ -130,4 +131,39 @@ export function endSendGrants(ctx: CommandContext, projectId: Id, reason: string
 /** Whether Auto is on for standalone work (asteroids and the Harmonizer's own). */
 export function standaloneAutoOn(settings: Pick<Settings, 'standaloneAuto'>): boolean {
   return settings.standaloneAuto === true;
+}
+
+/** The reason an Allow once on a send-permission card is logged with. */
+export const ALLOWED_ONCE = 'Allowed once by Cosmin.';
+
+/**
+ * The user's Allow once on a send-permission card (P13-27; design §4.4 step 3): logged as
+ * `permission.decided{allow, allowedBy: 'allow_once'}` in the answer's own transaction, for the
+ * approvals log. No grant is made. Anything else — a deny, an answer by anyone but the user, a
+ * question without `sendPermission` — logs nothing here.
+ */
+export function logAllowOnce(
+  ctx: CommandContext,
+  question: Question,
+  answer: string,
+  by: Actor,
+): void {
+  const send = question.context.sendPermission;
+  const call = question.context.toolCall;
+  if (question.kind !== 'permission' || !send || !call) return;
+  if (answer !== 'allow' || by.type !== 'user') return;
+  const action = question.context.permissionAction;
+  ctx.emit({
+    type: 'permission.decided',
+    agentId: question.originAgentId,
+    questionId: question.id,
+    // The question's call and parts were redacted when it opened.
+    toolCall: call,
+    decision: 'allow',
+    ...(action ? { action } : {}),
+    reason: ALLOWED_ONCE,
+    decidedBy: by,
+    allowedBy: 'allow_once',
+    ...(send.parts.length > 0 ? { parts: send.parts } : {}),
+  });
 }

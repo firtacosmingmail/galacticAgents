@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** P13-27 · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-26 done (2026-11-18) (branch `agent-auto-grants`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 26/31
+**Current task:** P13-28 · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-27 done (2026-11-18) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 27/31
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -171,7 +171,7 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 4 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-27 — Runtime — no bypass paths; holding a send (added 2026-11-18)
-- **Status:** todo · **Depends on:** P13-26 · **Parallel with:** —
+- **Status:** done (2026-11-18) · **Depends on:** P13-26 · **Parallel with:** —
 - Auto approves everything; sends and spends need a grant (SPEC decision lands with P13-31; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 5 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
 
 ### P13-28 — The Waykeeper's `answer_send_permission` (added 2026-11-18)

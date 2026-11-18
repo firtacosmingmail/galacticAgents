@@ -72,6 +72,11 @@ export const SendPermissionContext = z.object({
   /** The existing grants, which did not cover the request. */
   grants: z.array(SendGrant),
   publish: PublishContext.optional(),
+  /**
+   * Who turns the user's reply into an answer (P13-27): the project's Waykeeper, or the
+   * Harmonizer for standalone work. Absent: a plain card — Allow once / Don't allow, no grant.
+   */
+  deciderId: Id.optional(),
 });
 export type SendPermissionContext = z.infer<typeof SendPermissionContext>;
 

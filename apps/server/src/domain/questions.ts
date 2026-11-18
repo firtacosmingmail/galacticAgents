@@ -21,6 +21,7 @@ import type { CommandContext } from './event-log.js';
 import { applyJobAnswer } from './findings.js';
 import { approvedPublish } from './publish.js';
 import { applyLimitAnswer, checkLimitAnswer } from './usage-limits.js';
+import { logAllowOnce } from './send-grants.js';
 import { recordForwardedAllow } from './waykeeper-approvals.js';
 
 /**
@@ -280,6 +281,8 @@ export function answerQuestion(ctx: CommandContext, input: AnswerInput): Questio
   applyLimitAnswer(ctx, question);
   // The user's allow of a request the Waykeeper forwarded is remembered (P13-05).
   recordForwardedAllow(ctx, question, input.answer, input.answeredBy);
+  // The user's Allow once on a send-permission card is logged, without a grant (P13-27).
+  logAllowOnce(ctx, question, input.answer, input.answeredBy);
   return question;
 }
 

@@ -264,4 +264,16 @@ describe('the world fold of send grants and standalone marks (P13-23)', () => {
     );
     expect(w.standalone.approvalMarks).toEqual([]);
   });
+
+  it('keeps a recorded approval without projectId under standalone (P13-27)', () => {
+    const approval = {
+      kind: 'read-only gh query',
+      summary: 'Bash: gh pr view 12',
+      agentId: 'a-1',
+      questionId: 'q-1',
+      at: '2026-11-18T10:00:00.000Z',
+    };
+    const w = applyEvent(emptyWorld(), env(1, { type: 'approval.recorded', approval }));
+    expect(w.standalone.recordedApprovals).toEqual([approval]);
+  });
 });

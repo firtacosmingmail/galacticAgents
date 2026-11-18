@@ -295,9 +295,9 @@ export function touches(event: Event, m: Members): boolean {
     case 'permission.rule_removed':
     case 'waykeeper_approvals.set':
     case 'standing_approval.removed':
-    case 'approval.recorded':
       return m.projects.has(event.projectId);
-    // A standalone mark or grant (no projectId) belongs to no project's history.
+    // A standalone mark, grant or record (no projectId) belongs to no project's history.
+    case 'approval.recorded':
     case 'approval_mark.removed':
     case 'send_grant.removed':
       return event.projectId !== undefined && m.projects.has(event.projectId);
