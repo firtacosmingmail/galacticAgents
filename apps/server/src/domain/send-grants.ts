@@ -1,14 +1,21 @@
 import { randomUUID } from 'node:crypto';
 import {
+  excerpt,
   isGrantLive,
+  quoteFound,
   SEND_GRANT_MAX_DAYS,
   type Actor,
+  type AnswerSendPermissionInput,
+  type Event,
   type Id,
   type Question,
+  type RequestOrigin,
   type SendGrant,
   type Settings,
 } from '@galactic/protocol';
+import type { Database } from '../db/database.js';
 import type { Tables } from '../db/tables.js';
+import { redactSecrets } from '../runtime/redact.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { RULES_END_IN } from './project-rules.js';
@@ -167,3 +174,117 @@ export function logAllowOnce(
     ...(send.parts.length > 0 ? { parts: send.parts } : {}),
   });
 }
+
+/** A user's reply to a send-permission question (P13-28): what he wrote, and from where. */
+export interface SendPermissionReply {
+  text: string;
+  /** Unknown counts as remote. */
+  origin: RequestOrigin;
+}
+
+/**
+ * The user's replies to the send-permission question `question` (P13-28; design §4.4 step 4),
+ * oldest first: every `message.sent` from the user that replies to it, and every other chat line
+ * of his to its decider `deciderId` since it opened — except one replying to another question.
+ * The verbatim check of a grant's words runs against these texts only.
+ */
+export function sendPermissionReplies(
+  db: Database,
+  question: Question,
+  deciderId: Id,
+): SendPermissionReply[] {
+  const rows = db
+    .prepare(
+      `SELECT payload FROM events
+        WHERE type = 'message.sent' AND at >= ?
+          AND json_extract(payload, '$.sender.type') = 'user'
+          AND (
+            (json_extract(payload, '$.replyTo.kind') = 'question'
+              AND json_extract(payload, '$.replyTo.id') = ?)
+            OR (json_extract(payload, '$.agentId') = ?
+              AND (json_extract(payload, '$.replyTo.kind') IS NULL
+                OR json_extract(payload, '$.replyTo.kind') != 'question'))
+          )
+        ORDER BY id`,
+    )
+    .all(question.createdAt, question.id, deciderId) as { payload: string }[];
+  return rows.flatMap((r) => {
+    const e = JSON.parse(r.payload) as Event;
+    if (e.type !== 'message.sent' || e.turn) return [];
+    return [{ text: e.text, origin: e.origin ?? 'remote' }];
+  });
+}
+
+/** What the Steward is told when its held send is not allowed. */
+export const NOT_ALLOWED = 'Cosmin did not allow this';
+/** How much of the user's reply the Steward is told on a deny. */
+export const DENY_REPLY_MAX = 300;
+
+/** The deny the Steward gets (P13-28): "Cosmin did not allow this: <his last reply>". */
+export function notAllowedText(replies: readonly SendPermissionReply[]): string {
+  const last = replies.at(-1)?.text.trim();
+  if (!last) return `${NOT_ALLOWED}.`;
+  return `${NOT_ALLOWED}: ${excerpt(redactSecrets(last), DENY_REPLY_MAX)}`;
+}
+
+/**
+ * The checks of a decider's answer to a send-permission question (P13-28; design §4.4): the
+ * question is open, carries `sendPermission` and names `agentId` as its decider; an `allow` comes
+ * only after the user replied, and its grant's `words` are a verbatim span of one of his replies.
+ * Throws the refusal (`stale`, `forbidden`, `invalid`); returns the replies and, for a grant, the
+ * reply its words were found in.
+ */
+export function checkSendPermissionAnswer(
+  db: Database,
+  question: Question,
+  input: AnswerSendPermissionInput,
+): { replies: SendPermissionReply[]; from?: SendPermissionReply } {
+  const send = question.context.sendPermission;
+  if (question.kind !== 'permission' || !send) {
+    throw new DomainError('invalid', `question ${question.id} is not a send permission question`);
+  }
+  if (question.status !== 'open') {
+    throw new DomainError('stale', `question ${question.id} is ${question.status} already`);
+  }
+  if (send.deciderId === undefined || send.deciderId !== input.agentId) {
+    throw new DomainError(
+      'forbidden',
+      `question ${question.id} is not yours to decide: only its card's buttons answer it`,
+    );
+  }
+  const replies = sendPermissionReplies(db, question, input.agentId);
+  if (input.decision === 'deny') return { replies };
+  if (replies.length === 0) {
+    throw new DomainError(
+      'invalid',
+      `Cosmin has not replied to question ${question.id}: only his reply allows a send. Wait for it`,
+    );
+  }
+  if (!input.grant) return { replies };
+  const { words, summary } = input.grant;
+  if (words.trim() === '' || summary.trim() === '') {
+    throw new DomainError('invalid', 'a grant needs words and a summary');
+  }
+  const from = replies.find((r) => quoteFound(words, [r.text]));
+  if (!from) {
+    throw new DomainError(
+      'invalid',
+      "grant.words must be Cosmin's exact words, copied from his reply to this question",
+    );
+  }
+  return { replies, from };
+}
+
+/**
+ * A decider's checked answer to a held send, for the runtime (P13-28): `reason` is logged with
+ * the allow and closes the question; on a deny it is what the Steward is told. `grant` makes the
+ * grant in its own transaction before anything else (a refused grant changes nothing).
+ */
+export type HeldSendAnswer =
+  | {
+      decision: 'allow';
+      deciderId: Id;
+      reason: string;
+      grant?: (ctx: CommandContext) => SendGrant;
+    }
+  | { decision: 'deny'; deciderId: Id; reason: string };

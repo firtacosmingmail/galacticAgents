@@ -785,8 +785,13 @@ export interface DomainCommands {
   removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
   /** Removes a send grant; the held calls it covered are not re-opened. */
   removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>>;
-  /** Answers a send-permission question (see `AnswerSendPermissionInput`). */
-  answerSendPermission(input: AnswerSendPermissionInput): Promise<CommandResult<void>>;
+  /**
+   * Answers a send-permission question (see `AnswerSendPermissionInput`): the grant made from the
+   * user's reply, when there is one.
+   */
+  answerSendPermission(
+    input: AnswerSendPermissionInput,
+  ): Promise<CommandResult<{ grant?: SendGrant }>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

@@ -98,6 +98,7 @@ import {
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import { redactSecrets } from '../runtime/redact.js';
 import { providerOf, type ChooseSteward } from '../runtime/steward-choice.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
@@ -157,7 +158,13 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
-import { removeSendGrant } from './send-grants.js';
+import {
+  addSendGrant,
+  checkSendPermissionAnswer,
+  notAllowedText,
+  removeSendGrant,
+  type HeldSendAnswer,
+} from './send-grants.js';
 import {
   addApprovalMark,
   addStandingApproval,
@@ -261,6 +268,11 @@ export interface AgentControl {
   permissionContext?(
     agentId: Id,
   ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } | undefined;
+  /**
+   * Answers a held send its decider decided from the user's reply (P13-28): the adapter once, the
+   * grant (when made) and the closing of its question logged. Returns the grant. Absent: refused.
+   */
+  answerHeldSend?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
 }
 
 export interface CommandsOptions {
@@ -1651,9 +1663,71 @@ export class Commands implements DomainCommands {
     return this.run((ctx) => removeSendGrant(ctx, input.grantId, input.by, 'removed by the user'));
   }
 
-  /** Answers a send-permission question (P13-23 declares it; the behaviour comes later). */
-  answerSendPermission(_input: AnswerSendPermissionInput): Promise<CommandResult<void>> {
-    return Promise.reject(new DomainError('invalid', 'send permission is not implemented yet'));
+  /**
+   * The decider's answer to a send-permission question (P13-28; design §4.4 step 4): checked here
+   * (`checkSendPermissionAnswer`: its decider, the user's reply first for an allow, a grant's words
+   * verbatim from it), then carried out by the runtime on the Steward that waits — the grant made
+   * with the reply's origin, the call allowed with it or once, or refused with the user's words.
+   */
+  async answerSendPermission(
+    input: AnswerSendPermissionInput,
+  ): Promise<CommandResult<{ grant?: SendGrant }>> {
+    const question = must(
+      this.log.tables.questions.get(input.questionId),
+      'question',
+      input.questionId,
+    );
+    const { replies, from } = checkSendPermissionAnswer(this.log.db, question, input);
+    if (!this.agents?.answerHeldSend || !this.agents.hasQuestion(question.id)) {
+      throw new DomainError('stale', `no Steward waits on question ${question.id} any more`);
+    }
+    const projectId = this.log.tables.tasks.get(
+      this.log.tables.agents.get(question.originAgentId)?.taskId ?? '',
+    )?.projectId;
+    const user: Actor = { type: 'user' };
+    let answer: HeldSendAnswer;
+    if (input.decision === 'deny') {
+      answer = { decision: 'deny', deciderId: input.agentId, reason: notAllowedText(replies) };
+    } else if (input.grant && from) {
+      const { words, summary, endsAt } = input.grant;
+      answer = {
+        decision: 'allow',
+        deciderId: input.agentId,
+        reason: `Cosmin allowed it: ${summary}`,
+        grant: (ctx) =>
+          addSendGrant(
+            ctx,
+            {
+              ...(projectId !== undefined ? { projectId } : {}),
+              words: redactSecrets(words.trim()),
+              summary: redactSecrets(summary.trim()),
+              ...(endsAt !== undefined ? { endsAt } : {}),
+              createdBy: user,
+              origin: from.origin,
+              questionId: question.id,
+            },
+            Date.now(),
+          ),
+      };
+    } else {
+      answer = {
+        decision: 'allow',
+        deciderId: input.agentId,
+        reason: "Allowed once from Cosmin's reply.",
+      };
+    }
+    const since = this.log.currentSeq();
+    const grant = await this.agents.answerHeldSend(question.id, answer);
+    const events = this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter(
+        (e) =>
+          (e.type === 'send_grant.added' && e.grant.questionId === question.id) ||
+          (e.type === 'permission.decided' && e.questionId === question.id) ||
+          (e.type === 'question.cancelled' && e.questionId === question.id),
+      );
+    return { value: grant ? { grant } : {}, events };
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */

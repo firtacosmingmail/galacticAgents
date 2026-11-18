@@ -43,6 +43,7 @@ import {
   type RequestJudge,
   type ScopeJudge,
   type WaykeeperForward,
+  type SendGrant,
   type SendPermissionContext,
   type AllowedBy,
   OFF_SCRIPT_ACTIONS,
@@ -75,7 +76,7 @@ import {
   type PolicyContext,
 } from '../domain/permissions.js';
 import { RULES_END_IN } from '../domain/project-rules.js';
-import { liveGrants, standaloneAutoOn } from '../domain/send-grants.js';
+import { liveGrants, standaloneAutoOn, type HeldSendAnswer } from '../domain/send-grants.js';
 import { standaloneOf } from '../domain/waykeeper-approvals.js';
 import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
@@ -2629,6 +2630,89 @@ export class AgentRuntime {
       .catch((error: unknown) => this.onError(error, `held send answer ${questionId}`))
       .finally(() => live.answering.delete(questionId));
     this.noteAllowed(live, held.call);
+  }
+
+  /**
+   * The decider's answer to a held send, checked by the command (P13-28; design §4.4 step 4).
+   * The grant comes first, in its own transaction: a refused one (an end in the past, a project
+   * that ended) throws and changes nothing. Then an allow is logged in the decider's name — with
+   * the grant (`allowedBy: 'grant'`) or once (`'allow_once'`) — and the question is cancelled as
+   * answered, before the adapter hears it once: `allow`, or `deny: <reason>` for the Steward.
+   * Auto need not be on: the user's reply answers the call he was asked about. After a grant, the
+   * scope's other held sends are judged again (`recheckHeldSends`). Returns the grant.
+   */
+  async answerHeldSend(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined> {
+    const agentId = this.byQuestion.get(questionId);
+    if (!agentId) {
+      throw new DomainError('stale', `no Steward waits on question ${questionId} any more`);
+    }
+    const live = this.must(agentId);
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    const question = this.opts.log.tables.questions.get(questionId);
+    const send = question?.context.sendPermission;
+    const asked = question?.context.toolCall;
+    if (question?.status !== 'open' || !send || !asked) {
+      throw new DomainError('stale', `question ${questionId} is not an open held send`);
+    }
+    live.answering.add(questionId);
+    let grant: SendGrant | undefined;
+    try {
+      if (answer.decision === 'allow' && answer.grant) {
+        grant = this.opts.log.runCommand(answer.grant).value;
+      }
+    } catch (error) {
+      live.answering.delete(questionId);
+      throw error;
+    }
+    const call = live.heldSends.get(questionId)?.call ?? asked;
+    live.heldSends.delete(questionId);
+    try {
+      if (answer.decision === 'allow') {
+        this.permissionDecided(
+          live,
+          {
+            toolCall: asked,
+            decision: 'allow',
+            action: question.context.permissionAction,
+            reason: answer.reason,
+            decidedBy: { type: 'agent', id: answer.deciderId },
+            waykeeperApproval: true,
+            allowedBy: grant ? 'grant' : 'allow_once',
+            ...(grant ? { grantId: grant.id, quote: grant.words } : {}),
+            parts: send.parts,
+            ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
+          },
+          questionId,
+        );
+      }
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(answer.reason),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.questions.delete(questionId);
+      this.byQuestion.delete(questionId);
+    }
+    const forAgent =
+      answer.decision === 'allow' ? 'allow' : `deny: ${redactSecrets(answer.reason)}`;
+    try {
+      await live.adapter.answer(questionId, forAgent);
+    } catch (error) {
+      this.onError(error, `held send answer ${questionId}`);
+    } finally {
+      live.answering.delete(questionId);
+    }
+    if (answer.decision === 'allow') this.noteAllowed(live, call);
+    if (grant) {
+      this.recheckHeldSends(grant.projectId !== undefined ? { projectId: grant.projectId } : {});
+    }
+    return grant;
   }
 
   /**
