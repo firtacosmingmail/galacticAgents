@@ -798,17 +798,108 @@ export class ApprovalWatch {
       call.approve({ reason, allowedBy: 'auto', parts: shown });
       return;
     }
-    const grantId = verdict.grantId;
-    if (grantId !== undefined && this.liveGrants(call).some((g) => g.id === grantId)) {
-      call.approve({ reason, allowedBy: 'grant', grantId, parts: shown });
-      return;
-    }
-    if (verdict.quote !== undefined && quoteFound(verdict.quote, known.userWords)) {
-      call.approve({ reason, allowedBy: 'task_words', quote: verdict.quote, parts: shown });
-      return;
-    }
+    const cover = coverOf(verdict, this.liveGrants(call), known.userWords);
+    if (cover) return call.approve({ reason, ...cover, parts: shown });
     hold(verdict.summary || verdict.kind || verdict.reason);
   }
+
+  /**
+   * A Steward's `request_publish` in Auto (P13-29; design 2026-11-18 §4.6): the publish is a
+   * send, so the judge (in `grants` mode, given the platform, account, text and files as the
+   * request) only says what covers it. Covered: a grant still live when the verdict arrives, or
+   * the user's own words (a quote the server finds). Anything else — no judge, no facts, a
+   * malformed answer, a verdict naming no cover — is `held`, with the live grants that did not
+   * cover it. `off`: Auto was turned off while it was judged. `cancelled`: the Steward ended.
+   */
+  async judgePublish(call: PublishJudgeCall): Promise<PublishCover> {
+    const grantsNow = (): SendGrant[] => {
+      const now = (this.deps.now ?? Date.now)();
+      try {
+        return call.grants().filter((g) => isGrantLive(g, now));
+      } catch {
+        return [];
+      }
+    };
+    const held = (summary: string): PublishCover => ({
+      held: { summary: redactSecrets(summary), grants: grantsNow() },
+    });
+    const judge = this.deps.judge;
+    if (!judge) return held(UNCHECKED_SEND_SUMMARY);
+    let facts: ApprovalFacts | undefined;
+    try {
+      facts = call.facts();
+    } catch {
+      facts = undefined;
+    }
+    if (!facts) return held(UNCHECKED_SEND_SUMMARY);
+    const input: RequestJudgeInput = {
+      mode: 'grants',
+      grants: grantsNow(),
+      task: facts.task,
+      workspace: call.ctx.workspace,
+      cwd: call.ctx.cwd ?? call.ctx.workspace,
+      userWords: [...facts.userWords],
+      recentActions: [...facts.recentActions],
+      standingApprovals: [...facts.standingApprovals],
+      recordedApprovals: [...facts.recordedApprovals],
+      request: {
+        toolName: call.toolCall.toolName,
+        ...(call.toolCall.input !== undefined ? { input: redactValue(call.toolCall.input) } : {}),
+        categories: ['network'],
+        parts: [],
+      },
+    };
+    const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
+    if (outcome === 'cancelled') return 'cancelled';
+    if (!call.auto()) return 'off';
+    const verdict = outcome.ok ? validVerdict(outcome.value, 0, 'grants') : undefined;
+    if (!verdict) return held(UNCHECKED_SEND_SUMMARY);
+    // A publish always sends: only a grant or the user's words cover it, whatever else it says.
+    const cover = coverOf(verdict, grantsNow(), facts.userWords);
+    if (cover) return { covered: { reason: redactSecrets(verdict.reason), ...cover, parts: [] } };
+    return held(verdict.summary || verdict.kind || verdict.reason);
+  }
+}
+
+/** A publish request for `ApprovalWatch.judgePublish` (P13-29). */
+export interface PublishJudgeCall {
+  agentId: Id;
+  /** The request as the judge reads it: `request_publish` with the platform, account, text, files. */
+  toolCall: ToolCall;
+  /** The Steward's policy context: its workspace and worktree. */
+  ctx: PolicyContext;
+  facts: () => ApprovalFacts | undefined;
+  /** The scope's grants: read for the judge and again when the verdict arrives; may throw. */
+  grants: () => SendGrant[];
+  /** Whether the scope is still in Auto when the verdict arrives. */
+  auto: () => boolean;
+}
+
+/** What covered a publish in Auto, or what its grant question shows (P13-29). */
+export type PublishCover =
+  | { covered: WaykeeperApproval }
+  | { held: { summary: string; grants: SendGrant[] } }
+  | 'off'
+  | 'cancelled';
+
+/**
+ * What covers a send or a spend, checked by the server (P13-26, P13-29): the grant the verdict
+ * names when it is among `live` now, else the verdict's quote when it is found verbatim in the
+ * user's words; `undefined` when neither.
+ */
+function coverOf(
+  verdict: RequestVerdict,
+  live: readonly SendGrant[],
+  userWords: readonly string[],
+): Pick<WaykeeperApproval, 'allowedBy' | 'grantId' | 'quote'> | undefined {
+  const grantId = verdict.grantId;
+  if (grantId !== undefined && live.some((g) => g.id === grantId)) {
+    return { allowedBy: 'grant', grantId };
+  }
+  if (verdict.quote !== undefined && quoteFound(verdict.quote, userWords)) {
+    return { allowedBy: 'task_words', quote: verdict.quote };
+  }
+  return undefined;
 }
 
 /**

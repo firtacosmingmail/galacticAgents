@@ -273,6 +273,12 @@ export interface AgentControl {
    * grant (when made) and the closing of its question logged. Returns the grant. Absent: refused.
    */
   answerHeldSend?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
+  /**
+   * Answers a publish's grant question its decider decided (P13-29): the grant (when made), an
+   * allow logged and the Steward's publish allowance armed, the question closed, the Steward told.
+   * Absent: refused.
+   */
+  answerHeldPublish?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
 }
 
 export interface CommandsOptions {
@@ -1678,7 +1684,14 @@ export class Commands implements DomainCommands {
       input.questionId,
     );
     const { replies, from } = checkSendPermissionAnswer(this.log.db, question, input);
-    if (!this.agents?.answerHeldSend || !this.agents.hasQuestion(question.id)) {
+    // A publish's grant question (P13-29): no session waits on it; the runtime arms the allowance.
+    const carryOut =
+      question.context.sendPermission?.publish !== undefined
+        ? this.agents?.answerHeldPublish?.bind(this.agents)
+        : this.agents?.hasQuestion(question.id)
+          ? this.agents.answerHeldSend?.bind(this.agents)
+          : undefined;
+    if (!carryOut) {
       throw new DomainError('stale', `no Steward waits on question ${question.id} any more`);
     }
     const projectId = this.log.tables.tasks.get(
@@ -1717,7 +1730,7 @@ export class Commands implements DomainCommands {
       };
     }
     const since = this.log.currentSeq();
-    const grant = await this.agents.answerHeldSend(question.id, answer);
+    const grant = await carryOut(question.id, answer);
     const events = this.log
       .eventsSince(since, Number.MAX_SAFE_INTEGER)
       .map((e) => e.event)

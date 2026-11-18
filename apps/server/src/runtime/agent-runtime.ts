@@ -30,6 +30,7 @@ import {
   type PermissionRule,
   type PublishContext,
   type RequestOrigin,
+  type RequestPublishInput,
   type ReplyQuote,
   type SlashCommand,
   type SpawnHandle,
@@ -77,6 +78,15 @@ import {
 } from '../domain/permissions.js';
 import { RULES_END_IN } from '../domain/project-rules.js';
 import { liveGrants, standaloneAutoOn, type HeldSendAnswer } from '../domain/send-grants.js';
+import {
+  folderOfAgent,
+  openPublishPermission,
+  preparePublish,
+  publishRequestCall,
+  readFileInFolder,
+  type PublishDeps,
+  type PublishInAuto,
+} from '../domain/publish.js';
 import { standaloneOf } from '../domain/waykeeper-approvals.js';
 import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
@@ -94,6 +104,7 @@ import {
   ApprovalWatch,
   type ApprovalFacts,
   type ApprovalWatchCall,
+  type PublishCover,
   type WaykeeperApproval,
 } from './approval-watch.js';
 import { gitReader } from './git-read.js';
@@ -480,6 +491,10 @@ export interface TurnEnd {
 }
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** A scope's grant filter: its project, or standalone work when it has none. */
+const scopeOf = (projectId: Id | undefined): { projectId?: Id } =>
+  projectId !== undefined ? { projectId } : {};
 
 /** One agent's trace in the log, as recovery needs it. */
 class AgentHistory {
@@ -2582,6 +2597,25 @@ export class AgentRuntime {
         });
       }
     }
+    // A publish's grant question (P13-29): no call waits in the adapter, the question is the hold.
+    for (const question of tables.questions.all()) {
+      const publish = question.context.sendPermission?.publish;
+      if (question.status !== 'open' || question.kind !== 'permission' || !publish) continue;
+      const live = this.live.get(question.originAgentId);
+      if (!live || !this.watching(live)) continue;
+      const now = this.approvalScopeOf(tables.agents.get(live.agent.id));
+      if (!now || now.projectId !== scope.projectId || !now.auto || !now.deciderId) continue;
+      if (live.answering.has(question.id) || this.rechecking.has(question.id)) continue;
+      this.rechecking.add(question.id);
+      const done = () => this.rechecking.delete(question.id);
+      this.recheckHeldPublish(live, question.id, publish, now, now.deciderId).then(
+        done,
+        (error: unknown) => {
+          done();
+          this.onError(error, `held publish recheck ${question.id}`);
+        },
+      );
+    }
   }
 
   /**
@@ -2713,6 +2747,246 @@ export class AgentRuntime {
       this.recheckHeldSends(grant.projectId !== undefined ? { projectId: grant.projectId } : {});
     }
     return grant;
+  }
+
+  // -- publishes in Auto (P13-29; design 2026-11-18 §4.6) --------------------------------------
+
+  /** How a publish's files are read and where (the same as the commands' and the relay's). */
+  private publishDeps(): PublishDeps {
+    return {
+      readFile: (root, path) => readFileInFolder(root, path),
+      worktreeOf: (agentId) =>
+        this.permissionContext(agentId)?.ctx.cwd ?? folderOfAgent(this.opts.log, agentId),
+    };
+  }
+
+  /**
+   * A Steward's `request_publish` in Auto (P13-29; design §4.6): the publish is a send. Returns
+   * `undefined` — the caller opens the publish card as today (decision 147) — for an agent this
+   * runtime does not run, a scope not in Auto, a job run's publish (its Approve queues the run that
+   * publishes) and Auto turned off while it was judged. Otherwise the request is checked and its
+   * files hashed as the card's would be (`preparePublish`, which throws what it refuses) and the
+   * grants judge reads it. Covered (a grant live at verdict time, or a quote of the user's words
+   * the server finds) with a decider: the one-shot allowance is armed as the card's Approve arms
+   * it, logged as `permission.decided{allow}` in the decider's name with the text and the files'
+   * hashes. Anything else — no cover, a failed check, no decider — opens the grant question in
+   * place of the card (`openPublishPermission`).
+   */
+  async requestPublishInAuto(input: RequestPublishInput): Promise<PublishInAuto | undefined> {
+    const live = this.live.get(input.originAgentId);
+    if (!live || !this.watching(live)) return undefined;
+    const { log } = this.opts;
+    const scopeNow = () => this.approvalScopeOf(log.tables.agents.get(live.agent.id));
+    const scope = scopeNow();
+    if (!scope?.auto) return undefined;
+    const deps = this.publishDeps();
+    const prepared = log.runCommand((ctx) => preparePublish(ctx, input, deps)).value;
+    if (prepared.run || !prepared.agent.taskId) return undefined;
+    const { publish } = prepared;
+    const cover = await this.judgePublishOf(live, publish, scope.projectId, prepared.agent.taskId);
+    if (cover === 'cancelled' || !this.watching(live)) {
+      throw new DomainError('stale', 'the Steward stopped; nothing was asked or published');
+    }
+    if (cover === 'off') return undefined;
+    const deciderId = scopeNow()?.deciderId;
+    if ('covered' in cover && deciderId) {
+      this.allowPublish(live, publish, deciderId, cover.covered);
+      return {
+        approved: {
+          allowedBy: cover.covered.allowedBy ?? 'grant',
+          ...(cover.covered.grantId !== undefined ? { grantId: cover.covered.grantId } : {}),
+        },
+      };
+    }
+    const held =
+      'held' in cover
+        ? cover.held
+        : {
+            summary: `Publish to ${publish.platform} (${publish.account})`,
+            grants: liveGrants(log.tables, scopeOf(scope.projectId), Date.now()),
+          };
+    const question = log.runCommand((ctx) =>
+      openPublishPermission(
+        ctx,
+        live.agent.id,
+        publish,
+        { ...held, ...(deciderId ? { deciderId } : {}) },
+        this.questions,
+      ),
+    ).value;
+    return { questionId: question.id };
+  }
+
+  /** The grants judge on a publish of `live` in its scope (P13-29). */
+  private judgePublishOf(
+    live: Live,
+    publish: PublishContext,
+    projectId: Id | undefined,
+    taskId: Id,
+  ): Promise<PublishCover> {
+    const { tables } = this.opts.log;
+    const ctx = this.permissionContext(live.agent.id)?.ctx ?? {
+      workspace: this.workspaceOf(live.agent.id, live.spec),
+    };
+    return this.approvalWatch.judgePublish({
+      agentId: live.agent.id,
+      toolCall: publishRequestCall(publish),
+      ctx,
+      facts: () => this.approvalFacts(live, projectId, taskId),
+      grants: () => liveGrants(tables, scopeOf(projectId), Date.now()),
+      auto: () => this.approvalScopeOf(tables.agents.get(live.agent.id))?.auto === true,
+    });
+  }
+
+  /**
+   * A publish allowed in the decider's name (P13-29): logged as `permission.decided{allow}` — the
+   * platform, the account, the text (redacted) and the files' hashes, what allowed it — then the
+   * Steward's one-shot allowance armed exactly as the card's Approve arms it (`PublishRelay`).
+   */
+  private allowPublish(
+    live: Live,
+    publish: PublishContext,
+    deciderId: Id,
+    d: WaykeeperApproval,
+    questionId?: Id,
+  ): void {
+    const call = publishRequestCall(publish);
+    this.permissionDecided(
+      live,
+      {
+        toolCall: call,
+        decision: 'allow',
+        action: 'network',
+        reason: d.reason,
+        decidedBy: { type: 'agent', id: deciderId },
+        waykeeperApproval: true,
+        ...(d.quote !== undefined ? { quote: d.quote } : {}),
+        ...(d.allowedBy !== undefined ? { allowedBy: d.allowedBy } : {}),
+        ...(d.grantId !== undefined ? { grantId: d.grantId } : {}),
+        parts: d.parts,
+        ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
+      },
+      questionId,
+    );
+    this.opts.publishAllowances?.arm(
+      live.agent.id,
+      publish,
+      this.publishDeps().worktreeOf(live.agent.id),
+    );
+    this.noteAllowed(live, call);
+  }
+
+  /** Tells the Steward its publish's answer, as the card's relay does (P13-29). */
+  private tellPublish(live: Live, publish: PublishContext, refused?: string): void {
+    try {
+      this.send(
+        live.agent.id,
+        `Publish approval for ${publish.platform}: ` +
+          (refused === undefined ? 'approved' : `refused. ${redactSecrets(refused)}`),
+        { sender: SYSTEM },
+      );
+    } catch (error) {
+      this.onError(error, 'publish answer');
+    }
+  }
+
+  /**
+   * The decider's answer to a publish's grant question (P13-29), checked by the command as a held
+   * send's is. No session waits on it: the grant comes first in its own transaction (a refused
+   * one changes nothing); an allow is logged in the decider's name and arms the allowance; the
+   * question is cancelled as answered; then the Steward hears the answer as a message. After a
+   * grant, the scope's held sends and publishes are judged again. Returns the grant.
+   */
+  async answerHeldPublish(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined> {
+    const question = this.opts.log.tables.questions.get(questionId);
+    const publish = question?.context.sendPermission?.publish;
+    if (question?.status !== 'open' || question.kind !== 'permission' || !publish) {
+      throw new DomainError('stale', `question ${questionId} is not an open held publish`);
+    }
+    const live = this.live.get(question.originAgentId);
+    if (!live || !this.watching(live)) {
+      throw new DomainError('stale', `no Steward waits on question ${questionId} any more`);
+    }
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    live.answering.add(questionId);
+    let grant: SendGrant | undefined;
+    try {
+      if (answer.decision === 'allow' && answer.grant) {
+        grant = this.opts.log.runCommand(answer.grant).value;
+      }
+      if (answer.decision === 'allow') {
+        this.allowPublish(
+          live,
+          publish,
+          answer.deciderId,
+          {
+            reason: answer.reason,
+            allowedBy: grant ? 'grant' : 'allow_once',
+            ...(grant ? { grantId: grant.id, quote: grant.words } : {}),
+            parts: [],
+          },
+          questionId,
+        );
+      }
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(answer.reason),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.answering.delete(questionId);
+    }
+    this.tellPublish(live, publish, answer.decision === 'allow' ? undefined : answer.reason);
+    if (grant) {
+      this.recheckHeldSends(grant.projectId !== undefined ? { projectId: grant.projectId } : {});
+    }
+    return grant;
+  }
+
+  /**
+   * Judges again an open publish grant question of `live` (P13-29), as `recheckHeldSends` does a
+   * held send: only a grant live when the verdict arrives arms the allowance — logged in the
+   * decider's name, the question cancelled as answered by the grant, the Steward told.
+   */
+  private async recheckHeldPublish(
+    live: Live,
+    questionId: Id,
+    publish: PublishContext,
+    scope: ApprovalScope,
+    deciderId: Id,
+  ): Promise<void> {
+    const { tables } = this.opts.log;
+    const taskId = tables.agents.get(live.agent.id)?.taskId;
+    if (!taskId) return;
+    const cover = await this.judgePublishOf(live, publish, scope.projectId, taskId);
+    if (typeof cover === 'string' || !('covered' in cover)) return;
+    const d = cover.covered;
+    if (d.allowedBy !== 'grant' || d.grantId === undefined) return;
+    const grant = liveGrants(tables, scopeOf(scope.projectId), Date.now()).find(
+      (g) => g.id === d.grantId,
+    );
+    if (!grant || !this.watching(live) || live.answering.has(questionId)) return;
+    if (tables.questions.get(questionId)?.status !== 'open') return;
+    live.answering.add(questionId);
+    try {
+      this.allowPublish(live, publish, deciderId, d, questionId);
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(`answered by a grant: ${grant.summary}`),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.answering.delete(questionId);
+    }
+    this.tellPublish(live, publish);
   }
 
   /**

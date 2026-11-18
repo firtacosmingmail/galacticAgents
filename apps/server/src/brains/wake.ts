@@ -150,7 +150,15 @@ function repliesToDecided(e: EventOfType<'message.sent'>, scope: WakeScope): boo
  */
 function heldSend(q: Question): string {
   const send = q.context.sendPermission!;
-  const call = send.parts.map((p) => p.text).join(' && ') || q.context.toolCall?.toolName || '?';
+  // A publish (P13-29) has no parts: its content is the call.
+  const publish = send.publish
+    ? `request_publish to ${send.publish.platform} (${send.publish.account}): ${send.publish.text}` +
+      (send.publish.files.length > 0
+        ? ` + files ${send.publish.files.map((f) => f.path).join(', ')}`
+        : '')
+    : undefined;
+  const call =
+    send.parts.map((p) => p.text).join(' && ') || publish || q.context.toolCall?.toolName || '?';
   const grants =
     send.grants.length > 0
       ? `; grants that did not cover it: ${send.grants.map((g) => quote(g.summary)).join(', ')}`

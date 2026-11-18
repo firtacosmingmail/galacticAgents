@@ -637,7 +637,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   // asks before spending and, on a job run, reports findings and the run (P10-05).
   runtime.setStewardTools((agent) => [
     ...(deliverables ? stewardDeliverableTools(deliverables, agent) : []),
-    ...stewardJobTools(commands, log.tables, agent),
+    ...stewardJobTools(commands, log.tables, agent, {
+      publishInAuto: (input) => runtime.requestPublishInAuto(input),
+    }),
   ]);
   // A task Steward hears its spend answer as one message (P10-05).
   const spendRelay = new SpendRelay({
