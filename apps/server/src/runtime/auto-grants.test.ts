@@ -61,13 +61,17 @@ interface JudgeScript {
   covers: boolean;
   /** Runs while the judge "thinks" (e.g. turns Auto off). */
   during?: () => void;
+  /** The judge now says the comment sends nothing. */
+  notASend?: boolean;
+  /** The judge now quotes the user's words for the comment. */
+  quote?: string;
 }
 
 function judgeOf(script: JudgeScript) {
   return createFakeRequestJudge((input): RequestVerdict => {
     script.seen.push(input);
     script.during?.();
-    const sends = input.request.parts.some((p) => p.text.includes('comment'));
+    const sends = !script.notASend && input.request.parts.some((p) => p.text.includes('comment'));
     const grant = script.covers ? input.grants?.[0] : undefined;
     return {
       verdict: 'approve',
@@ -77,6 +81,7 @@ function judgeOf(script: JudgeScript) {
       ...(input.mode !== 'task' ? { sendsOrSpends: sends } : {}),
       ...(sends ? { summary: 'Comment on PR 12' } : {}),
       ...(sends && grant ? { grantId: grant.id } : {}),
+      ...(sends && script.quote ? { quote: script.quote } : {}),
     };
   });
 }
@@ -536,6 +541,47 @@ describe('recheckHeldSends (P13-27; ruling: a grant clears the held sends it cov
       h.commands.answerQuestion({ questionId: q.id, answer: 'allow', by: USER }),
     ).rejects.toThrow();
     expect(h.answersTo(q.id)).toHaveLength(1);
+  });
+
+  it('leaves the question open when the new check says it sends nothing: no adapter answer', async () => {
+    const script: JudgeScript = { seen: [], covers: false };
+    const h = await projectSteward({ script, auto: true, scenario: 'send' });
+    await until(() => h.ofType('question.opened').length === 1);
+    const q = h.log.tables.questions.all()[0]!;
+    script.notASend = true;
+    h.runtime.recheckHeldSends({ projectId: h.project.id });
+    await until(() => script.seen.length === 2);
+    await settle();
+    expect(h.log.tables.questions.get(q.id)!.status).toBe('open');
+    expect(h.answersTo(q.id)).toEqual([]);
+    expect(stewardDecisions(h, h.steward.id)).toEqual([]);
+  });
+
+  it("leaves the question open when the new check quotes the user's words", async () => {
+    const script: JudgeScript = { seen: [], covers: false };
+    const h = await projectSteward({ script, auto: true, scenario: 'send' });
+    await until(() => h.ofType('question.opened').length === 1);
+    const q = h.log.tables.questions.all()[0]!;
+    const words = 'please comment lgtm on PR 12';
+    h.log.runCommand((ctx) =>
+      ctx.emit({
+        type: 'message.sent',
+        messageId: 'm-user-1',
+        agentId: h.waykeeper.id,
+        sender: USER,
+        text: words,
+        interrupt: false,
+      }),
+    );
+    script.quote = words;
+    h.runtime.recheckHeldSends({ projectId: h.project.id });
+    await until(() => script.seen.length === 2);
+    await settle();
+    // The judge was given the words: the watch would allow by task words, the recheck does not.
+    expect(script.seen[1]!.userWords).toContain(words);
+    expect(h.log.tables.questions.get(q.id)!.status).toBe('open');
+    expect(h.answersTo(q.id)).toEqual([]);
+    expect(stewardDecisions(h, h.steward.id)).toEqual([]);
   });
 
   it('leaves the question open when nothing covers the send yet', async () => {

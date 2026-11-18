@@ -2538,8 +2538,9 @@ export class AgentRuntime {
    * Judges again every send held for its question in `scope` (P13-27; `projectId` absent:
    * standalone work) whose Steward still waits on it — after a grant was added, a held send it
    * now covers is approved without the user. Each runs the Auto path of the watch (design §4.2
-   * step 3); an approval answers the adapter once, is logged in the decider's name and cancels the
-   * question as answered by the grant. Anything else leaves the question open as it is. Nothing
+   * step 3); only an approval by a grant live now answers the adapter (once), is logged in the
+   * decider's name and cancels the question as answered by the grant. Anything else — a verdict
+   * that it no longer sends, the user's words — leaves the question open as it is. Nothing
    * is judged when the scope is not in Auto or has no decider now.
    */
   recheckHeldSends(scope: { projectId?: Id }): void {
@@ -2583,9 +2584,11 @@ export class AgentRuntime {
   }
 
   /**
-   * A held send a new check approves (P13-27): the question is cancelled as answered and the
-   * allow logged in one go, before the adapter hears it — a racing Allow once or Don't allow from
-   * the user then finds the call already being answered, so the adapter is answered once.
+   * A held send a new check approves (P13-27): only a grant live at this moment may answer it —
+   * the send was already held once, so a new "not a send" or a task-words quote leaves the
+   * question open for the user. The question is cancelled as answered and the allow logged in one
+   * go, before the adapter hears it — a racing Allow once or Don't allow from the user then finds
+   * the call already being answered, so the adapter is answered once.
    */
   private approveHeldSend(
     live: Live,
@@ -2594,27 +2597,26 @@ export class AgentRuntime {
     deciderId: Id,
     d: WaykeeperApproval,
   ): void {
+    if (d.allowedBy !== 'grant' || d.grantId === undefined) return;
+    const scope = this.approvalScopeOf(this.opts.log.tables.agents.get(live.agent.id));
+    const grant = scope
+      ? liveGrants(
+          this.opts.log.tables,
+          scope.projectId !== undefined ? { projectId: scope.projectId } : {},
+          Date.now(),
+        ).find((g) => g.id === d.grantId)
+      : undefined;
+    if (!grant) return;
     if (!live.questions.has(questionId) || live.answering.has(questionId)) return;
     live.answering.add(questionId);
     live.heldSends.delete(questionId);
     try {
       this.logApproval(live, held.call, held.event, held.asked, deciderId, d);
-      const grant =
-        d.grantId !== undefined
-          ? this.grantSummary(
-              this.approvalScopeOf(this.opts.log.tables.agents.get(live.agent.id)),
-              d.grantId,
-            )
-          : undefined;
-      const reason =
-        d.grantId !== undefined
-          ? `answered by a grant${grant ? `: ${grant}` : ''}`
-          : `approved on a new check: ${d.reason}`;
       this.command((ctx) =>
         cancelQuestion(
           ctx,
           questionId,
-          redactSecrets(reason),
+          redactSecrets(`answered by a grant: ${grant.summary}`),
           holdersNow(ctx, questionId, this.questions),
         ),
       );
@@ -2627,17 +2629,6 @@ export class AgentRuntime {
       .catch((error: unknown) => this.onError(error, `held send answer ${questionId}`))
       .finally(() => live.answering.delete(questionId));
     this.noteAllowed(live, held.call);
-  }
-
-  /** The summary of a grant of the scope, if it is still there. */
-  private grantSummary(scope: ApprovalScope | undefined, grantId: Id): string | undefined {
-    if (!scope) return undefined;
-    const { tables } = this.opts.log;
-    const grants =
-      scope.projectId !== undefined
-        ? (tables.projects.get(scope.projectId)?.sendGrants ?? [])
-        : standaloneOf(tables).sendGrants;
-    return grants.find((g) => g.id === grantId)?.summary;
   }
 
   /**
