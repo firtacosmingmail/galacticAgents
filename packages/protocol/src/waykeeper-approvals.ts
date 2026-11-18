@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Actor } from './actor.js';
 import { PermissionAction, RequestOrigin } from './enums.js';
+import { PublishContext } from './long-term-questions.js';
 import { Id, Timestamp } from './primitives.js';
 
 /**
@@ -34,6 +35,46 @@ export const CommandPart = z.object({
 });
 export type CommandPart = z.infer<typeof CommandPart>;
 
+/** The longest a send grant may run ahead, in days (Auto, design 2026-11-18). */
+export const SEND_GRANT_MAX_DAYS = 90;
+
+/**
+ * A send grant: the user's words allowing sends or spends (a push, an upload, a message, a
+ * payment) for a project, or for standalone work when `projectId` is absent. It lasts until
+ * `endsAt` (absent: until removed or the project ends).
+ */
+export const SendGrant = z.object({
+  id: Id,
+  /** Absent: standalone. */
+  projectId: Id.optional(),
+  /** The user's own words, verbatim. */
+  words: z.string().min(1).max(2000),
+  /** What it allows, in a line. */
+  summary: z.string().min(1).max(200),
+  createdAt: Timestamp,
+  endsAt: Timestamp.optional(),
+  createdBy: Actor,
+  origin: RequestOrigin,
+  /** The send-permission question the user answered. */
+  questionId: Id,
+});
+export type SendGrant = z.infer<typeof SendGrant>;
+
+/** Whether `g` still counts at `now` (epoch ms): no end, or `now` before `endsAt`. */
+export function isGrantLive(g: SendGrant, now: number): boolean {
+  return g.endsAt === undefined || now < Date.parse(g.endsAt);
+}
+
+/** What a send-permission question shows: the request, the grants that did not cover it. */
+export const SendPermissionContext = z.object({
+  summary: z.string(),
+  parts: z.array(CommandPart),
+  /** The existing grants, which did not cover the request. */
+  grants: z.array(SendGrant),
+  publish: PublishContext.optional(),
+});
+export type SendPermissionContext = z.infer<typeof SendPermissionContext>;
+
 /** Days an approval mark counts (design 2026-11-14, §4.1). */
 export const APPROVAL_MARK_DAYS = 10;
 /** Approval marks kept per project. */
@@ -59,7 +100,8 @@ export type ApprovalMarkMatch = z.infer<typeof ApprovalMarkMatch>;
 /** An approval mark: one request the user approved, kept as a pattern for `APPROVAL_MARK_DAYS`. */
 export const ApprovalMark = z.object({
   id: Id,
-  projectId: Id,
+  /** Absent: a mark of standalone work (asteroids and the Harmonizer's own), no project. */
+  projectId: Id.optional(),
   match: ApprovalMarkMatch,
   /** The request it was made from, redacted. */
   example: z.string().max(300),
@@ -168,6 +210,10 @@ export const StandingApproval = z.object({
 });
 export type StandingApproval = z.infer<typeof StandingApproval>;
 
+/** What allowed a request, for the approvals log label. */
+export const AllowedBy = z.enum(['grant', 'task_words', 'allow_once', 'auto']);
+export type AllowedBy = z.infer<typeof AllowedBy>;
+
 /** An approval the Waykeeper (or the user) gave, kept to spot repeats. */
 export const RecordedApproval = z.object({
   kind: z.string().min(1).max(200),
@@ -175,8 +221,26 @@ export const RecordedApproval = z.object({
   agentId: Id,
   questionId: Id,
   at: Timestamp,
+  /** The send grant that covered it, when one did. */
+  grantId: Id.optional(),
+  /** What allowed it, for the log label. */
+  allowedBy: AllowedBy.optional(),
 });
 export type RecordedApproval = z.infer<typeof RecordedApproval>;
+
+/** The approvals state of standalone work (no project): marks, send grants, recorded approvals. */
+export const StandaloneApprovals = z.object({
+  approvalMarks: z.array(ApprovalMark),
+  sendGrants: z.array(SendGrant),
+  recordedApprovals: z.array(RecordedApproval),
+});
+export type StandaloneApprovals = z.infer<typeof StandaloneApprovals>;
+
+export const emptyStandaloneApprovals = (): StandaloneApprovals => ({
+  approvalMarks: [],
+  sendGrants: [],
+  recordedApprovals: [],
+});
 
 /**
  * What the Waykeeper forwarded to the user and why (`QuestionContext.waykeeper`). `similar`
@@ -209,7 +273,9 @@ export function isJudgedKind(kind: string): boolean {
 /** What the request judge is given (design §5.3). */
 export interface RequestJudgeInput {
   /** `task`: a Steward's request against its task; `auto`: the Auto policy (design 4.2). */
-  mode: 'task' | 'auto';
+  mode: 'task' | 'auto' | 'grants';
+  /** Grants mode: the live grants the request is matched against. */
+  grants?: SendGrant[];
   /**
    * Auto only (P13-20, decision 161): every push in the request is a git push the server checked
    * goes to a branch other than the main branch; it needs no quote of the user's words.
@@ -247,6 +313,10 @@ export interface RequestVerdict {
   quote?: string;
   /** Auto mode: whether any part sends to people or outside services, or spends money. */
   sendsOrSpends?: boolean;
+  /** Grants mode: the grant that covers the request. */
+  grantId?: Id;
+  /** Grants mode: the request in a line, for the question or the log. */
+  summary?: string;
 }
 
 /** Decides whether a Steward's permission request fits its task. Implementations fail closed. */

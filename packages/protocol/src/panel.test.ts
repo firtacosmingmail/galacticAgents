@@ -78,6 +78,10 @@ describe('settings schemas (P25-01)', () => {
     stewardsLoadUserSettings: true,
   };
 
+  it('accepts standaloneAuto', () => {
+    expect(Settings.parse({ ...valid, standaloneAuto: true }).standaloneAuto).toBe(true);
+  });
+
   it('accepts the defaults', () => {
     expect(Settings.parse(valid)).toEqual(valid);
   });

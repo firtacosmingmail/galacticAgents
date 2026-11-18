@@ -6,6 +6,8 @@ import {
   ApprovalMark,
   CommandPart,
   RecordedApproval,
+  AllowedBy,
+  SendGrant,
   StandingApproval,
 } from './waykeeper-approvals.js';
 import { ReplyQuote } from './reply.js';
@@ -445,6 +447,10 @@ export const PermissionDecided = z.object({
   parts: z.array(CommandPart).optional(),
   /** The Steward's working directory when it asked (P13-13). */
   cwd: z.string().optional(),
+  /** The send grant that allowed it (Auto, design 2026-11-18). */
+  grantId: Id.optional(),
+  /** What allowed it, for the approvals log label. */
+  allowedBy: AllowedBy.optional(),
 });
 
 /**
@@ -508,8 +514,25 @@ export const ApprovalMarkAdded = z.object({
  */
 export const ApprovalMarkRemoved = z.object({
   type: z.literal('approval_mark.removed'),
-  projectId: Id,
+  /** Absent: a standalone mark. */
+  projectId: Id.optional(),
   markId: Id,
+  by: Actor,
+  reason: z.string(),
+});
+
+/** A send grant was made (Auto, design 2026-11-18); appended to the project's, or standalone's, grants. */
+export const SendGrantAdded = z.object({
+  type: z.literal('send_grant.added'),
+  grant: SendGrant,
+});
+
+/** A send grant is gone: removed by the user, expired, or ended with its project. */
+export const SendGrantRemoved = z.object({
+  type: z.literal('send_grant.removed'),
+  grantId: Id,
+  /** Absent: a standalone grant. */
+  projectId: Id.optional(),
   by: Actor,
   reason: z.string(),
 });
@@ -638,6 +661,7 @@ export const ProjectChanges = Project.omit({
   waykeeperAuto: true,
   standingApprovals: true,
   approvalMarks: true,
+  sendGrants: true,
   recordedApprovals: true,
 })
   .extend({
@@ -1040,6 +1064,8 @@ export const Event = z.discriminatedUnion('type', [
   StandingApprovalRemoved,
   ApprovalMarkAdded,
   ApprovalMarkRemoved,
+  SendGrantAdded,
+  SendGrantRemoved,
   ApprovalRecorded,
   ProposalCreated,
   ProposalApproved,

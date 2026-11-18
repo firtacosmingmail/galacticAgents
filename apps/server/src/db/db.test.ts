@@ -133,6 +133,30 @@ describe('domain tables', () => {
         .slice(-3),
     ).toEqual(['b-kepler', 'b-luna', 'b-ast-1']);
     expect(t.projects.get('p-1')).toEqual(fx.project);
+
+    const grant = {
+      id: 'sg-1',
+      words: 'you may push to the release branch',
+      summary: 'push to the release branch',
+      createdAt: '2026-11-18T10:00:00.000Z',
+      createdBy: { type: 'user' as const },
+      origin: 'local' as const,
+      questionId: 'q-1',
+    };
+    t.projects.upsert({ ...fx.project, sendGrants: [{ ...grant, projectId: 'p-1' }] });
+    expect(t.projects.get('p-1')?.sendGrants).toEqual([{ ...grant, projectId: 'p-1' }]);
+    t.projects.upsert(fx.project);
+    expect(t.projects.get('p-1')).toEqual(fx.project);
+
+    expect(t.standalone.get('standalone')).toBeUndefined();
+    const standalone = {
+      id: 'standalone',
+      approvalMarks: [],
+      sendGrants: [grant],
+      recordedApprovals: [],
+    };
+    t.standalone.upsert(standalone);
+    expect(t.standalone.get('standalone')).toEqual(standalone);
     expect(t.tasks.get('t-1')).toEqual(fx.task);
     expect(t.tasks.get('t-2')).toEqual(fx.asteroidTask);
     expect(t.agents.get('a-harmonizer')).toEqual(fx.harmonizer);

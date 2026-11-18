@@ -42,6 +42,8 @@ const notImplemented = (): Promise<never> => Promise.reject(new Error('not imple
 /** A no-op command surface; every method exists and type-checks. */
 const commands: DomainCommands = {
   createProject: notImplemented,
+  removeSendGrant: notImplemented,
+  answerSendPermission: notImplemented,
   updateProject: notImplemented,
   setProjectState: notImplemented,
   closeProject: notImplemented,

@@ -20,8 +20,11 @@ import {
   type AllowSimilarInput,
   type RemoveStandingApprovalInput,
   type AddApprovalMarkInput,
+  type AnswerSendPermissionInput,
   type ApprovalMark,
   type RemoveApprovalMarkInput,
+  type RemoveSendGrantInput,
+  type SendGrant,
   APPROVAL_MARK_DAYS,
   isWaykeeperApproval,
   type SetWaykeeperApprovalsInput,
@@ -1640,6 +1643,16 @@ export class Commands implements DomainCommands {
     return this.run((ctx) =>
       removeApprovalMark(ctx, input.projectId, input.markId, input.by, 'removed by the user'),
     );
+  }
+
+  /** The user removes a send grant (P13-23 declares it; the behaviour comes with the grant tasks). */
+  removeSendGrant(_input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
+    return Promise.reject(new DomainError('invalid', 'send grants are not implemented yet'));
+  }
+
+  /** Answers a send-permission question (P13-23 declares it; the behaviour comes later). */
+  answerSendPermission(_input: AnswerSendPermissionInput): Promise<CommandResult<void>> {
+    return Promise.reject(new DomainError('invalid', 'send permission is not implemented yet'));
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */

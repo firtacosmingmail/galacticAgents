@@ -376,6 +376,8 @@ export const Settings = z.object({
   deliverables: SettingsDeliverables.optional(),
   /** The installed app's name (P8-26, decision 153); absent: `DEFAULT_APP_NAME`. */
   appName: AppName.optional(),
+  /** Auto for standalone work (asteroids and the Harmonizer's own); absent: off. */
+  standaloneAuto: z.boolean().optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -394,6 +396,7 @@ export const SettingName = z.enum([
   'providers',
   'deliverables',
   'appName',
+  'standaloneAuto',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -454,6 +457,8 @@ export const SettingsPatch = z
      * requests only unless `autoApproveRemote` (decision 51).
      */
     appName: AppName.nullable().optional(),
+    /** Auto for standalone work; local requests only (decision 51). */
+    standaloneAuto: z.boolean().optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof SettingsPatch>;

@@ -23,7 +23,7 @@ import type {
   RunData,
   UsedSource,
 } from './dashboard.js';
-import type { ApprovalMark, StandingApproval } from './waykeeper-approvals.js';
+import type { ApprovalMark, SendGrant, StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
@@ -44,7 +44,7 @@ import type {
   DeliverableLocation,
   DeliverableSource,
 } from './deliverables.js';
-import type { Id, Meta } from './primitives.js';
+import type { Id, Meta, Timestamp } from './primitives.js';
 import type { SetAnswer, SetQuestionInput } from './question-set.js';
 import type {
   Area,
@@ -395,6 +395,25 @@ export interface RemoveApprovalMarkInput {
   markId: Id;
   by: Actor;
   origin?: RequestOrigin;
+}
+
+/** The user removes a send grant (a project's or standalone's), from anywhere. */
+export interface RemoveSendGrantInput {
+  grantId: Id;
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/**
+ * The answer to a send-permission question: `allow` (with the `grant` the user's reply made, when
+ * it was more than once) or `deny`. The model never allows on its own: `allow` only after a user
+ * reply to that question.
+ */
+export interface AnswerSendPermissionInput {
+  questionId: Id;
+  agentId: Id;
+  decision: 'allow' | 'deny';
+  grant?: { words: string; summary: string; endsAt?: Timestamp };
 }
 
 /** The user removes a project's standing approval, from anywhere. */
@@ -764,6 +783,10 @@ export interface DomainCommands {
   addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
   /** Removes a project's approval mark (P13-16). */
   removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
+  /** Removes a send grant; the held calls it covered are not re-opened. */
+  removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>>;
+  /** Answers a send-permission question (see `AnswerSendPermissionInput`). */
+  answerSendPermission(input: AnswerSendPermissionInput): Promise<CommandResult<void>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

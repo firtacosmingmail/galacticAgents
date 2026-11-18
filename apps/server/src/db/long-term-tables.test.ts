@@ -143,7 +143,7 @@ describe('long-term tables (P10-01)', () => {
       agents: t.agents.all(),
     };
 
-    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19, 20, 21]);
+    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19, 20, 21, 22]);
     const after = tables(db);
     expect(after.bodies.all()).toEqual(before.bodies);
     expect(after.questions.all()).toEqual(before.questions);

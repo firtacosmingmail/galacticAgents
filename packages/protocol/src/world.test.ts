@@ -211,3 +211,57 @@ describe('the world fold of Auto and approval marks (P13-13)', () => {
     expect('waykeeperAuto' in w.projects['p-1']!).toBe(false);
   });
 });
+
+describe('the world fold of send grants and standalone marks (P13-23)', () => {
+  const grant = (events['send_grant.added'] as Extract<Event, { type: 'send_grant.added' }>).grant;
+  const standaloneGrant = (() => {
+    const { projectId: _p, ...rest } = grant;
+    return { ...rest, id: 'sg-2' };
+  })();
+  const mark = (events['approval_mark.added'] as Extract<Event, { type: 'approval_mark.added' }>)
+    .mark;
+
+  it('appends a project grant to the project and drops it when removed', () => {
+    let w = applyEvent(emptyWorld(), env(1, { type: 'project.created', project: d.project }));
+    w = applyEvent(w, env(2, { type: 'send_grant.added', grant }));
+    expect(w.projects['p-1']!.sendGrants).toEqual([grant]);
+    expect(w.standalone.sendGrants).toEqual([]);
+    w = applyEvent(
+      w,
+      env(3, {
+        type: 'send_grant.removed',
+        grantId: grant.id,
+        projectId: 'p-1',
+        by: user,
+        reason: 'removed by the user',
+      }),
+    );
+    expect('sendGrants' in w.projects['p-1']!).toBe(false);
+  });
+
+  it('keeps a grant without projectId under standalone', () => {
+    let w = applyEvent(emptyWorld(), env(1, { type: 'send_grant.added', grant: standaloneGrant }));
+    expect(w.standalone.sendGrants).toEqual([standaloneGrant]);
+    w = applyEvent(
+      w,
+      env(2, {
+        type: 'send_grant.removed',
+        grantId: 'sg-2',
+        by: user,
+        reason: 'removed by the user',
+      }),
+    );
+    expect(w.standalone.sendGrants).toEqual([]);
+  });
+
+  it('keeps a mark without projectId under standalone', () => {
+    const { projectId: _p, ...standaloneMark } = mark;
+    let w = applyEvent(emptyWorld(), env(1, { type: 'approval_mark.added', mark: standaloneMark }));
+    expect(w.standalone.approvalMarks).toEqual([standaloneMark]);
+    w = applyEvent(
+      w,
+      env(2, { type: 'approval_mark.removed', markId: mark.id, by: user, reason: 'removed' }),
+    );
+    expect(w.standalone.approvalMarks).toEqual([]);
+  });
+});
