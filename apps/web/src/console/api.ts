@@ -273,6 +273,12 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         'DELETE',
         `${scopePath(projectId)}/send-grants/${encodeURIComponent(grantId)}`,
       ),
+    /** Resumes a send grant a grant-conflict question paused (P13-34). */
+    resumeSendGrant: (projectId: string | undefined, grantId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'POST',
+        `${scopePath(projectId)}/send-grants/${encodeURIComponent(grantId)}/resume`,
+      ),
     /** Removes a project's standing approval; applies to the next request. */
     removeStandingApproval: (projectId: string, approvalId: string) =>
       call<WaykeeperApprovalsResponse>(

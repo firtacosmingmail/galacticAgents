@@ -524,9 +524,30 @@ describe('DELETE send grants (P13-30)', () => {
     expect((await call('DELETE', `/api/standalone/send-grants/${loose.id}`)).status).toBe(404);
   });
 
+  it('resumes a paused grant from a remote client (P13-34); one not paused is 400', async () => {
+    await setup();
+    const p = await newProject();
+    const ours = grant(p.id);
+    const row = project(p.id);
+    composed.log.tables.projects.upsert({
+      ...row,
+      sendGrants: row.sendGrants!.map((g) => ({ ...g, pausedBy: 'q-gone' })),
+    });
+    expect((await call('POST', `/api/standalone/send-grants/${ours.id}/resume`)).status).toBe(404);
+    expect(
+      await call('POST', `/api/projects/${p.id}/send-grants/${ours.id}/resume`, undefined, REMOTE),
+    ).toEqual({ status: 200, body: { ok: true } });
+    expect(project(p.id).sendGrants![0]!.pausedBy).toBeUndefined();
+    expect(types()).toContain('send_grant.unpaused');
+    expect((await call('POST', `/api/projects/${p.id}/send-grants/${ours.id}/resume`)).status).toBe(
+      400,
+    );
+  });
+
   it('is refused to an agent’s process (403 agent_peer)', async () => {
     await setup({ rulesPeer: async () => ({ refused: 'from an agent' }) });
     expect((await call('DELETE', '/api/standalone/send-grants/x')).status).toBe(403);
+    expect((await call('POST', '/api/standalone/send-grants/x/resume')).status).toBe(403);
     expect((await call('DELETE', '/api/projects/p/send-grants/x')).status).toBe(403);
   });
 });

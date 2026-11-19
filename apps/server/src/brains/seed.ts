@@ -15,6 +15,7 @@ import { concernedSupervisors } from '../domain/cascade.js';
 import { jobRuns } from '../domain/job-runs.js';
 import { panelsOf } from '../domain/panels.js';
 import { grantsOf } from '../domain/send-grants.js';
+import { unresolvedConflicts } from '../domain/grant-conflicts.js';
 import type { WakeScope } from './wake.js';
 
 /**
@@ -74,6 +75,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
     jobRuns: (jobId, limit) => jobRuns({ tables }, jobId, limit),
     panels: (projectId) => panelsOf({ tables }, projectId),
     sendGrants: (scope) => grantsOf(tables, scope),
+    unresolvedGrantConflicts: (scope) => unresolvedConflicts(tables, scope),
   };
   return queries;
 }
@@ -216,5 +218,37 @@ export function renderSeed(queries: BrainQueries, brain: { brainId?: Id; project
       `- ${q.id} from ${q.originAgentId}, held by ${holder} (version ${q.version}): ${JSON.stringify(q.context.text)}`,
     );
   }
+  lines.push(...grantConflictLines(queries, brain));
   return lines.join('\n');
+}
+
+/** The scope a brain decides sends for: a Waykeeper's project, the Harmonizer's standalone work. */
+function decidedScope(
+  queries: BrainQueries,
+  brain: { brainId?: Id; projectId?: Id },
+): { projectId?: Id } | undefined {
+  if (brain.projectId !== undefined) return { projectId: brain.projectId };
+  const role = brain.brainId ? queries.agent(brain.brainId)?.role : undefined;
+  return role === 'harmonizer' ? {} : undefined;
+}
+
+/**
+ * One line per grant-conflict question of the brain's scope that Cosmin answered and nobody
+ * carried out yet (P13-34, fix round 1): every turn shows it until `resolve_grant_conflict` is
+ * called, so a turn that ended without it (or a Waykeeper spawned since) does not strand it.
+ */
+export function grantConflictLines(
+  queries: BrainQueries,
+  brain: { brainId?: Id; projectId?: Id },
+): string[] {
+  const scope = decidedScope(queries, brain);
+  const pending = scope ? queries.unresolvedGrantConflicts(scope) : [];
+  if (pending.length === 0) return [];
+  return [
+    `Grant-conflict answers to carry out with resolve_grant_conflict (${pending.length}; the grants stay paused until you do):`,
+    ...pending.map(
+      (q) =>
+        `- ${q.id}: Cosmin answered ${JSON.stringify(q.answer ?? '')} to ${JSON.stringify(q.context.text)}`,
+    ),
+  ];
 }

@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Project, SendGrant } from '@galactic/protocol';
+import type { Project, Question, SendGrant } from '@galactic/protocol';
 import { domain as fx } from '@galactic/protocol/fixtures';
 import { ApiError, type Api } from '../../console/api.js';
 import { ApiContext } from '../../console/hierarchy/shared.js';
 import { RulesContext } from '../deliverables/use-deliverables.js';
 import type { ClientRules } from '../deliverables/deliverables-model.js';
 import { SendGrants } from './SendGrants.js';
+import { useAppStore } from '../../state/store.js';
 import { StandingApprovals } from './StandingApprovals.js';
 
 /**
@@ -32,6 +33,7 @@ const grant = (over: Partial<SendGrant> = {}): SendGrant => ({
 
 let api: {
   removeSendGrant: ReturnType<typeof vi.fn>;
+  resumeSendGrant: ReturnType<typeof vi.fn>;
   historyEvents: ReturnType<typeof vi.fn>;
   setWaykeeperApprovals: ReturnType<typeof vi.fn>;
 };
@@ -61,6 +63,7 @@ beforeEach(() => {
   vi.setSystemTime(NOW);
   api = {
     removeSendGrant: vi.fn(async () => ({ ok: true })),
+    resumeSendGrant: vi.fn(async () => ({ ok: true })),
     historyEvents: vi.fn(async () => ({ projectId: 'p-1', events: [], seq: 0, hasMore: false })),
     setWaykeeperApprovals: vi.fn(async () => ({ ok: true })),
   };
@@ -97,11 +100,36 @@ describe('send grants (P13-30)', () => {
     expect(screen.getByText('paused (Auto is off)')).toBeTruthy();
   });
 
-  it('marks a grant a grant-conflict question paused (P13-34)', () => {
-    list([grant({ pausedBy: 'q-9' })]);
-    expect(screen.getByText('Paused — waiting for your answer')).toBeTruthy();
-    list([grant({ id: 'sg-2' })]);
+  it("marks a grant a grant-conflict question paused, by the question's state (P13-34)", () => {
+    const question = (status: 'open' | 'answered'): Question => ({
+      id: 'q-9',
+      kind: 'permission',
+      originAgentId: 'a-wk',
+      holder: { type: 'user' },
+      status,
+      context: { text: 'conflict' },
+      version: 1,
+      createdAt: fx.NOW,
+      updatedAt: fx.NOW,
+    });
+    const world = useAppStore.getState().world;
+    useAppStore.setState({ world: { ...world, questions: { 'q-9': question('open') } } });
+    list([grant({ pausedBy: 'q-9' }), grant({ id: 'sg-2' })]);
     expect(screen.getAllByText('Paused — waiting for your answer')).toHaveLength(1);
+    cleanup();
+    useAppStore.setState({ world: { ...world, questions: { 'q-9': question('answered') } } });
+    list([grant({ pausedBy: 'q-9' })]);
+    expect(screen.getByText('Paused — your answer is being carried out')).toBeTruthy();
+    useAppStore.setState({ world });
+  });
+
+  it('Resume grant resumes a paused grant (P13-34)', async () => {
+    list([grant({ pausedBy: 'q-9' }), grant({ id: 'sg-2' })]);
+    expect(screen.getAllByRole('button', { name: /Resume the grant/ })).toHaveLength(1);
+    await act(async () =>
+      fireEvent.click(screen.getByRole('button', { name: /Resume the grant/ })),
+    );
+    expect(api.resumeSendGrant).toHaveBeenCalledWith(fx.project.id, 'sg-1');
   });
 
   it('says "from the phone" for a grant made from a remote client', () => {

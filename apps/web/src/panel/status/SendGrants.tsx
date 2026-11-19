@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { isGrantLive, type SendGrant } from '@galactic/protocol';
 import { ErrorLine, useAction, useApi } from '../../console/hierarchy/shared.js';
 import { when } from './ApprovalsLog.js';
+import { useAppStore } from '../../state/store.js';
 
 /**
  * A scope's send grants (P13-30; design 2026-11-18 §4.3 "Shown"): a project's, next to its marks,
@@ -9,7 +10,8 @@ import { when } from './ApprovalsLog.js';
  * allows, the user's words, its end, how many sends it allowed and Remove — the user's only, from
  * the Mac or the phone. A grant made from the phone says so; while the scope's Auto is off the
  * grants are kept but unused, and shown "paused". A grant a grant-conflict question paused
- * (P13-34) says "Paused — waiting for your answer". Ended and removed grants are not shown.
+ * (P13-34) says "Paused — waiting for your answer" while that question is open, "Paused — your
+ * answer is being carried out" once answered, and offers Resume grant. Ended and removed grants are not shown.
  */
 export function SendGrants({
   grants,
@@ -25,6 +27,7 @@ export function SendGrants({
 }) {
   const api = useApi();
   const { run, error, busy } = useAction();
+  const questions = useAppStore((s) => s.world.questions);
   // Read each minute, so a grant that ends while the page is open leaves the list.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -44,9 +47,22 @@ export function SendGrants({
             </span>
             <span className="muted">{`used ${uses.get(g.id) ?? 0}×`}</span>
             {g.pausedBy !== undefined && (
-              <span className="pill" data-question={g.pausedBy}>
-                Paused — waiting for your answer
-              </span>
+              <>
+                <span className="pill" data-question={g.pausedBy}>
+                  {questions[g.pausedBy]?.status === 'open'
+                    ? 'Paused — waiting for your answer'
+                    : 'Paused — your answer is being carried out'}
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  aria-label={`Resume the grant ${g.summary}`}
+                  onClick={() => void run(() => api.resumeSendGrant(projectId, g.id))}
+                >
+                  Resume grant
+                </button>
+              </>
             )}
             {!autoOn && <span className="pill">paused (Auto is off)</span>}
             {g.origin === 'remote' && <span className="muted">from the phone</span>}
