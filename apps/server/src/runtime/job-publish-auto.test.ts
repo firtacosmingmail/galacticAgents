@@ -131,6 +131,8 @@ describe('a job approved to publish, in Auto (P13-32, decision 165)', () => {
         decision: 'allow',
         questionId: q!.id,
         decidedBy: { type: 'agent', id: h.waykeeper.id },
+        waykeeperApproval: true,
+        allowedBy: 'auto',
         reason: REASON,
         toolCall: {
           toolName: 'request_publish',

@@ -2865,6 +2865,8 @@ export class AgentRuntime {
         action: 'network',
         reason: JOB_PUBLISH_REASON,
         decidedBy: { type: 'agent', id: deciderId },
+        // In the approvals log Cosmin reads, beside the other publishes approved in Auto.
+        waykeeperApproval: true,
         allowedBy: 'auto',
         parts: [],
         ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
