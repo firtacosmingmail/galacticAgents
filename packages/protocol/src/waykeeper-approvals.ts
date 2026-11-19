@@ -55,15 +55,74 @@ export const SendGrant = z.object({
   endsAt: Timestamp.optional(),
   createdBy: Actor,
   origin: RequestOrigin,
-  /** The send-permission question the user answered. */
+  /** The send-permission question the user answered (or the grant-conflict question, P13-34). */
   questionId: Id,
+  /**
+   * The grant-conflict question that paused it (P13-34, SPEC decision 166): while Cosmin is asked
+   * how his new words and this grant fit together, it covers nothing. Absent: not paused.
+   */
+  pausedBy: Id.optional(),
 });
 export type SendGrant = z.infer<typeof SendGrant>;
 
-/** Whether `g` still counts at `now` (epoch ms): no end, or `now` before `endsAt`. */
+/** Whether `g` has not ended at `now` (epoch ms): no end, or `now` before `endsAt`. */
 export function isGrantLive(g: SendGrant, now: number): boolean {
   return g.endsAt === undefined || now < Date.parse(g.endsAt);
 }
+
+/**
+ * Whether `g` covers sends at `now` (P13-34): live (`isGrantLive`) and not paused by a
+ * grant-conflict question. Every check of which grants cover a send uses this one.
+ */
+export function isGrantInForce(g: SendGrant, now: number): boolean {
+  return isGrantLive(g, now) && g.pausedBy === undefined;
+}
+
+/**
+ * The fixed answers of a grant-conflict question (P13-34, SPEC decision 166), always first and
+ * verbatim; the decider's own solutions follow them.
+ */
+export const GRANT_CONFLICT_OPTIONS = [
+  'Replace the earlier grant with the new one',
+  'Keep the earlier grant and ignore the new words',
+  'Keep both',
+] as const;
+/** The most solutions of its own a decider may add to a grant-conflict question. */
+export const GRANT_CONFLICT_MAX_OWN_OPTIONS = 3;
+/** The longest solution a decider may add. */
+export const GRANT_CONFLICT_OPTION_MAX = 200;
+
+/** An earlier grant as a grant-conflict question quotes it. */
+export const ConflictingGrant = z.object({
+  id: Id,
+  words: z.string(),
+  summary: z.string(),
+  endsAt: Timestamp.optional(),
+});
+export type ConflictingGrant = z.infer<typeof ConflictingGrant>;
+
+/**
+ * A grant-conflict question (P13-34, SPEC decision 166): Cosmin's new words about what may be sent
+ * conflict with (or overlap) grants in force, so the decider asks him how to reconcile them. Its
+ * grants are paused (`SendGrant.pausedBy`) until he answers and the decider carries it out, or
+ * the question closes without an answer.
+ */
+export const GrantConflictContext = z.object({
+  /** The decider that asked: the project's Waykeeper, or the Harmonizer for standalone work. */
+  deciderId: Id,
+  /** Absent: standalone work. */
+  projectId: Id.optional(),
+  grants: z.array(ConflictingGrant).min(1),
+  /** His new words, verbatim. */
+  newWords: z.string().min(1).max(2000),
+  /** The send-permission question whose answer they were, when they were one. */
+  sendQuestionId: Id.optional(),
+  /** The decider's own solutions (after the fixed ones in `QuestionContext.options`). */
+  options: z
+    .array(z.string().min(1).max(GRANT_CONFLICT_OPTION_MAX))
+    .max(GRANT_CONFLICT_MAX_OWN_OPTIONS),
+});
+export type GrantConflictContext = z.infer<typeof GrantConflictContext>;
 
 /** What a send-permission question shows: the request, the grants that did not cover it. */
 export const SendPermissionContext = z.object({

@@ -44,6 +44,8 @@ const commands: DomainCommands = {
   createProject: notImplemented,
   removeSendGrant: notImplemented,
   answerSendPermission: notImplemented,
+  askGrantConflict: notImplemented,
+  resolveGrantConflict: notImplemented,
   updateProject: notImplemented,
   setProjectState: notImplemented,
   closeProject: notImplemented,

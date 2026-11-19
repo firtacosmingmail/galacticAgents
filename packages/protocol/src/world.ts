@@ -11,6 +11,7 @@ import { summarize, type SystemSummary } from './summary.js';
 import {
   emptyStandaloneApprovals,
   MAX_RECORDED_APPROVALS,
+  type SendGrant,
   type StandaloneApprovals,
 } from './waykeeper-approvals.js';
 import type { Snapshot } from './ws.js';
@@ -538,6 +539,31 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         projects: {
           ...next.projects,
           [project.id]: grants.length > 0 ? { ...rest, sendGrants: grants } : rest,
+        },
+      };
+    }
+    case 'send_grant.paused':
+    case 'send_grant.unpaused': {
+      const pausedBy = event.type === 'send_grant.paused' ? event.questionId : undefined;
+      const pause = (g: SendGrant): SendGrant => {
+        if (g.id !== event.grantId) return g;
+        const { pausedBy: _old, ...rest } = g;
+        return pausedBy !== undefined ? { ...rest, pausedBy } : rest;
+      };
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: { ...standalone, sendGrants: standalone.sendGrants.map(pause) },
+        };
+      }
+      const project = next.projects[event.projectId];
+      if (!project?.sendGrants) return next;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: { ...project, sendGrants: project.sendGrants.map(pause) },
         },
       };
     }

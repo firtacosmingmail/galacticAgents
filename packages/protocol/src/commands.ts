@@ -422,6 +422,39 @@ export interface AnswerSendPermissionInput {
   grant?: { words: string; summary: string; endsAt?: Timestamp };
 }
 
+/**
+ * A decider asks Cosmin how his new words about what may be sent fit the grants in force (P13-34,
+ * SPEC decision 166): `newWords` must be his verbatim — from his reply on `sendQuestionId` when
+ * given, else from a message of his to the decider since the newest of the grants was made. The
+ * grants are paused until the question is resolved or closes without an answer.
+ */
+export interface AskGrantConflictInput {
+  agentId: Id;
+  grantIds: Id[];
+  newWords: string;
+  sendQuestionId?: Id;
+  /** The decider's own solutions, after the fixed ones (at most 3, each at most 200 characters). */
+  options?: string[];
+}
+
+/**
+ * The decider carries out Cosmin's answer to its grant-conflict question (P13-34): the grants in
+ * `endGrantIds` end, the others count again, and `newGrant` (his words, verbatim from the new
+ * words or his answer) is made.
+ */
+export interface ResolveGrantConflictInput {
+  agentId: Id;
+  questionId: Id;
+  endGrantIds: Id[];
+  newGrant?: { words: string; summary: string; endsAt?: Timestamp };
+}
+
+export interface ResolveGrantConflictResult {
+  ended: Id[];
+  unpaused: Id[];
+  grant?: SendGrant;
+}
+
 /** The user removes a project's standing approval, from anywhere. */
 export interface RemoveStandingApprovalInput {
   projectId: Id;
@@ -798,6 +831,12 @@ export interface DomainCommands {
   answerSendPermission(
     input: AnswerSendPermissionInput,
   ): Promise<CommandResult<{ grant?: SendGrant }>>;
+  /** Opens a grant-conflict question and pauses its grants (see `AskGrantConflictInput`). */
+  askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>>;
+  /** Carries out Cosmin's answer to a grant-conflict question (see `ResolveGrantConflictInput`). */
+  resolveGrantConflict(
+    input: ResolveGrantConflictInput,
+  ): Promise<CommandResult<ResolveGrantConflictResult>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

@@ -6,6 +6,9 @@ import {
   approvalLogCategory,
   ApprovalMark,
   CommandPart,
+  GrantConflictContext,
+  GRANT_CONFLICT_OPTIONS,
+  isGrantInForce,
   isGrantLive,
   isJudgedKind,
   isPushOrUpload,
@@ -298,6 +301,34 @@ describe('send grants (P13-23)', () => {
     expect(isGrantLive(SendGrant.parse(grant), Date.parse(endsAt) + 1e9)).toBe(true);
     expect(isGrantLive(g, Date.parse(endsAt) - 1)).toBe(true);
     expect(isGrantLive(g, Date.parse(endsAt))).toBe(false);
+  });
+
+  it('is in force only when live and not paused (P13-34)', () => {
+    const endsAt = '2026-11-20T10:00:00.000Z';
+    const before = Date.parse(endsAt) - 1;
+    expect(isGrantInForce(SendGrant.parse({ ...grant, endsAt }), before)).toBe(true);
+    const paused = SendGrant.parse({ ...grant, endsAt, pausedBy: 'q-9' });
+    expect(isGrantLive(paused, before)).toBe(true);
+    expect(isGrantInForce(paused, before)).toBe(false);
+    expect(isGrantInForce(SendGrant.parse({ ...grant, endsAt }), Date.parse(endsAt))).toBe(false);
+  });
+
+  it('a grant-conflict context names its grants, his words and up to 3 own options', () => {
+    expect(GRANT_CONFLICT_OPTIONS).toEqual([
+      'Replace the earlier grant with the new one',
+      'Keep the earlier grant and ignore the new words',
+      'Keep both',
+    ]);
+    const ctx = {
+      deciderId: 'a-w',
+      grants: [{ id: 'sg-1', words: 'w', summary: 's' }],
+      newWords: 'only today',
+      options: ['Keep A until Friday'],
+    };
+    expect(GrantConflictContext.parse(ctx)).toEqual(ctx);
+    expect(() => GrantConflictContext.parse({ ...ctx, grants: [] })).toThrow();
+    expect(() => GrantConflictContext.parse({ ...ctx, options: ['a', 'b', 'c', 'd'] })).toThrow();
+    expect(() => GrantConflictContext.parse({ ...ctx, options: ['x'.repeat(201)] })).toThrow();
   });
 
   it('lets an approval mark be standalone', () => {

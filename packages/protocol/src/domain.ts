@@ -12,6 +12,7 @@ import {
 import { LaunchContext, OffScriptContext } from './launch-flags.js';
 import {
   ApprovalMark,
+  GrantConflictContext,
   RecordedApproval,
   SendGrant,
   SendPermissionContext,
@@ -600,6 +601,8 @@ export const QuestionContext = z.object({
   waykeeper: WaykeeperForward.optional(),
   /** What a send-permission question asks to allow, and the grants that did not cover it. */
   sendPermission: SendPermissionContext.optional(),
+  /** A grant-conflict question (P13-34): the earlier grants, the new words; user-held only. */
+  grantConflict: GrantConflictContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

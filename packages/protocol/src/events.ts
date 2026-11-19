@@ -538,6 +538,31 @@ export const SendGrantRemoved = z.object({
 });
 
 /**
+ * A send grant was paused by a grant-conflict question (P13-34, SPEC decision 166): it covers
+ * nothing until the question is resolved or closes without an answer. Sets `SendGrant.pausedBy`.
+ */
+export const SendGrantPaused = z.object({
+  type: z.literal('send_grant.paused'),
+  grantId: Id,
+  /** Absent: a standalone grant. */
+  projectId: Id.optional(),
+  questionId: Id,
+});
+
+/**
+ * A paused send grant counts again (P13-34): Cosmin kept it, or its question closed without an
+ * answer. Clears `SendGrant.pausedBy`.
+ */
+export const SendGrantUnpaused = z.object({
+  type: z.literal('send_grant.unpaused'),
+  grantId: Id,
+  /** Absent: a standalone grant. */
+  projectId: Id.optional(),
+  questionId: Id,
+  reason: z.string(),
+});
+
+/**
  * The Waykeeper's approval was recorded on the project (P13), or on standalone work's approvals
  * when `projectId` is absent (P13-27); keeps the newest 100.
  */
@@ -1070,6 +1095,8 @@ export const Event = z.discriminatedUnion('type', [
   ApprovalMarkRemoved,
   SendGrantAdded,
   SendGrantRemoved,
+  SendGrantPaused,
+  SendGrantUnpaused,
   ApprovalRecorded,
   ProposalCreated,
   ProposalApproved,

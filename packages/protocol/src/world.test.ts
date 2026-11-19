@@ -254,6 +254,35 @@ describe('the world fold of send grants and standalone marks (P13-23)', () => {
     expect(w.standalone.sendGrants).toEqual([]);
   });
 
+  it('pauses and unpauses a project grant and a standalone one (P13-34)', () => {
+    let w = applyEvent(emptyWorld(), env(1, { type: 'project.created', project: d.project }));
+    w = applyEvent(w, env(2, { type: 'send_grant.added', grant }));
+    w = applyEvent(w, env(3, { type: 'send_grant.added', grant: standaloneGrant }));
+    w = applyEvent(
+      w,
+      env(4, { type: 'send_grant.paused', grantId: grant.id, projectId: 'p-1', questionId: 'q-9' }),
+    );
+    w = applyEvent(w, env(5, { type: 'send_grant.paused', grantId: 'sg-2', questionId: 'q-9' }));
+    expect(w.projects['p-1']!.sendGrants).toEqual([{ ...grant, pausedBy: 'q-9' }]);
+    expect(w.standalone.sendGrants).toEqual([{ ...standaloneGrant, pausedBy: 'q-9' }]);
+    w = applyEvent(
+      w,
+      env(6, {
+        type: 'send_grant.unpaused',
+        grantId: grant.id,
+        projectId: 'p-1',
+        questionId: 'q-9',
+        reason: 'kept',
+      }),
+    );
+    w = applyEvent(
+      w,
+      env(7, { type: 'send_grant.unpaused', grantId: 'sg-2', questionId: 'q-9', reason: 'kept' }),
+    );
+    expect(w.projects['p-1']!.sendGrants).toEqual([grant]);
+    expect(w.standalone.sendGrants).toEqual([standaloneGrant]);
+  });
+
   it('keeps a mark without projectId under standalone', () => {
     const { projectId: _p, ...standaloneMark } = mark;
     let w = applyEvent(emptyWorld(), env(1, { type: 'approval_mark.added', mark: standaloneMark }));

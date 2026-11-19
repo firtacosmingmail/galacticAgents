@@ -231,6 +231,19 @@ export const events: { [T in EventType]: Extract<Event, { type: T }> } = {
     by: user,
     reason: 'removed by the user',
   },
+  'send_grant.paused': {
+    type: 'send_grant.paused',
+    grantId: 'sg-1',
+    projectId: 'p-1',
+    questionId: 'q-2',
+  },
+  'send_grant.unpaused': {
+    type: 'send_grant.unpaused',
+    grantId: 'sg-1',
+    projectId: 'p-1',
+    questionId: 'q-2',
+    reason: 'Cosmin kept it',
+  },
   'approval.recorded': {
     type: 'approval.recorded',
     projectId: 'p-1',
