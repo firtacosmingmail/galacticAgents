@@ -209,8 +209,9 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
 ### P13-33 — A chat line taken as a send-card answer is not task words (added 2026-11-19)
 - **Status:** done (2026-11-19) · **Depends on:** P13-31 · **Parallel with:** P13-32
-- Cosmin's choice (2026-11-19): a plain chat line to the decider counted as the answer to its only open send question (final review I2) also stayed in his task words, so a later send could be approved by a quote of it with no end time the code enforces. Now the answer records the messages it was taken from (`question.cancelled.answeredWith`, `meta.answeredWith`) and `userWordsFor` leaves them out.
+- Cosmin's choice (2026-11-19): a plain chat line to the decider counted as the answer to its only open send question (final review I2) also stayed in his task words, so a later send could be approved by a quote of it with no end time the code enforces. Now `userWordsFor` applies the same rule (`plainLineAnswer`, shared with `sendPermissionReplies`): a plain line to a decider while that decider had exactly one open send question is not task words, however the question closes and before it is answered.
 - **Acceptance:**
   - A plain chat line consumed as the answer to the decider's only open send question is not in `userWordsFor`; the grant is still made from it; a later send in the same task that only a quote of that line would cover is held (`brains/waykeeper/send-permission.test.ts`).
+  - The line stays out of task words when Cosmin then taps Allow once, when the Steward stops first, when the decider's answer is refused, and before the decider answers (a send judged meanwhile is held, not approved by quote).
   - A plain chat line a deny was taken from is not task words either.
   - A plain chat line with no open send question, or sent while two were open, stays task words (`brains/waykeeper/send-permission.test.ts`, `runtime/user-words.test.ts`).
