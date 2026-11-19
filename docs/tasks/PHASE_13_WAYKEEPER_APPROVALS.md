@@ -197,6 +197,8 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - Cosmin's answer to the SPEC §8 question on a job's publish follow-up run (SPEC decision 165): a job approved on its card to publish (`Job.publishes`, migration 0023) publishes in Auto without a publish card each time; outside Auto the card stays.
 - **Acceptance:**
   - In Auto, a job with `publishes: true`: its run's `request_publish` opens no card for Cosmin — the question is answered `Approve` by the Waykeeper, a `publish` follow-up is queued on the job, and a `permission.decided{allow}` with the decision-165 reason is logged (`runtime/job-publish-auto.test.ts`).
+  - The Auto-approved publish produces no notification (push, page, desktop: `notificationOf` skips a question marked `APPROVED_ON_OPEN`); the card with Auto off is notified as today (fix round 1 of the review).
+  - In Auto with no decider: the publish card opens as today.
   - Same job, Auto off: the publish card opens as today (question open, unanswered, no follow-up).
   - In Auto, a job without `publishes`: the card opens as today.
   - In Auto, a stopped job with `publishes: true`: nothing is approved (today's stopped-job refusal).

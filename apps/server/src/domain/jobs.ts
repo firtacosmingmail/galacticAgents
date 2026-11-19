@@ -185,17 +185,18 @@ function ruleTexts(rule: {
   return [rule.label ?? '', rule.tool, subject];
 }
 
-/**
- * A job draft within the schema and its limits, with nothing that looks like a secret (Global
- * Constraints: credentials are never stored in a job) and only rule shapes "Allow similar" makes
- * (`unattendedRuleRefusal`: no push, no root or home folder, no prefix or category outside the
- * workspace, …), each rule labelled by the server from what it matches (`unattendedRuleLabel`).
- */
 /** Runtimes that are never given a publish (global constraint: agy has `canPublish: false`). */
 export const CANNOT_PUBLISH: ReadonlyMap<string, string> = new Map([
   ['agy', PROVIDER_LABEL.gemini],
 ]);
 
+/**
+ * A job draft within the schema and its limits, with nothing that looks like a secret (Global
+ * Constraints: credentials are never stored in a job) and only rule shapes "Allow similar" makes
+ * (`unattendedRuleRefusal`: no push, no root or home folder, no prefix or category outside the
+ * workspace, …), each rule labelled by the server from what it matches (`unattendedRuleLabel`),
+ * and `publishes` only when the follow-up provider can publish (decision 165).
+ */
 function checkedDraft(draft: unknown): JobDraft {
   const parsed = JobDraft.safeParse(draft);
   if (!parsed.success) {
