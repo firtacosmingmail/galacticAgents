@@ -390,6 +390,7 @@ export function checkSendPermissionAnswer(
   question: Question,
   input: AnswerSendPermissionInput,
   conflictClosedAt?: string,
+  untaken: readonly { words: string; until?: string }[] = [],
 ): { replies: SendPermissionReply[]; from?: SendPermissionReply } {
   const send = question.context.sendPermission;
   if (question.kind !== 'permission' || !send) {
@@ -408,7 +409,14 @@ export function checkSendPermissionAnswer(
   if (input.decision === 'deny') return { replies: all };
   // His replies up to a grant conflict about this card were that conflict's (P13-34): only a newer
   // one allows the send or makes a grant.
-  const replies = conflictClosedAt === undefined ? all : all.filter((r) => r.at > conflictClosedAt);
+  // And a reply carrying new words a grant-conflict question did not take up (fix round 2, N1).
+  const replies = all.filter(
+    (r) =>
+      (conflictClosedAt === undefined || r.at > conflictClosedAt) &&
+      !untaken.some(
+        (u) => (u.until === undefined || r.at <= u.until) && quoteFound(u.words, [r.text]),
+      ),
+  );
   if (replies.length === 0 && all.length > 0) {
     throw new DomainError(
       'invalid',

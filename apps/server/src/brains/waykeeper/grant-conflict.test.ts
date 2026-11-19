@@ -744,7 +744,7 @@ describe('an answered conflict is not stranded (P13-34 fix round 1, Important 2)
     });
   });
 
-  it("a new question taking a grant over releases the older one's other grants (Minor 3)", async () => {
+  it('a re-ask cannot take grants from an answered question (fix round 2, N4)', async () => {
     const { c, waykeeper, project, grantA, ask, grantOf } = await setup();
     const grantB = c.log.runCommand((ctx) =>
       addSendGrant(
@@ -762,14 +762,19 @@ describe('an answered conflict is not stranded (P13-34 fix round 1, Important 2)
     ).value;
     c.say(waykeeper.id, `actually ${TODAY_WORDS}`);
     const first = await ask({ grantIds: [grantA.id, grantB.id], newWords: TODAY_WORDS });
-    await c.commands.answerQuestion({ questionId: first.questionId, answer: 'hm', by: USER });
-    c.say(waykeeper.id, `again: ${TODAY_WORDS}`);
-    const second = await ask({ grantIds: [grantA.id], newWords: TODAY_WORDS });
-    expect(grantOf(grantA.id)!.pausedBy).toBe(second.questionId);
-    expect(grantOf(grantB.id)!.pausedBy).toBeUndefined();
-    expect(c.log.tables.questions.get(first.questionId)!.meta).toMatchObject({
-      grantConflictSupersededBy: second.questionId,
+    await c.commands.answerQuestion({
+      questionId: first.questionId,
+      answer: GRANT_CONFLICT_OPTIONS[0],
+      by: USER,
     });
+    c.say(waykeeper.id, `again: ${TODAY_WORDS}`);
+    await expect(ask({ grantIds: [grantA.id], newWords: TODAY_WORDS })).rejects.toMatchObject({
+      code: 'conflict',
+      message: expect.stringContaining('resolve_grant_conflict first'),
+    });
+    expect(grantOf(grantA.id)!.pausedBy).toBe(first.questionId);
+    expect(grantOf(grantB.id)!.pausedBy).toBe(first.questionId);
+    expect(c.ofType('send_grant.unpaused')).toEqual([]);
   });
 });
 
@@ -841,5 +846,128 @@ describe('the decider is reminded once after a turn without resolving (P13-34 fi
     const prompts = wk.prompts().join('\n');
     expect(prompts.split('is not carried out yet').length - 1).toBe(1);
     expect(prompts).toContain('Grant-conflict answers to carry out');
+  });
+});
+
+describe('fix round 2 (P13-34)', () => {
+  const grantBOf = (c: Harness, projectId: Id) =>
+    c.log.runCommand((ctx) =>
+      addSendGrant(
+        ctx,
+        {
+          projectId,
+          words: 'post the launch photos on Instagram',
+          summary: 'Launch photos',
+          createdBy: USER,
+          origin: 'local',
+          questionId: 'q-earlier-2',
+        },
+        Date.now(),
+      ),
+    ).value;
+
+  it('N1: words from a card reply bind the card even when the decider leaves it out', async () => {
+    const { c, waykeeper, project, grantA, ask, resolve } = await setup();
+    const held = await heldSteward(c, project.id, waykeeper.id);
+    c.say(waykeeper.id, `yes, ${TODAY_WORDS}`, { replyTo: held.question });
+    const { questionId } = await ask({ grantIds: [grantA.id], newWords: TODAY_WORDS });
+    expect(c.log.tables.questions.get(questionId)!.context.grantConflict!.sendQuestionId).toBe(
+      held.question.id,
+    );
+    const answer = (input: Record<string, unknown>) =>
+      answerSendPermissionTool.handler(input, c.ctxOf(waykeeper.id, project.id));
+    const allowWithGrant = {
+      questionId: held.question.id,
+      decision: 'allow',
+      grant: { words: TODAY_WORDS, summary: 'Launch messages, today' },
+    };
+    await expect(answer(allowWithGrant)).rejects.toMatchObject({ code: 'invalid' });
+    await c.commands.answerQuestion({ questionId, answer: GRANT_CONFLICT_OPTIONS[1], by: USER });
+    await resolve({ questionId, endGrantIds: [] });
+    await expect(answer(allowWithGrant)).rejects.toMatchObject({ code: 'invalid' });
+    await expect(answer({ questionId: held.question.id, decision: 'allow' })).rejects.toMatchObject(
+      {
+        code: 'invalid',
+      },
+    );
+    expect(c.answersTo(held.question.id)).toEqual([]);
+  });
+
+  it('N1: a plain line taken as the card answer binds the card too', async () => {
+    const { c, waykeeper, project, grantA, ask } = await setup();
+    const held = await heldSteward(c, project.id, waykeeper.id);
+    c.say(waykeeper.id, `ok so ${TODAY_WORDS}`);
+    const { questionId } = await ask({ grantIds: [grantA.id], newWords: TODAY_WORDS });
+    expect(c.log.tables.questions.get(questionId)!.context.grantConflict!.sendQuestionId).toBe(
+      held.question.id,
+    );
+  });
+
+  it('N1: the words of a pending chat-line conflict never allow a card answered with them', async () => {
+    const { c, waykeeper, project, grantA, ask } = await setup();
+    c.say(waykeeper.id, `actually ${TODAY_WORDS}`);
+    const { questionId } = await ask({ grantIds: [grantA.id], newWords: TODAY_WORDS });
+    expect(
+      c.log.tables.questions.get(questionId)!.context.grantConflict!.sendQuestionId,
+    ).toBeUndefined();
+    const held = await heldSteward(c, project.id, waykeeper.id);
+    c.say(waykeeper.id, `yes, ${TODAY_WORDS}`, { replyTo: held.question });
+    await expect(
+      answerSendPermissionTool.handler(
+        {
+          questionId: held.question.id,
+          decision: 'allow',
+          grant: { words: TODAY_WORDS, summary: 'Launch messages, today' },
+        },
+        c.ctxOf(waykeeper.id, project.id),
+      ),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    expect(c.answersTo(held.question.id)).toEqual([]);
+  });
+
+  it('N2: a grant he resumed drops out of the question; resolve carries out the rest', async () => {
+    const { c, waykeeper, project, grantA, ask, resolve, grantOf } = await setup();
+    const grantB = grantBOf(c, project.id);
+    c.say(waykeeper.id, `actually ${TODAY_WORDS}`);
+    const { questionId } = await ask({ grantIds: [grantA.id, grantB.id], newWords: TODAY_WORDS });
+    await c.commands.answerQuestion({ questionId, answer: GRANT_CONFLICT_OPTIONS[0], by: USER });
+    await c.commands.resumeSendGrant({ grantId: grantA.id, by: USER });
+    // Replace ends only what the question still pauses: B.
+    await resolve({
+      questionId,
+      endGrantIds: [grantB.id],
+      newGrant: { words: TODAY_WORDS, summary: 'Launch messages, today' },
+    });
+    expect(grantOf(grantA.id)!.pausedBy).toBeUndefined();
+    expect(grantOf(grantB.id)).toBeUndefined();
+    expect(renderSeed(c.queries, { brainId: waykeeper.id, projectId: project.id })).not.toContain(
+      questionId,
+    );
+  });
+
+  it('N2: resuming every grant of an answered question takes it out of the seed', async () => {
+    const { c, waykeeper, project, grantA, questionId } = await conflictViaCard();
+    await c.commands.answerQuestion({ questionId, answer: GRANT_CONFLICT_OPTIONS[0], by: USER });
+    await c.commands.resumeSendGrant({ grantId: grantA.id, by: USER });
+    expect(renderSeed(c.queries, { brainId: waykeeper.id, projectId: project.id })).not.toContain(
+      questionId,
+    );
+  });
+
+  it('N3: a look-alike of a fixed option is refused', async () => {
+    const { c, waykeeper, grantA, ask } = await setup();
+    c.say(waykeeper.id, `actually ${TODAY_WORDS}`);
+    for (const lookalike of [
+      'Replace the earlier grant with the new one.',
+      '  keep BOTH!  ',
+      'keep the earlier grant and ignore the new words…',
+    ]) {
+      await expect(
+        ask({ grantIds: [grantA.id], newWords: TODAY_WORDS, options: [lookalike] }),
+      ).rejects.toMatchObject({
+        code: 'invalid',
+        message: expect.stringContaining('offered already'),
+      });
+    }
   });
 });

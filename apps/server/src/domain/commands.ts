@@ -164,7 +164,9 @@ import {
 import {
   askGrantConflict,
   conflictClosedAt,
+  deciderScope,
   pendingConflictAbout,
+  untakenConflictWords,
   resolveGrantConflict,
   resumeSendGrant,
 } from './grant-conflicts.js';
@@ -1715,12 +1717,6 @@ export class Commands implements DomainCommands {
       'question',
       input.questionId,
     );
-    const { replies, from } = checkSendPermissionAnswer(
-      this.log.db,
-      question,
-      input,
-      conflictClosedAt(this.log.tables, question.id),
-    );
     // Cosmin is asked how his words fit his grants (P13-34): that answer decides this send.
     const conflict = pendingConflictAbout(this.log.tables, question.id);
     if (conflict) {
@@ -1730,6 +1726,16 @@ export class Commands implements DomainCommands {
           'with resolve_grant_conflict first',
       );
     }
+    const { replies, from } = checkSendPermissionAnswer(
+      this.log.db,
+      question,
+      input,
+      conflictClosedAt(this.log.tables, question.id),
+      untakenConflictWords(
+        this.log.tables,
+        deciderScope(this.log.tables.agents.get(input.agentId)) ?? {},
+      ),
+    );
     // A publish's grant question (P13-29): no session waits on it; the runtime arms the allowance.
     const carryOut =
       question.context.sendPermission?.publish !== undefined

@@ -65,8 +65,11 @@ export function isConflictResolved(question: Pick<Question, 'meta'>): boolean {
 
 /** `meta.grantConflictResolvedBy`: who closed it — `user` when he resumed its grants himself. */
 const RESOLVED_BY = 'grantConflictResolvedBy';
-/** `meta.grantConflictSupersededBy`: the question that took its grants over. */
-const SUPERSEDED_BY = 'grantConflictSupersededBy';
+/**
+ * `meta.grantConflictKeptNewWords`: set on resolution when a grant was made from his new words —
+ * otherwise they were not taken up, and never allow a send (fix round 2, N1).
+ */
+const KEPT_NEW_WORDS = 'grantConflictKeptNewWords';
 
 /** A grant-conflict question that still decides its grants: open, or answered but not carried out. */
 function pending(question: Question): boolean {
@@ -100,6 +103,30 @@ export function conflictClosedAt(tables: Tables, sendQuestionId: Id): string | u
     if (last === undefined || at > last) last = at;
   }
   return last;
+}
+
+/** His words a grant-conflict question asked about and did not (yet) take up, for a scope. */
+export interface UntakenWords {
+  words: string;
+  /** When the question closed; absent while it is still pending (open, or not carried out). */
+  until?: string;
+}
+
+/**
+ * The new words of the scope's grant-conflict questions that no grant took up (fix round 2, N1):
+ * pending ones, ones resolved without a grant from his new words (ignored, ended), and ones closed
+ * without an answer. A reply of his containing them, written before the question closed (or at any
+ * time while it is pending), never allows a send or makes a grant.
+ */
+export function untakenConflictWords(tables: Tables, scope: { projectId?: Id }): UntakenWords[] {
+  return tables.questions.all().flatMap((q) => {
+    const c = q.context.grantConflict;
+    if (!c || c.projectId !== scope.projectId) return [];
+    if (pending(q)) return [{ words: c.newWords }];
+    if (q.meta?.[KEPT_NEW_WORDS] === true) return [];
+    const resolved = q.meta?.[GRANT_CONFLICT_RESOLVED];
+    return [{ words: c.newWords, until: typeof resolved === 'string' ? resolved : q.updatedAt }];
+  });
 }
 
 /**
@@ -150,6 +177,15 @@ function linesTo(db: Database, deciderId: Id, since: string): UserLine[] {
   });
 }
 
+/** An option's text for comparison: case, spacing and trailing punctuation dropped (N3). */
+const normalOption = (o: string): string =>
+  o
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/[\s.!?…:;,]+$/u, '');
+const sameOption = (a: string, b: string): boolean => normalOption(a) === normalOption(b);
+
 /** The decider's own options: trimmed, at most 3 of at most 200 characters, none a fixed one. */
 function ownOptions(options: readonly string[] | undefined): string[] {
   const own = (options ?? []).map((o) => (typeof o === 'string' ? o.trim() : ''));
@@ -163,7 +199,7 @@ function ownOptions(options: readonly string[] | undefined): string[] {
     if (o === '' || o.length > GRANT_CONFLICT_OPTION_MAX) {
       throw new DomainError('invalid', `each option is 1–${GRANT_CONFLICT_OPTION_MAX} characters`);
     }
-    if ((GRANT_CONFLICT_OPTIONS as readonly string[]).includes(o)) {
+    if (GRANT_CONFLICT_OPTIONS.some((f) => sameOption(f, o))) {
       throw new DomainError('invalid', `"${o}" is offered already`);
     }
   }
@@ -176,7 +212,10 @@ function ownOptions(options: readonly string[] | undefined): string[] {
  * (`not_found`), ended, or paused by another question still open (`conflict`); `newWords` that are
  * not Cosmin's verbatim — from his reply on `sendQuestionId` (an open send-permission question this
  * decider decides), else from a message of his to the decider since the newest grant was made.
- * A grant paused by an answered question its decider never carried out is taken over.
+ * A grant paused by any question — open, or answered and not carried out yet — is refused
+ * (fix round 2, N4: an answer is carried out first, never sidestepped by a new question). When
+ * the words are his reply (or plain-line answer) on an open send card of this decider, that card
+ * is bound as `sendQuestionId` whether or not the decider named it (N1).
  */
 export function askGrantConflict(
   ctx: CommandContext,
@@ -197,8 +236,6 @@ export function askGrantConflict(
     throw new DomainError('invalid', "newWords must be Cosmin's words (1–2000 characters)");
   }
   const options = ownOptions(input.options);
-  /** Answered-but-unresolved questions whose grants this one takes over (Minor 3). */
-  const takenFrom = new Set<Id>();
   const grants = ids.map((id) => {
     const g = findGrant(tables, id);
     if (g.projectId !== scope.projectId) {
@@ -209,20 +246,37 @@ export function askGrantConflict(
     }
     if (g.pausedBy !== undefined) {
       const by = tables.questions.get(g.pausedBy);
-      if (by?.status === 'open') {
-        throw new DomainError(
-          'conflict',
-          `send grant ${id} is paused already: Cosmin is asked about it in question ${by.id}`,
-        );
-      }
-      takenFrom.add(g.pausedBy);
+      throw new DomainError(
+        'conflict',
+        by?.status === 'open'
+          ? `send grant ${id} is paused already: Cosmin is asked about it in question ${by.id}`
+          : `send grant ${id} is paused by question ${g.pausedBy}, which Cosmin answered: ` +
+              'carry out his answer with resolve_grant_conflict first',
+      );
     }
     return g;
   });
 
   let origin: RequestOrigin;
-  if (input.sendQuestionId !== undefined) {
-    const send = must(tables.questions.get(input.sendQuestionId), 'question', input.sendQuestionId);
+  let sendQuestionId = input.sendQuestionId;
+  if (sendQuestionId === undefined) {
+    // His words are his answer on an open card of this decider: the conflict is that card's.
+    const card = tables.questions
+      .all()
+      .filter(
+        (q) =>
+          q.status === 'open' &&
+          q.kind === 'permission' &&
+          q.context.sendPermission?.deciderId === deciderId,
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+      .find((q) =>
+        sendPermissionReplies(db, q, deciderId).some((r) => quoteFound(newWords, [r.text])),
+      );
+    if (card) sendQuestionId = card.id;
+  }
+  if (sendQuestionId !== undefined) {
+    const send = must(tables.questions.get(sendQuestionId), 'question', sendQuestionId);
     if (send.kind !== 'permission' || !send.context.sendPermission) {
       throw new DomainError('invalid', `question ${send.id} is not a send permission question`);
     }
@@ -268,7 +322,7 @@ export function askGrantConflict(
       ...(g.endsAt !== undefined ? { endsAt: g.endsAt } : {}),
     })),
     newWords: words,
-    ...(input.sendQuestionId !== undefined ? { sendQuestionId: input.sendQuestionId } : {}),
+    ...(sendQuestionId !== undefined ? { sendQuestionId } : {}),
     options,
   };
   const question = openQuestion(ctx, {
@@ -284,19 +338,6 @@ export function askGrantConflict(
     meta: { source: COMMAND_SOURCE, toUser: true, [NEW_WORDS_ORIGIN]: origin },
   });
   for (const g of grants) pauseGrant(ctx, g, question.id);
-  // A question this one took grants over from is done: its other grants count again.
-  for (const oldId of takenFrom) {
-    const old = tables.questions.get(oldId);
-    for (const g of grantsPausedBy(tables, oldId)) {
-      unpauseGrant(ctx, g, oldId, `superseded by question ${question.id}`);
-    }
-    if (old?.context.grantConflict && !isConflictResolved(old)) {
-      tables.questions.upsert({
-        ...old,
-        meta: { ...old.meta, [GRANT_CONFLICT_RESOLVED]: ctx.now, [SUPERSEDED_BY]: question.id },
-      });
-    }
-  }
   return question;
 }
 
@@ -360,6 +401,8 @@ export function resolveGrantConflict(
     } catch {
       continue; // Ended meanwhile: nothing left to end or keep.
     }
+    // He resumed it himself: it dropped out of the question (N2).
+    if (g.pausedBy === undefined) continue;
     if (g.pausedBy !== question.id) {
       throw new DomainError(
         'stale',
@@ -420,7 +463,11 @@ export function resolveGrantConflict(
     : undefined;
   tables.questions.upsert({
     ...question,
-    meta: { ...question.meta, [GRANT_CONFLICT_RESOLVED]: ctx.now },
+    meta: {
+      ...question.meta,
+      [GRANT_CONFLICT_RESOLVED]: ctx.now,
+      ...(grant && quoteFound(grant.words, [conflict.newWords]) ? { [KEPT_NEW_WORDS]: true } : {}),
+    },
   });
   return {
     ended,
