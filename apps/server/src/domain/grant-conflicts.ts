@@ -177,13 +177,23 @@ function linesTo(db: Database, deciderId: Id, since: string): UserLine[] {
   });
 }
 
-/** An option's text for comparison: case, spacing and trailing punctuation dropped (N3). */
+/**
+ * An option's text for comparison: case, spacing, surrounding quotation marks (straight or curly)
+ * and trailing punctuation dropped (N3, M5).
+ */
 const normalOption = (o: string): string =>
   o
     .toLowerCase()
     .replace(/\s+/g, ' ')
-    .trim()
-    .replace(/[\s.!?…:;,]+$/u, '');
+    .replace(/^[\s"'“”‘’«»]+/u, '')
+    .replace(/[\s"'“”‘’«».!?…:;,]+$/u, '');
+
+/** The fixed option `answer` is, normalised (M2), or `undefined`. */
+export function fixedOptionOf(answer: string | undefined): string | undefined {
+  return answer === undefined
+    ? undefined
+    : GRANT_CONFLICT_OPTIONS.find((f) => sameOption(f, answer));
+}
 const sameOption = (a: string, b: string): boolean => normalOption(a) === normalOption(b);
 
 /** The decider's own options: trimmed, at most 3 of at most 200 characters, none a fixed one. */
@@ -345,6 +355,7 @@ export function askGrantConflict(
 function answerWords(question: Question): string[] {
   const answer = question.answer?.trim() ?? '';
   if (answer === '' || (question.context.options ?? []).includes(answer)) return [];
+  if (fixedOptionOf(answer) !== undefined) return [];
   return [answer];
 }
 
@@ -490,7 +501,8 @@ function checkPickedOption(
   ending: readonly Id[],
   newGrant: ResolveGrantConflictInput['newGrant'],
 ): void {
-  const picked = question.answer?.trim();
+  // A typed answer that is a fixed option, give or take case, quotes and punctuation, is it (M2).
+  const picked = fixedOptionOf(question.answer);
   const [replace, keepEarlier, keepBoth] = GRANT_CONFLICT_OPTIONS;
   if (picked !== replace && picked !== keepEarlier && picked !== keepBoth) return;
   const refuse = (what: string) => {

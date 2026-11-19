@@ -1007,3 +1007,48 @@ describe('fix round 3 (P13-34)', () => {
     ).rejects.toMatchObject({ code: 'invalid' });
   });
 });
+
+describe('fix round 4 (P13-34)', () => {
+  it('M2: a typed answer that is a fixed option, give or take case, quotes and punctuation, is enforced as it', async () => {
+    const { c, grantA, questionId, resolve, grantOf } = await conflictViaCard();
+    await c.commands.answerQuestion({
+      questionId,
+      answer: '  “keep the EARLIER grant and ignore the new words.”  ',
+      by: USER,
+    });
+    await expect(resolve({ questionId, endGrantIds: [grantA.id] })).rejects.toMatchObject({
+      code: 'invalid',
+      message: expect.stringContaining('end no grant'),
+    });
+    await expect(
+      resolve({
+        questionId,
+        endGrantIds: [],
+        newGrant: { words: TODAY_WORDS, summary: 'Launch messages, today' },
+      }),
+    ).rejects.toMatchObject({
+      code: 'invalid',
+      message: expect.stringContaining('make no new grant'),
+    });
+    await resolve({ questionId, endGrantIds: [] });
+    expect(grantOf(grantA.id)!.pausedBy).toBeUndefined();
+  });
+
+  it('M5: a decider option that is a fixed one in quotation marks is refused', async () => {
+    const { c, waykeeper, grantA, ask } = await setup();
+    c.say(waykeeper.id, `actually ${TODAY_WORDS}`);
+    for (const lookalike of [
+      '"Keep both"',
+      "'Replace the earlier grant with the new one'",
+      '“Keep the earlier grant and ignore the new words.”',
+      '‘keep both’!',
+    ]) {
+      await expect(
+        ask({ grantIds: [grantA.id], newWords: TODAY_WORDS, options: [lookalike] }),
+      ).rejects.toMatchObject({
+        code: 'invalid',
+        message: expect.stringContaining('offered already'),
+      });
+    }
+  });
+});
