@@ -161,7 +161,13 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
-import { askGrantConflict, pendingConflictAbout, resolveGrantConflict } from './grant-conflicts.js';
+import {
+  askGrantConflict,
+  conflictClosedAt,
+  pendingConflictAbout,
+  resolveGrantConflict,
+  resumeSendGrant,
+} from './grant-conflicts.js';
 import {
   addSendGrant,
   checkSendPermissionAnswer,
@@ -1709,7 +1715,12 @@ export class Commands implements DomainCommands {
       'question',
       input.questionId,
     );
-    const { replies, from } = checkSendPermissionAnswer(this.log.db, question, input);
+    const { replies, from } = checkSendPermissionAnswer(
+      this.log.db,
+      question,
+      input,
+      conflictClosedAt(this.log.tables, question.id),
+    );
     // Cosmin is asked how his words fit his grants (P13-34): that answer decides this send.
     const conflict = pendingConflictAbout(this.log.tables, question.id);
     if (conflict) {
@@ -1784,6 +1795,19 @@ export class Commands implements DomainCommands {
    */
   askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>> {
     return this.run((ctx) => askGrantConflict(ctx, this.log.db, input, Date.now()));
+  }
+
+  /**
+   * The user resumes a grant a grant-conflict question paused (P13-34), from anywhere; then the
+   * scope's held sends are judged again against the grants now in force.
+   */
+  async resumeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
+    const result = await this.run((ctx) =>
+      resumeSendGrant(ctx, input.grantId, input.by, input.scope),
+    );
+    const g = result.value;
+    this.agents?.recheckHeldSends?.(g.projectId !== undefined ? { projectId: g.projectId } : {});
+    return result;
   }
 
   /**

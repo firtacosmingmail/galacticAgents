@@ -272,6 +272,8 @@ export function logAllowOnce(
 /** A user's reply to a send-permission question (P13-28): what he wrote, and from where. */
 export interface SendPermissionReply {
   text: string;
+  /** When he wrote it. */
+  at: string;
   /** Unknown counts as remote. */
   origin: RequestOrigin;
 }
@@ -358,7 +360,7 @@ export function sendPermissionReplies(
     if (e.type !== 'message.sent' || e.turn) return [];
     const toThis = e.replyTo?.kind === 'question' && e.replyTo.id === question.id;
     if (!toThis && answers(r.id, r.at) !== question.id) return [];
-    return [{ text: e.text, origin: e.origin ?? 'remote' }];
+    return [{ text: e.text, at: r.at, origin: e.origin ?? 'remote' }];
   });
 }
 
@@ -387,6 +389,7 @@ export function checkSendPermissionAnswer(
   db: Database,
   question: Question,
   input: AnswerSendPermissionInput,
+  conflictClosedAt?: string,
 ): { replies: SendPermissionReply[]; from?: SendPermissionReply } {
   const send = question.context.sendPermission;
   if (question.kind !== 'permission' || !send) {
@@ -401,8 +404,18 @@ export function checkSendPermissionAnswer(
       `question ${question.id} is not yours to decide: only its card's buttons answer it`,
     );
   }
-  const replies = sendPermissionReplies(db, question, input.agentId);
-  if (input.decision === 'deny') return { replies };
+  const all = sendPermissionReplies(db, question, input.agentId);
+  if (input.decision === 'deny') return { replies: all };
+  // His replies up to a grant conflict about this card were that conflict's (P13-34): only a newer
+  // one allows the send or makes a grant.
+  const replies = conflictClosedAt === undefined ? all : all.filter((r) => r.at > conflictClosedAt);
+  if (replies.length === 0 && all.length > 0) {
+    throw new DomainError(
+      'invalid',
+      `Cosmin's reply to question ${question.id} was settled by his grant-conflict answer: only a ` +
+        'new reply of his (or his Allow once on the card) allows it now. Wait for it',
+    );
+  }
   if (replies.length === 0) {
     throw new DomainError(
       'invalid',

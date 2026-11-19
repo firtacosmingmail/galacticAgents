@@ -176,10 +176,18 @@ export const resolveGrantConflictTool: BrainTool = {
       endGrantIds: ids(input, 'endGrantIds', 0),
       ...(newGrant ? { newGrant } : {}),
     });
+    const sendQuestionId = ctx.queries.question(questionId)?.context.grantConflict?.sendQuestionId;
     return {
       status: 'resolved',
       ended: value.ended,
       unpaused: value.unpaused,
+      ...(sendQuestionId
+        ? {
+            sendQuestion:
+              `${sendQuestionId} is judged again against the grants now in force; if it stays ` +
+              'open, his earlier reply no longer counts: wait for a new reply or his Allow once',
+          }
+        : {}),
       ...(value.grant
         ? {
             grant: {

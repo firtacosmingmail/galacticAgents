@@ -5,6 +5,7 @@ import {
   GRANT_CONFLICT_OPTIONS,
   isGrantLive,
   quoteFound,
+  type Actor,
   type Agent,
   type AskGrantConflictInput,
   type Event,
@@ -21,7 +22,7 @@ import type { Tables } from '../db/tables.js';
 import { redactSecrets } from '../runtime/redact.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
-import { COMMAND_SOURCE, openQuestion } from './questions.js';
+import { cancelQuestion, COMMAND_SOURCE, openQuestion } from './questions.js';
 import {
   addSendGrant,
   endGrantByAnswer,
@@ -62,6 +63,11 @@ export function isConflictResolved(question: Pick<Question, 'meta'>): boolean {
   return question.meta?.[GRANT_CONFLICT_RESOLVED] !== undefined;
 }
 
+/** `meta.grantConflictResolvedBy`: who closed it — `user` when he resumed its grants himself. */
+const RESOLVED_BY = 'grantConflictResolvedBy';
+/** `meta.grantConflictSupersededBy`: the question that took its grants over. */
+const SUPERSEDED_BY = 'grantConflictSupersededBy';
+
 /** A grant-conflict question that still decides its grants: open, or answered but not carried out. */
 function pending(question: Question): boolean {
   return (
@@ -77,6 +83,40 @@ export function pendingConflictAbout(tables: Tables, sendQuestionId: Id): Questi
   return tables.questions
     .all()
     .find((q) => q.context.grantConflict?.sendQuestionId === sendQuestionId && pending(q));
+}
+
+/**
+ * When the last grant-conflict question about the send-permission question `sendQuestionId`
+ * closed (carried out, resumed by him, or closed without an answer), if one did (fix round 1,
+ * Important 1): his replies on the card up to then were the conflict's, and never allow the send
+ * or make a grant afterwards — only a newer reply, or his Allow once, does.
+ */
+export function conflictClosedAt(tables: Tables, sendQuestionId: Id): string | undefined {
+  let last: string | undefined;
+  for (const q of tables.questions.all()) {
+    if (q.context.grantConflict?.sendQuestionId !== sendQuestionId || pending(q)) continue;
+    const resolved = q.meta?.[GRANT_CONFLICT_RESOLVED];
+    const at = typeof resolved === 'string' ? resolved : q.updatedAt;
+    if (last === undefined || at > last) last = at;
+  }
+  return last;
+}
+
+/**
+ * The scope's answered grant-conflict questions nobody carried out yet, oldest first: what the
+ * scope's decider still has to do with `resolve_grant_conflict` (fix round 1, Important 2).
+ */
+export function unresolvedConflicts(tables: Tables, scope: { projectId?: Id }): Question[] {
+  return tables.questions
+    .all()
+    .filter(
+      (q) =>
+        q.context.grantConflict !== undefined &&
+        q.context.grantConflict.projectId === scope.projectId &&
+        q.status === 'answered' &&
+        !isConflictResolved(q),
+    )
+    .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
 }
 
 /** "Earlier you said: "…" (until …). Now you said: "…". These conflict. What should I do?" */
@@ -157,6 +197,8 @@ export function askGrantConflict(
     throw new DomainError('invalid', "newWords must be Cosmin's words (1–2000 characters)");
   }
   const options = ownOptions(input.options);
+  /** Answered-but-unresolved questions whose grants this one takes over (Minor 3). */
+  const takenFrom = new Set<Id>();
   const grants = ids.map((id) => {
     const g = findGrant(tables, id);
     if (g.projectId !== scope.projectId) {
@@ -173,6 +215,7 @@ export function askGrantConflict(
           `send grant ${id} is paused already: Cosmin is asked about it in question ${by.id}`,
         );
       }
+      takenFrom.add(g.pausedBy);
     }
     return g;
   });
@@ -241,6 +284,19 @@ export function askGrantConflict(
     meta: { source: COMMAND_SOURCE, toUser: true, [NEW_WORDS_ORIGIN]: origin },
   });
   for (const g of grants) pauseGrant(ctx, g, question.id);
+  // A question this one took grants over from is done: its other grants count again.
+  for (const oldId of takenFrom) {
+    const old = tables.questions.get(oldId);
+    for (const g of grantsPausedBy(tables, oldId)) {
+      unpauseGrant(ctx, g, oldId, `superseded by question ${question.id}`);
+    }
+    if (old?.context.grantConflict && !isConflictResolved(old)) {
+      tables.questions.upsert({
+        ...old,
+        meta: { ...old.meta, [GRANT_CONFLICT_RESOLVED]: ctx.now, [SUPERSEDED_BY]: question.id },
+      });
+    }
+  }
   return question;
 }
 
@@ -272,7 +328,9 @@ export function resolveGrantConflict(
   if (question.kind !== 'permission' || !conflict) {
     throw new DomainError('invalid', `question ${question.id} is not a grant-conflict question`);
   }
-  if (conflict.deciderId !== input.agentId || question.originAgentId !== input.agentId) {
+  // The scope's decider now — the one that asked, or a Waykeeper of the project spawned since.
+  const scope = deciderScope(tables.agents.get(input.agentId));
+  if (!scope || scope.projectId !== conflict.projectId) {
     throw new DomainError('forbidden', `question ${question.id} is not yours to carry out`);
   }
   if (question.status === 'open') {
@@ -330,6 +388,7 @@ export function resolveGrantConflict(
     }
     newGrant = { ...input.newGrant, words, summary };
   }
+  checkPickedOption(question, conflict, stored, ending, newGrant);
 
   const answer = redactSecrets(question.answer ?? '');
   const reason = `Cosmin answered question ${question.id}: "${answer}"`;
@@ -370,6 +429,79 @@ export function resolveGrantConflict(
     scope: conflict.projectId !== undefined ? { projectId: conflict.projectId } : {},
   };
 }
+
+/**
+ * A picked fixed option decides the outcome in code (fix round 1, Critical 1): *Replace* ends every
+ * grant of the question still stored and makes a grant from the new words; *Keep the earlier*
+ * ends nothing and makes nothing; *Keep both* ends nothing and makes a grant from the new words.
+ * Only the decider's own options and his free text leave room for its judgement.
+ */
+function checkPickedOption(
+  question: Question,
+  conflict: GrantConflictContext,
+  stored: ReadonlyMap<Id, SendGrant>,
+  ending: readonly Id[],
+  newGrant: ResolveGrantConflictInput['newGrant'],
+): void {
+  const picked = question.answer?.trim();
+  const [replace, keepEarlier, keepBoth] = GRANT_CONFLICT_OPTIONS;
+  if (picked !== replace && picked !== keepEarlier && picked !== keepBoth) return;
+  const refuse = (what: string) => {
+    throw new DomainError('invalid', `Cosmin picked "${picked}": ${what}`);
+  };
+  const fromNewWords = newGrant !== undefined && quoteFound(newGrant.words, [conflict.newWords]);
+  if (picked === replace) {
+    if ([...stored.keys()].some((id) => !ending.includes(id))) {
+      refuse('end every earlier grant (endGrantIds = all of them)');
+    }
+    if (!fromNewWords) refuse('make the new grant from his new words');
+    return;
+  }
+  if (ending.length > 0) refuse('end no grant');
+  if (picked === keepEarlier && newGrant !== undefined) refuse('make no new grant');
+  if (picked === keepBoth && !fromNewWords) refuse('make the new grant from his new words');
+}
+
+/**
+ * The user resumes a paused grant himself (fix round 1, Important 2): user-only (`forbidden`), a
+ * grant of `scope` (`not_found`) that is paused (`invalid`). It counts again
+ * (`send_grant.unpaused`, "resumed by the user"); when its question pauses no grant any more, an
+ * open question is withdrawn and an answered one is marked resolved by the user.
+ */
+export function resumeSendGrant(
+  ctx: CommandContext,
+  grantId: Id,
+  by: Actor,
+  scope?: { projectId?: Id },
+): SendGrant {
+  if (by.type !== 'user') throw new DomainError('forbidden', 'only the user resumes a send grant');
+  const { tables } = ctx;
+  const grant = findGrant(tables, grantId);
+  if (scope && grant.projectId !== scope.projectId) {
+    throw new DomainError('not_found', `no send grant ${grantId} here`);
+  }
+  const questionId = grant.pausedBy;
+  if (questionId === undefined) {
+    throw new DomainError('invalid', `send grant ${grantId} is not paused`);
+  }
+  unpauseGrant(ctx, grant, questionId, RESUMED_BY_USER);
+  if (grantsPausedBy(tables, questionId).length === 0) {
+    const question = tables.questions.get(questionId);
+    if (question?.status === 'open') {
+      cancelQuestion(ctx, questionId, RESUMED_BY_USER);
+    } else if (question?.context.grantConflict && !isConflictResolved(question)) {
+      tables.questions.upsert({
+        ...question,
+        meta: { ...question.meta, [GRANT_CONFLICT_RESOLVED]: ctx.now, [RESOLVED_BY]: 'user' },
+      });
+    }
+  }
+  const { pausedBy: _old, ...rest } = grant;
+  return rest;
+}
+
+/** The reason a grant the user resumed is logged with. */
+export const RESUMED_BY_USER = 'resumed by the user';
 
 /**
  * A grant-conflict question closed without an answer (dismissed, its decider stopped, its project

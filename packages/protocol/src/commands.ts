@@ -831,6 +831,11 @@ export interface DomainCommands {
   answerSendPermission(
     input: AnswerSendPermissionInput,
   ): Promise<CommandResult<{ grant?: SendGrant }>>;
+  /**
+   * The user resumes a send grant a grant-conflict question paused (P13-34): it counts again; when
+   * its question pauses nothing any more, it is withdrawn (open) or marked resolved (answered).
+   */
+  resumeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>>;
   /** Opens a grant-conflict question and pauses its grants (see `AskGrantConflictInput`). */
   askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>>;
   /** Carries out Cosmin's answer to a grant-conflict question (see `ResolveGrantConflictInput`). */
