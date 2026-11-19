@@ -202,6 +202,14 @@ export function stewardJobTools(
           ...(files !== undefined ? { files: files as string[] } : {}),
         };
         const auto = await opts.publishInAuto?.(request);
+        if (auto && 'approved' in auto && auto.approved.jobFollowUp) {
+          // Decision 165: the job was approved to publish; its follow-up run posts it.
+          return {
+            status: 'approved',
+            questionId: auto.approved.jobFollowUp.questionId,
+            note: 'Approved: Cosmin approved this job to publish on its card. A later run publishes it; do not publish it in this run.',
+          };
+        }
         if (auto && 'approved' in auto) {
           return {
             status: 'approved',

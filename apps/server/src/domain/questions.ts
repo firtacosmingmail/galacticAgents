@@ -235,15 +235,28 @@ export function isRecordedAnswer(question: Question, answerId: string | undefine
 }
 
 /**
+ * How an answer the user did not give is let through, server-side only (never from a client's
+ * input): `jobPublish` — a publish of a job approved to publish, approved in Auto by its decider
+ * (P13-32, decision 165; `approveJobPublishInAuto`).
+ */
+export interface AnswerTrust {
+  jobPublish?: true;
+}
+
+/**
  * Marks the row answered and emits `question.answered` with the bumped version. First answer
  * wins: a second one is refused with who answered first, and so is one given against an older
  * version (the holder changed meanwhile). An agent may answer only a clarification it holds.
  */
-export function answerQuestion(ctx: CommandContext, input: AnswerInput): Question {
+export function answerQuestion(
+  ctx: CommandContext,
+  input: AnswerInput,
+  trust: AnswerTrust = {},
+): Question {
   const current = must(ctx.tables.questions.get(input.questionId), 'question', input.questionId);
   // A retry of an answer already recorded under its key: nothing to do (P7-05).
   if (isRecordedAnswer(current, input.answerId)) return current;
-  checkAnswer(current, input);
+  checkAnswer(current, input, trust);
   // A publish approved with an edited text: the approved request, with its own fingerprint.
   const publish = approvedPublish(current, input.answer, input.detail);
   const question = withMetaSansDraft(
@@ -322,9 +335,21 @@ export function draftQuestion(
  * Whether `input` may answer `current` now; throws the refusal otherwise. Shared with the command
  * surface, which checks before handing the answer to the agent's adapter.
  */
-export function checkAnswer(current: Question, input: AnswerInput): void {
+export function checkAnswer(current: Question, input: AnswerInput, trust: AnswerTrust = {}): void {
   checkOpen(current);
   if (input.delivered) return;
+  if (trust.jobPublish) {
+    // Decision 165: only Approve, of a job's publish, by an agent (the decider in Auto).
+    if (
+      current.kind !== 'publish' ||
+      !current.context.publish?.jobId ||
+      input.answer !== PUBLISH_ACTIONS[0] ||
+      input.answeredBy.type !== 'agent'
+    ) {
+      throw new DomainError('invalid', `question ${current.id} is not a job publish to approve`);
+    }
+    return;
+  }
   if (input.version !== undefined && input.version !== current.version) {
     throw new DomainError(
       'stale',

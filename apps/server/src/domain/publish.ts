@@ -32,7 +32,7 @@ import type { CommandContext } from './event-log.js';
 import { askerRun, unstoppedJob } from './findings.js';
 import { CANNOT_PUBLISH, jobOf, writeJob } from './jobs.js';
 import { originOf, type QuestionRouting } from './question-service.js';
-import { COMMAND_SOURCE, openQuestion } from './questions.js';
+import { COMMAND_SOURCE, answerQuestion, openQuestion } from './questions.js';
 
 /**
  * Publish approvals (P11-06, plan Task 7; SPEC decision 147). Nothing goes out without the user's
@@ -196,6 +196,34 @@ export function requestPublish(
   });
 }
 
+/**
+ * A job run's publish in Auto when its job was approved to publish (P13-32, SPEC decision 165):
+ * the job's publish question opened as `requestPublish` opens it, then answered `Approve` at once
+ * in the decider's name — the user's Approve path, so `applyPublish` queues the follow-up that
+ * publishes it — in one transaction. The caller has checked Auto and the decider just before.
+ * Refused (nothing opened) for a task Steward's publish, a job not approved to publish or a
+ * stopped one; the caller then opens the card as today.
+ */
+export function approveJobPublishInAuto(
+  ctx: CommandContext,
+  input: RequestPublishInput,
+  routing: Pick<QuestionRouting, 'recentEvents'> | undefined,
+  deps: PublishDeps,
+  deciderId: Id,
+): Question {
+  const question = requestPublish(ctx, input, routing, deps);
+  const jobId = question.context.publish?.jobId;
+  const job = jobId ? jobOf(ctx, jobId) : undefined;
+  if (!job?.publishes) {
+    throw new DomainError('invalid', 'the job was not approved to publish');
+  }
+  return answerQuestion(
+    ctx,
+    { questionId: question.id, answer: APPROVE, answeredBy: { type: 'agent', id: deciderId } },
+    { jobPublish: true },
+  );
+}
+
 /** A publish request checked and hashed (`preparePublish`): who asks, its run, the content. */
 export interface PreparedPublish {
   agent: Agent;
@@ -261,7 +289,18 @@ export function preparePublish(
  * the user's words, or the grant question opened in place of the card.
  */
 export type PublishInAuto =
-  { approved: { allowedBy: AllowedBy; grantId?: Id } } | { questionId: Id };
+  | {
+      approved: {
+        allowedBy: AllowedBy;
+        grantId?: Id;
+        /**
+         * A job run's publish its job was approved to make (P13-32, decision 165): approved on
+         * the job's publish question, which queued the follow-up run that publishes it.
+         */
+        jobFollowUp?: { questionId: Id };
+      };
+    }
+  | { questionId: Id };
 
 /** The tool name a publish request is judged and logged under in Auto (P13-29). */
 export const PUBLISH_REQUEST_TOOL = 'request_publish';

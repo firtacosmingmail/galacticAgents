@@ -24,6 +24,8 @@ import {
   type Event,
   type Id,
   type Job,
+  type JobRun,
+  type Question,
   type SetAnswer,
   type PermissionAction,
   type PermissionPolicy,
@@ -79,6 +81,7 @@ import {
 import { RULES_END_IN } from '../domain/project-rules.js';
 import { liveGrants, standaloneAutoOn, type HeldSendAnswer } from '../domain/send-grants.js';
 import {
+  approveJobPublishInAuto,
   folderOfAgent,
   openPublishPermission,
   preparePublish,
@@ -491,6 +494,9 @@ export interface TurnEnd {
 }
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** Why a job's publish went out without a card in Auto (P13-32): the approvals log's reason. */
+const JOB_PUBLISH_REASON = 'allowed: the job was approved to publish (decision 165)';
 
 /** A scope's grant filter: its project, or standalone work when it has none. */
 const scopeOf = (projectId: Id | undefined): { projectId?: Id } =>
@@ -2781,7 +2787,8 @@ export class AgentRuntime {
     if (!scope?.auto) return undefined;
     const deps = this.publishDeps();
     const prepared = log.runCommand((ctx) => preparePublish(ctx, input, deps)).value;
-    if (prepared.run || !prepared.agent.taskId) return undefined;
+    if (prepared.run) return this.jobPublishInAuto(live, input, prepared.run, scopeNow);
+    if (!prepared.agent.taskId) return undefined;
     const { publish } = prepared;
     const cover = await this.judgePublishOf(live, publish, scope.projectId, prepared.agent.taskId);
     if (cover === 'cancelled' || !this.watching(live)) {
@@ -2815,6 +2822,56 @@ export class AgentRuntime {
       ),
     ).value;
     return { questionId: question.id };
+  }
+
+  /**
+   * A job run's publish in Auto (P13-32, SPEC decision 165). Its job approved on its card to
+   * publish, not stopped, the scope in Auto with a decider — read again right before answering:
+   * the job's publish question opens and the decider answers it `Approve` in one transaction (the
+   * user's Approve path: the follow-up run that publishes it is queued), logged as
+   * `permission.decided{allow}` in the decider's name with the platform, account, text (redacted)
+   * and files' hashes. No allowance is armed: the follow-up run publishes, not this one. Anything
+   * else returns `undefined` and the caller opens the publish card as today; a job's `publishes`
+   * never covers a spend.
+   */
+  private jobPublishInAuto(
+    live: Live,
+    input: RequestPublishInput,
+    run: JobRun,
+    scopeNow: () => ApprovalScope | undefined,
+  ): PublishInAuto | undefined {
+    const { log } = this.opts;
+    const job = log.tables.jobs.get(run.jobId);
+    if (!job?.publishes || job.state === 'stopped') return undefined;
+    const scope = scopeNow();
+    const deciderId = scope?.deciderId;
+    if (!scope?.auto || !deciderId || !this.watching(live)) return undefined;
+    let question: Question;
+    try {
+      question = log.runCommand((ctx) =>
+        approveJobPublishInAuto(ctx, input, this.questions, this.publishDeps(), deciderId),
+      ).value;
+    } catch (error) {
+      // Nothing was opened: the card path asks (or refuses) as today.
+      if (error instanceof DomainError) return undefined;
+      throw error;
+    }
+    const publish = question.context.publish!;
+    this.permissionDecided(
+      live,
+      {
+        toolCall: publishRequestCall(publish),
+        decision: 'allow',
+        action: 'network',
+        reason: JOB_PUBLISH_REASON,
+        decidedBy: { type: 'agent', id: deciderId },
+        allowedBy: 'auto',
+        parts: [],
+        ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
+      },
+      question.id,
+    );
+    return { approved: { allowedBy: 'auto', jobFollowUp: { questionId: question.id } } };
   }
 
   /** The grants judge on a publish of `live` in its scope (P13-29). */
