@@ -2733,6 +2733,8 @@ export class AgentRuntime {
           questionId,
           redactSecrets(answer.reason),
           holdersNow(ctx, questionId, this.questions),
+          undefined,
+          answer.answeredWith,
         ),
       );
     } finally {
@@ -2995,6 +2997,8 @@ export class AgentRuntime {
           questionId,
           redactSecrets(answer.reason),
           holdersNow(ctx, questionId, this.questions),
+          undefined,
+          answer.answeredWith,
         ),
       );
     } finally {

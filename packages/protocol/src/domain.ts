@@ -641,6 +641,18 @@ export function dismissalOf(
   return by.success && typeof reason === 'string' ? { by: by.data, reason } : undefined;
 }
 
+/** `meta.answeredWith`: the user's messages a send-permission answer was taken from (P13-33). */
+export const ANSWERED_WITH = 'answeredWith';
+
+/**
+ * The ids of the user's `message.sent` lines a decider's answer to the send-permission question
+ * `question` was taken from (P13-33), from the row's `meta.answeredWith`; empty for none.
+ */
+export function answeredWithOf(question: Pick<Question, 'meta'> | undefined): Id[] {
+  const ids = question?.meta?.[ANSWERED_WITH];
+  return Array.isArray(ids) ? ids.filter((id): id is Id => typeof id === 'string') : [];
+}
+
 /** `meta.relaysQuestionId`: the question a question relays to the user (P13-10). */
 export const RELAYS_QUESTION_ID = 'relaysQuestionId';
 

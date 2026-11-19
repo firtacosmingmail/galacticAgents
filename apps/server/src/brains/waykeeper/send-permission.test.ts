@@ -2,15 +2,16 @@ import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import type {
-  Event,
-  EventOfType,
-  Id,
-  PermissionPolicy,
-  Question,
-  RequestJudgeInput,
-  RequestOrigin,
-  RequestVerdict,
+import {
+  answeredWithOf,
+  type Event,
+  type EventOfType,
+  type Id,
+  type PermissionPolicy,
+  type Question,
+  type RequestJudgeInput,
+  type RequestOrigin,
+  type RequestVerdict,
 } from '@galactic/protocol';
 import { FakeAdapter } from '../../adapters/fake/fake-adapter.js';
 import { createFakeRequestJudge } from '../../adapters/fake/fake-request-judge.js';
@@ -18,6 +19,7 @@ import { SCENARIOS, type FakeScenario } from '../../adapters/fake/scenario.js';
 import { openDatabase } from '../../db/database.js';
 import { setWaykeeperApprovals } from '../../domain/waykeeper-approvals.js';
 import { composeRuntime, type ComposedRuntime } from '../../runtime/compose.js';
+import { userWordsFor } from '../../runtime/user-words.js';
 import type { BrainToolContext } from '../definition.js';
 import { brainHarness, type BrainHarness } from '../testing/index.js';
 import { harmonizerBrain, HARMONIZER_SYSTEM_PROMPT } from '../harmonizer/index.js';
@@ -54,6 +56,8 @@ const SCRIPTS: Record<string, FakeScenario> = {
 interface JudgeScript {
   seen: RequestJudgeInput[];
   covers: boolean;
+  /** The user's words the judge quotes as the request's cover (P13-33), when set. */
+  quote?: string;
 }
 
 function judgeOf(script: JudgeScript) {
@@ -67,6 +71,7 @@ function judgeOf(script: JudgeScript) {
       similarTo: [],
       ...(input.mode !== 'task' ? { sendsOrSpends: true, summary: 'Comment on PR 12' } : {}),
       ...(grant ? { grantId: grant.id } : {}),
+      ...(script.quote !== undefined && input.mode !== 'task' ? { quote: script.quote } : {}),
     };
   });
 }
@@ -430,6 +435,80 @@ describe('answer_send_permission: allow and deny (P13-28)', () => {
     expect(grants).toHaveLength(1);
     expect(grants[0]!.endsAt).toBeUndefined();
     expect(c.log.tables.projects.get(project.id)!.waykeeperAuto).not.toBe(true);
+  });
+});
+
+describe('a chat line taken as a send-card answer is not task words (P13-33)', () => {
+  const finished = (c: Harness, agentId: Id) =>
+    until(() => c.ofType('agent.finished').some((e) => e.agentId === agentId));
+
+  it('a plain line answering the only open send question makes the grant, never task words', async () => {
+    const { c, script, waykeeper, project, steward, question, answer } = await projectHeld();
+    const line = 'yes, post to Instagram only today';
+    c.say(waykeeper.id, line);
+    await answer({
+      questionId: question.id,
+      decision: 'allow',
+      grant: {
+        words: 'post to Instagram only today',
+        summary: 'Instagram, today',
+        endsAt: midnight(),
+      },
+    });
+    expect(c.ofType('send_grant.added')).toHaveLength(1);
+    const said = c.ofType('message.sent').find((e) => e.text === line)!;
+    expect(answeredWithOf(c.log.tables.questions.get(question.id))).toEqual([said.messageId]);
+    expect(
+      c.ofType('question.cancelled').find((e) => e.questionId === question.id)?.answeredWith,
+    ).toEqual([said.messageId]);
+    await finished(c, steward.id);
+    const taskId = steward.taskId!;
+    expect(userWordsFor(c.log, taskId)).not.toContain(line);
+    // A later send in the same task that only a quote of that line would cover is held.
+    script.quote = 'post to Instagram only today';
+    const later = (
+      await c.commands.spawnAgent({
+        role: 'steward',
+        runtime: 'fake',
+        prompt: 'scenario:send',
+        taskId,
+        supervisorId: waykeeper.id,
+      })
+    ).value;
+    await until(() => c.heldOf(later.id) !== undefined || decisionsOf(c, later.id).length > 0);
+    expect(decisionsOf(c, later.id)).toEqual([]);
+    expect(c.heldOf(later.id)).toBeDefined();
+    expect(c.log.tables.projects.get(project.id)!.sendGrants).toHaveLength(1);
+  });
+
+  it('a plain line a deny was taken from is not task words either', async () => {
+    const { c, waykeeper, steward, question, answer } = await projectHeld();
+    c.say(waykeeper.id, 'no, never post to Instagram');
+    await answer({ questionId: question.id, decision: 'deny' });
+    expect(userWordsFor(c.log, steward.taskId!)).not.toContain('no, never post to Instagram');
+  });
+
+  it('a plain line with no open send question stays task words', async () => {
+    const { c, waykeeper, steward, question, answer } = await projectHeld();
+    c.say(waykeeper.id, 'before: push the parser branch', { at: '2026-01-01T00:00:00.000Z' });
+    c.say(waykeeper.id, 'yes, this one', { replyTo: question });
+    await answer({ questionId: question.id, decision: 'allow' });
+    await finished(c, steward.id);
+    c.say(waykeeper.id, 'after: push the docs branch');
+    const words = userWordsFor(c.log, steward.taskId!);
+    expect(words).toContain('before: push the parser branch');
+    expect(words).toContain('after: push the docs branch');
+    expect(words).not.toContain('yes, this one');
+  });
+
+  it('a plain line while two send questions are open is not taken: it stays task words', async () => {
+    const { c, waykeeper, project, steward, question, answer } = await projectHeld();
+    await heldSteward(c, project.id, waykeeper.id);
+    c.say(waykeeper.id, 'push the parser branch when green');
+    c.say(waykeeper.id, 'yes, this one', { replyTo: question });
+    await answer({ questionId: question.id, decision: 'allow' });
+    await finished(c, steward.id);
+    expect(userWordsFor(c.log, steward.taskId!)).toContain('push the parser branch when green');
   });
 });
 

@@ -392,6 +392,13 @@ export const QuestionCancelled = z.object({
    * terminal's prompt is still up), so it keeps waiting until someone types into it.
    */
   stillWaiting: z.literal(true).optional(),
+  /**
+   * A decider's answer to a send-permission question (P13-33): the ids of the user's
+   * `message.sent` lines it was taken from — his replies to it, and a plain chat line to the
+   * decider while it was the decider's only open one. Folded into the row as `meta.answeredWith`;
+   * those lines count only as that answer, never as task words.
+   */
+  answeredWith: z.array(Id).optional(),
 });
 /** Holder changed without an escalation, e.g. the holder died (orphaned question). */
 export const QuestionReassigned = z.object({

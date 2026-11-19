@@ -192,6 +192,8 @@ export function logAllowOnce(
 
 /** A user's reply to a send-permission question (P13-28): what he wrote, and from where. */
 export interface SendPermissionReply {
+  /** The reply's `message.sent` id: the answer records it (`answeredWith`, P13-33). */
+  messageId: Id;
   text: string;
   /** Unknown counts as remote. */
   origin: RequestOrigin;
@@ -246,7 +248,7 @@ export function sendPermissionReplies(
     if (e.type !== 'message.sent' || e.turn) return [];
     const toThis = e.replyTo?.kind === 'question' && e.replyTo.id === question.id;
     if (!toThis && anotherOpenAt(r.id)) return [];
-    return [{ text: e.text, origin: e.origin ?? 'remote' }];
+    return [{ messageId: e.messageId, text: e.text, origin: e.origin ?? 'remote' }];
   });
 }
 
@@ -316,6 +318,8 @@ export function checkSendPermissionAnswer(
  * A decider's checked answer to a held send, for the runtime (P13-28): `reason` is logged with
  * the allow and closes the question; on a deny it is what the Steward is told. `grant` makes the
  * grant in its own transaction before anything else (a refused grant changes nothing).
+ * `answeredWith`: the ids of the user's messages the answer was taken from (P13-33), recorded on
+ * the question's `question.cancelled` so they count only as this answer, never as task words.
  */
 export type HeldSendAnswer =
   | {
@@ -323,5 +327,6 @@ export type HeldSendAnswer =
       deciderId: Id;
       reason: string;
       grant?: (ctx: CommandContext) => SendGrant;
+      answeredWith?: Id[];
     }
-  | { decision: 'deny'; deciderId: Id; reason: string };
+  | { decision: 'deny'; deciderId: Id; reason: string; answeredWith?: Id[] };

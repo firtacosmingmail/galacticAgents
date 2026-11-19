@@ -1,6 +1,7 @@
 import {
   PICKED_OPTION_PREFIX,
   answerDetailOf,
+  answeredWithOf,
   relayedQuestionOf,
   type Agent,
   type Id,
@@ -50,9 +51,12 @@ interface Said {
  *     `PICKED_OPTION_PREFIX`;
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
- * Left out (final review M1): his replies (`replyTo`) and answers to send-permission questions.
+ * Left out (final review M1): his replies (`replyTo`) and answers to send-permission questions,
+ * and (P13-33) a plain chat line a decider's answer to one was taken from (the question's
+ * `answeredWith`: a line to the decider while it was the decider's only open send question).
  * Those are for the grant question alone; a denial ("don't post to Instagram today") must never
- * become task words a send is approved by.
+ * become task words a send is approved by, and a grant's "only today" is enforced by its end time,
+ * never by a quote of the same line.
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
  * Never throws: whatever cannot be read counts as no words (a push then goes to the user).
@@ -84,6 +88,13 @@ function collect(log: EventLogReader, taskId: Id): string[] {
   const said: Said[] = [];
   /** A send-permission question (Auto): his reply to it is for its grant, never a task word. */
   const isSendQuestion = (id: Id) => tables.questions.get(id)?.context.sendPermission !== undefined;
+  /** His chat lines a send-permission answer was taken from (P13-33): that answer's alone. */
+  const answers = new Set(
+    tables.questions
+      .all()
+      .filter((q) => q.context.sendPermission !== undefined)
+      .flatMap((q) => answeredWithOf(q)),
+  );
   const messagesTo = (agentId: Id, limit: number, until?: string): Said[] =>
     log
       .latestOf('message.sent', agentId, limit, until)
@@ -91,6 +102,7 @@ function collect(log: EventLogReader, taskId: Id): string[] {
         event.type === 'message.sent' &&
         event.sender.type === 'user' &&
         event.text.trim() &&
+        !answers.has(event.messageId) &&
         !(event.replyTo?.kind === 'question' && isSendQuestion(event.replyTo.id))
           ? [{ at, seq, text: event.text }]
           : [],

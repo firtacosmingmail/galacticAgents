@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Question } from './domain.js';
+import { answeredWithOf, type Question } from './domain.js';
 import { question as baseQuestion } from './fixtures/domain.js';
 import { events } from './fixtures/events.js';
 import { Event } from './events.js';
@@ -180,5 +180,23 @@ describe('world reducer', () => {
       cancelledBy: user,
       cancelReason: 'dismissed by the user',
     });
+  });
+
+  it('question.cancelled keeps the messages a send answer was taken from (P13-33)', () => {
+    const w1 = applyEvent(start, {
+      seq: 2,
+      at,
+      event: {
+        type: 'question.cancelled',
+        questionId: 'q1',
+        agentId: 'a-steward-1',
+        reason: "Allowed once from Cosmin's reply.",
+        version: 1,
+        answeredWith: ['m-1', 'm-2'],
+      },
+    });
+    expect(w1.questions.q1?.meta).toEqual({ answeredWith: ['m-1', 'm-2'] });
+    expect(answeredWithOf(w1.questions.q1)).toEqual(['m-1', 'm-2']);
+    expect(answeredWithOf(start.questions.q1)).toEqual([]);
   });
 });

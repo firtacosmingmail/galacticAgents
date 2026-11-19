@@ -1715,15 +1715,23 @@ export class Commands implements DomainCommands {
       this.log.tables.agents.get(question.originAgentId)?.taskId ?? '',
     )?.projectId;
     const user: Actor = { type: 'user' };
+    // The lines the answer is taken from count only as this answer (P13-33): never task words.
+    const answeredWith = replies.map((r) => r.messageId);
     let answer: HeldSendAnswer;
     if (input.decision === 'deny') {
-      answer = { decision: 'deny', deciderId: input.agentId, reason: notAllowedText(replies) };
+      answer = {
+        decision: 'deny',
+        deciderId: input.agentId,
+        reason: notAllowedText(replies),
+        answeredWith,
+      };
     } else if (input.grant && from) {
       const { words, summary, endsAt } = input.grant;
       answer = {
         decision: 'allow',
         deciderId: input.agentId,
         reason: `Cosmin allowed it: ${summary}`,
+        answeredWith,
         grant: (ctx) =>
           addSendGrant(
             ctx,
@@ -1744,6 +1752,7 @@ export class Commands implements DomainCommands {
         decision: 'allow',
         deciderId: input.agentId,
         reason: "Allowed once from Cosmin's reply.",
+        answeredWith,
       };
     }
     const since = this.log.currentSeq();
