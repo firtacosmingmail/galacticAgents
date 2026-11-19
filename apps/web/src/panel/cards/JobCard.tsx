@@ -69,11 +69,13 @@ const ruleShape = (r: RuleShape) =>
 
 /**
  * Whether approving the card grants a rule its job does not have yet — a new or a widened one —
- * which only the Mac (or a phone under `autoApproveRemote`) may approve (decision 138, as the
- * server checks). A stop, no rules, or rules the job already has grant nothing.
+ * or turns publishing on (decision 165), which only the Mac (or a phone under
+ * `autoApproveRemote`) may approve (decision 138, as the server checks). A stop, no rules, rules
+ * the job already has, or publishing kept or turned off grant nothing.
  */
 export function jobGrantsNewRules(job: ProposalJob): boolean {
   if (job.action === 'stop' || !job.draft) return false;
+  if (job.draft.publishes === true && job.before?.draft.publishes !== true) return true;
   const have = new Set((job.before?.draft.unattendedRules ?? []).map(ruleShape));
   return job.draft.unattendedRules.some((r) => !have.has(ruleShape(r)));
 }
@@ -100,6 +102,11 @@ export function jobChanges(world: JobWorld, job: ProposalJob): [string, string, 
   }
   if (rulesText(before) !== rulesText(after)) {
     changes.push(['may do without asking', rulesText(before), rulesText(after)]);
+  }
+  const wasPublishing = before.publishes === true;
+  const willPublish = after.publishes === true;
+  if (wasPublishing !== willPublish) {
+    changes.push(['publishes', wasPublishing ? 'on' : 'off', willPublish ? 'on' : 'off']);
   }
   const area = job.area;
   if (area) {
@@ -225,6 +232,11 @@ export function JobDetails({ job }: { job: ProposalJob }) {
         ) : (
           <p className="muted">Nothing — it asks for anything outside the project&apos;s rules</p>
         ))}
+      {shown?.publishes && (
+        <p className="job-publishes">
+          Publishes: its posts go out without asking each time while Auto is on
+        </p>
+      )}
       {shown?.dataMap && <DataMapView map={shown.dataMap} />}
     </>
   );

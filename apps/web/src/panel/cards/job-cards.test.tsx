@@ -352,6 +352,84 @@ describe('the job card (P10-07)', () => {
   });
 });
 
+describe('a job approved to publish on the job card (P13-32, decision 165)', () => {
+  const PUBLISHES = 'Publishes: its posts go out without asking each time while Auto is on';
+  const before: JobDraft = {
+    name: newsletter.name,
+    instructions: newsletter.instructions,
+    schedule: newsletter.schedule,
+    provider: 'claude',
+    unattendedRules: [],
+  };
+  const change = (from: boolean, to: boolean) =>
+    jobCard(
+      {
+        projectId: 'p-shop',
+        waykeeperId: 'a-wk-shop',
+        action: 'change',
+        jobId: 'j-1',
+        draft: { ...before, publishes: to },
+        before: { draft: { ...before, ...(from ? { publishes: true } : {}) }, areaId: 'ar-1' },
+        moonId: 'b-titan',
+      },
+      { id: `pr-job-${from}-${to}` },
+    );
+
+  it('shows the Publishes line when the job publishes, and not when it does not', () => {
+    const publishing = jobCard(
+      {
+        projectId: 'p-shop',
+        waykeeperId: 'a-wk-shop',
+        action: 'create',
+        draft: { ...draft, publishes: true },
+        area: { areaId: 'ar-1' },
+      },
+      { id: 'pr-job-publishing' },
+    );
+    world({ proposals: [publishing, created] });
+    show(<ProposalCard proposal={publishing} />);
+    screen.getByText(PUBLISHES);
+    cleanup();
+    show(<ProposalCard proposal={created} />);
+    expect(screen.queryByText(PUBLISHES)).toBeNull();
+  });
+
+  it('a change card shows publishing turned on or off', () => {
+    const on = change(false, true);
+    const off = change(true, false);
+    world({ proposals: [on, off] });
+    expect(jobChanges(useAppStore.getState().world, on.meta!['job'] as ProposalJob)).toEqual([
+      ['publishes', 'off', 'on'],
+    ]);
+    expect(jobChanges(useAppStore.getState().world, off.meta!['job'] as ProposalJob)).toEqual([
+      ['publishes', 'on', 'off'],
+    ]);
+    show(<ProposalCard proposal={on} />);
+    const changes = screen.getByRole('list', { name: 'changes' });
+    expect(changes.textContent).toContain('publishes: off → on');
+  });
+
+  it('on a phone without remote auto-approval, turning publishing on cannot be approved; turning it off can', () => {
+    const PHONE = { local: false, download: false, edit: false, addOutside: false };
+    const on = change(false, true);
+    const off = change(true, false);
+    world({ proposals: [on, off] });
+    render(
+      <ApiContext.Provider value={api as unknown as Api}>
+        <RulesContext.Provider value={PHONE}>
+          <ProposalCard proposal={on} />
+          <ProposalCard proposal={off} />
+        </RulesContext.Provider>
+      </ApiContext.Provider>,
+    );
+    const [onCard, offCard] = screen.getAllByRole('article');
+    const approveOn = within(onCard!).getByRole('button', { name: 'Approve' });
+    expect((approveOn as HTMLButtonElement).disabled).toBe(true);
+    const approveOff = within(offCard!).getByRole('button', { name: 'Approve' });
+    expect((approveOff as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe('the long-term card (P10-07)', () => {
   const longTerm = (extra: Partial<Proposal>, meta: Record<string, unknown>): Proposal => ({
     ...fx.proposal,
