@@ -941,6 +941,7 @@ export const JobChanges = Job.omit({
     failureQuestionId: Id.nullable(),
     nextRunAt: Timestamp.nullable(),
     runningRunId: Id.nullable(),
+    publishes: z.boolean(),
   })
   .partial();
 export type JobChanges = z.infer<typeof JobChanges>;

@@ -623,6 +623,7 @@ const DRAFT_FIELDS = [
   'followUpModel',
   'unattendedRules',
   'dataMap',
+  'publishes',
 ] as const;
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
@@ -655,6 +656,13 @@ function carryOutJobCard(
       }
       const changes: UpdateJobInput['changes'] = {};
       for (const field of DRAFT_FIELDS) {
+        // Absent `publishes` is false (decision 165): false against absent is no change.
+        if (field === 'publishes') {
+          if ((card.draft.publishes === true) !== (card.before.draft.publishes === true)) {
+            changes.publishes = card.draft.publishes === true;
+          }
+          continue;
+        }
         if (!same(card.draft[field], card.before.draft[field])) {
           (changes as Record<string, unknown>)[field] = card.draft[field];
         }
@@ -742,14 +750,23 @@ function removeJobPanels(ctx: CommandContext, card: ProposalJob, by: Actor, exce
 /**
  * A job card whose approval would add or widen unattended rules is a lasting permission grant, so
  * it follows decision 138's "Allow similar" rule: from this machine, or a remote client only with
- * `autoApproveRemote` (an unknown origin counts as remote). A card that grants nothing new — no
- * rule, rules the job already has, fewer rules, a stop — may be approved from anywhere.
+ * `autoApproveRemote` (an unknown origin counts as remote). Turning `publishes` on is one too
+ * (decision 165: in Auto the job's posts then go out without a card). A card that grants nothing
+ * new — no rule, rules the job already has, fewer rules, `publishes` kept or turned off, a stop —
+ * may be approved from anywhere.
  */
 function checkRemoteGrant(ctx: Reader, card: ProposalJob, write: PolicyWrite | undefined): void {
   if (write?.origin === 'local' || write?.autoApproveRemote) return;
   if (card.action === 'stop' || !card.draft) return;
-  const current =
-    card.action === 'change' && card.jobId ? ctx.tables.jobs.get(card.jobId)?.unattendedRules : [];
+  const job = card.action === 'change' && card.jobId ? ctx.tables.jobs.get(card.jobId) : undefined;
+  const current = card.action === 'change' && card.jobId ? job?.unattendedRules : [];
+  const turnsPublishingOn = card.draft.publishes === true && job?.publishes !== true;
+  if (turnsPublishingOn) {
+    throw new DomainError(
+      'remote_control',
+      'approve this job on the Mac: it lets its runs publish without asking each time while Auto is on (a remote client may reject it)',
+    );
+  }
   if (!grantsNewRules(card.draft.unattendedRules, current)) return;
   throw new DomainError(
     'remote_control',

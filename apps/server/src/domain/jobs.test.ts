@@ -480,6 +480,93 @@ describe('updateJob', () => {
   });
 });
 
+describe('a job approved to publish (P13-32, decision 165)', () => {
+  it('stores publishes on create (false when absent) and treats turning it on or off as a change', () => {
+    const { cmd, longTerm, tables, log, conforms } = setup();
+    const p = longTerm('b-saturn');
+    const plain = cmd((ctx) =>
+      createJob(ctx, { projectId: p.id, area: { name: 'Feedback' }, draft: DRAFT, by: USER }),
+    );
+    expect(plain.job.publishes).toBe(false);
+    const { job } = cmd((ctx) =>
+      createJob(ctx, {
+        projectId: p.id,
+        area: { name: 'Social' },
+        draft: { ...DRAFT, name: 'Post daily', publishes: true },
+        by: USER,
+      }),
+    );
+    expect(tables.jobs.get(job.id)?.publishes).toBe(true);
+    const off = log.runCommand((ctx) =>
+      updateJob(ctx, { jobId: job.id, changes: { publishes: false }, by: USER }),
+    );
+    expect(off.events.map((e) => e.event)).toEqual([
+      { type: 'job.updated', jobId: job.id, changes: { publishes: false } },
+    ]);
+    expect(tables.jobs.get(job.id)?.publishes).toBe(false);
+    // Absent in a change keeps it as it is.
+    expect(
+      log.runCommand((ctx) =>
+        updateJob(ctx, { jobId: job.id, changes: { name: 'Post daily' }, by: USER }),
+      ).events,
+    ).toEqual([]);
+    cmd((ctx) => updateJob(ctx, { jobId: job.id, changes: { publishes: true }, by: USER }));
+    expect(tables.jobs.get(job.id)?.publishes).toBe(true);
+    conforms();
+  });
+
+  it('refuses publishes when the publishing provider (follow-up, else the job’s) cannot publish', () => {
+    const { cmd, longTerm, tables, err } = setup();
+    const p = longTerm('b-saturn');
+    const before = tables.jobs.all().length;
+    const gemini = { ...DRAFT, provider: 'gemini' as const, publishes: true };
+    expect(
+      err(() =>
+        cmd((ctx) =>
+          createJob(ctx, { projectId: p.id, area: { name: 'Social' }, draft: gemini, by: USER }),
+        ),
+      ).message,
+    ).toMatch(/cannot publish/);
+    const geminiFollowUp = { ...DRAFT, followUpProvider: 'gemini' as const, publishes: true };
+    expect(
+      err(() =>
+        cmd((ctx) =>
+          createJob(ctx, {
+            projectId: p.id,
+            area: { name: 'Social' },
+            draft: geminiFollowUp,
+            by: USER,
+          }),
+        ),
+      ).message,
+    ).toMatch(/cannot publish/);
+    expect(tables.jobs.all().length).toBe(before);
+    expect(tables.areas.all().length).toBe(0);
+    // Gemini runs whose follow-up runs on Claude may publish.
+    const ok = cmd((ctx) =>
+      createJob(ctx, {
+        projectId: p.id,
+        area: { name: 'Social' },
+        draft: { ...gemini, followUpProvider: 'claude' },
+        by: USER,
+      }),
+    );
+    expect(ok.job.publishes).toBe(true);
+    // Switching a publishing job's follow-up to Gemini is refused too.
+    expect(
+      err(() =>
+        cmd((ctx) =>
+          updateJob(ctx, {
+            jobId: ok.job.id,
+            changes: { followUpProvider: 'gemini' },
+            by: USER,
+          }),
+        ),
+      ).message,
+    ).toMatch(/cannot publish/);
+  });
+});
+
 describe('setJobState', () => {
   function withFailure() {
     const s = setup();

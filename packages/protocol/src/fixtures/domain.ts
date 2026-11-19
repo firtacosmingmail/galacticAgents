@@ -243,6 +243,7 @@ export const job: Job = {
     summary: 'Nothing new.',
   },
   followUps: [],
+  publishes: false,
   createdAt: NOW,
   updatedAt: NOW,
 };

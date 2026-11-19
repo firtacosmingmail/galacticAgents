@@ -109,6 +109,7 @@ const newsletter: Job = {
   unattendedRules: [],
   state: 'active',
   followUps: [],
+  publishes: false,
   createdAt: fx.NOW,
   updatedAt: fx.NOW,
 };

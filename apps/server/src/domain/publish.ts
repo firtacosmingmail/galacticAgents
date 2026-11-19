@@ -10,7 +10,6 @@ import {
 } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
-  PROVIDER_LABEL,
   PUBLISH_ACTIONS,
   PublishContext,
   publishFingerprint,
@@ -31,7 +30,7 @@ import type { Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { askerRun, unstoppedJob } from './findings.js';
-import { jobOf, writeJob } from './jobs.js';
+import { CANNOT_PUBLISH, jobOf, writeJob } from './jobs.js';
 import { originOf, type QuestionRouting } from './question-service.js';
 import { COMMAND_SOURCE, openQuestion } from './questions.js';
 
@@ -56,9 +55,6 @@ const USER = { type: 'user' } as const;
 
 /** The approval's own word, and the refusal's. */
 const APPROVE: string = PUBLISH_ACTIONS[0];
-
-/** Runtimes that are never given a publish (global constraint: agy has `canPublish: false`). */
-const CANNOT_PUBLISH = new Map([['agy', PROVIDER_LABEL.gemini]]);
 
 /** The sha256 of a text or a file's bytes, hex — the hasher of `publishFingerprint`. */
 export function sha256(data: string | Buffer): string {
