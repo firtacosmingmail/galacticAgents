@@ -1,5 +1,5 @@
 import {
-  isGrantLive,
+  isGrantInForce,
   isJudgedKind,
   markLabel,
   needsUserQuote,
@@ -680,11 +680,11 @@ export class ApprovalWatch {
     });
   }
 
-  /** The project's live send grants as of now; none when they cannot be read. */
+  /** The scope's send grants in force now (live, not paused); none when they cannot be read. */
   private liveGrants(call: ApprovalWatchCall): SendGrant[] {
     const now = (this.deps.now ?? Date.now)();
     try {
-      return call.grants().filter((g) => isGrantLive(g, now));
+      return call.grants().filter((g) => isGrantInForce(g, now));
     } catch {
       return [];
     }
@@ -825,7 +825,7 @@ export class ApprovalWatch {
     const grantsNow = (): SendGrant[] => {
       const now = (this.deps.now ?? Date.now)();
       try {
-        return call.grants().filter((g) => isGrantLive(g, now));
+        return call.grants().filter((g) => isGrantInForce(g, now));
       } catch {
         return [];
       }

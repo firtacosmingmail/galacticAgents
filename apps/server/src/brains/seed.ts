@@ -14,6 +14,7 @@ import type { BrainQueries } from './definition.js';
 import { concernedSupervisors } from '../domain/cascade.js';
 import { jobRuns } from '../domain/job-runs.js';
 import { panelsOf } from '../domain/panels.js';
+import { grantsOf } from '../domain/send-grants.js';
 import type { WakeScope } from './wake.js';
 
 /**
@@ -72,6 +73,7 @@ export function createBrainQueries({ tables, status }: SeedSources): BrainQuerie
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt)),
     jobRuns: (jobId, limit) => jobRuns({ tables }, jobId, limit),
     panels: (projectId) => panelsOf({ tables }, projectId),
+    sendGrants: (scope) => grantsOf(tables, scope),
   };
   return queries;
 }

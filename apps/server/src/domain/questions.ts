@@ -21,6 +21,7 @@ import type { CommandContext } from './event-log.js';
 import { applyJobAnswer } from './findings.js';
 import { approvedPublish } from './publish.js';
 import { applyLimitAnswer, checkLimitAnswer } from './usage-limits.js';
+import { releaseConflictGrants } from './grant-conflicts.js';
 import { logAllowOnce } from './send-grants.js';
 import { recordForwardedAllow } from './waykeeper-approvals.js';
 
@@ -588,6 +589,8 @@ export function cancelQuestion(
     ...(dismissal?.origin ? { origin: dismissal.origin } : {}),
     ...(dismissal?.stillWaiting ? { stillWaiting: true as const } : {}),
   });
+  // A grant-conflict question closed without an answer: its grants count again (P13-34).
+  releaseConflictGrants(ctx, current, reason);
   return question;
 }
 

@@ -343,6 +343,8 @@ export function touches(event: Event, m: Members): boolean {
     case 'approval.recorded':
     case 'approval_mark.removed':
     case 'send_grant.removed':
+    case 'send_grant.paused':
+    case 'send_grant.unpaused':
       return event.projectId !== undefined && m.projects.has(event.projectId);
     case 'send_grant.added':
       return event.grant.projectId !== undefined && m.projects.has(event.grant.projectId);

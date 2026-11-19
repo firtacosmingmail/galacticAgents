@@ -27,6 +27,7 @@ import {
 import { isLive, refuseSetRow } from '../common-tools.js';
 import { checkChoice, modelInput, providerInput } from '../provider-input.js';
 import { answerSendPermissionTool } from '../send-permission-tool.js';
+import { GRANT_CONFLICT_TOOLS } from '../grant-conflict-tools.js';
 import type { BrainTool, BrainToolContext } from '../definition.js';
 import {
   EXTERNAL_CONFLICT_OPTIONS,
@@ -1073,4 +1074,5 @@ export const WAYKEEPER_TOOLS: readonly BrainTool[] = [
   requestPromotionTool,
   requestProjectClosureTool,
   answerSendPermissionTool,
+  ...GRANT_CONFLICT_TOOLS,
 ];

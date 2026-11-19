@@ -39,7 +39,9 @@ import { localStamp } from './send-permission-tool.js';
  * `agent.*` lifecycle, and permission questions (decision 7: the policy or the user resolves them,
  * never an LLM, so they do not enter any brain's mailbox) — except a held send's question
  * (`context.sendPermission`, P13-28), which wakes its decider: it turns the user's reply into an
- * answer with `answer_send_permission`, and the server checks the reply is there. Likewise
+ * answer with `answer_send_permission`, and the server checks the reply is there — and a
+ * grant-conflict question's answer or close (`context.grantConflict`, P13-34), which wakes the
+ * decider that asked it, to carry the answer out with `resolve_grant_conflict`. Likewise
  * `spend` and `publish` approvals (decisions 145, 147: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
  * they belong to a job, not to the agents above its run. The one exception is a finding's
  * "Implement it", which reaches the project's Waykeeper as a system message (`fromFinding`).
@@ -132,16 +134,25 @@ function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Que
 const decides = (q: Question, scope: WakeScope): boolean =>
   q.kind === 'permission' && q.context.sendPermission?.deciderId === scope.brainId;
 
+/** The brain asked this grant-conflict question (P13-34): it carries out Cosmin's answer. */
+const reconciles = (q: Question, scope: WakeScope): boolean =>
+  q.kind === 'permission' &&
+  q.context.grantConflict !== undefined &&
+  q.context.grantConflict.deciderId === scope.brainId;
+
 const decidesId = (questionId: Id, scope: WakeScope): boolean => {
   const q = scope.question(questionId);
-  return q !== undefined && decides(q, scope);
+  return q !== undefined && (decides(q, scope) || reconciles(q, scope));
 };
 
-/** A user's reply to an open held send's question this brain decides (P13-28), from any chat. */
+/**
+ * A user's reply to an open held send's question this brain decides (P13-28), or to its open
+ * grant-conflict question (P13-34), from any chat.
+ */
 function repliesToDecided(e: EventOfType<'message.sent'>, scope: WakeScope): boolean {
   if (e.sender.type !== 'user' || e.replyTo?.kind !== 'question') return false;
   const q = scope.question(e.replyTo.id);
-  return q?.status === 'open' && decides(q, scope);
+  return q?.status === 'open' && (decides(q, scope) || reconciles(q, scope));
 }
 
 /**
@@ -161,7 +172,7 @@ function heldSend(q: Question): string {
     send.parts.map((p) => p.text).join(' && ') || publish || q.context.toolCall?.toolName || '?';
   const grants =
     send.grants.length > 0
-      ? `; grants that did not cover it: ${send.grants.map((g) => quote(g.summary)).join(', ')}`
+      ? `; grants that did not cover it: ${send.grants.map((g) => `${quote(g.summary)} (${g.id})`).join(', ')}`
       : '; no grant covers it';
   return redactSecrets(
     `agent ${q.originAgentId} wants to send or spend, held for Cosmin in question ${q.id}: ` +
@@ -345,11 +356,13 @@ export const WAKE_RULES: WakeRules = {
       if (r.answered) return `the user answered ${r.id} (${quoted}) by replying: ${quote(e.text)}`;
       const asked = r.kind === 'question' ? s.question(r.id) : undefined;
       const permission =
-        asked && decides(asked, s)
-          ? ` — a send permission question: if the reply decides it, answer with answer_send_permission (local time now ${localStamp()})`
-          : asked?.kind === 'permission'
-            ? " — this does not decide the request: only the user's buttons on its card do"
-            : '';
+        asked && reconciles(asked, s)
+          ? ' — your grant-conflict question: it is answered only on its card; if this settles it, ask him to pick or type his answer there'
+          : asked && decides(asked, s)
+            ? ` — a send permission question: if the reply decides it, answer with answer_send_permission (local time now ${localStamp()})`
+            : asked?.kind === 'permission'
+              ? " — this does not decide the request: only the user's buttons on its card do"
+              : '';
       return `the user said (replying to ${quoted}${permission}): ${quote(e.text)}`;
     },
   },
@@ -378,6 +391,13 @@ export const WAKE_RULES: WakeRules = {
         decidesId(e.questionId, s)),
     describe: (e, s) => {
       const q = s.question(e.questionId);
+      if (q && reconciles(q, s)) {
+        return (
+          `${who(e.answeredBy, s)} answered your grant-conflict question ${e.questionId}: ` +
+          `${quote(e.answer)} — carry it out with resolve_grant_conflict (local time now ` +
+          `${localStamp()}); if it is unclear, ask him in chat first`
+        );
+      }
       const place = q && setOf(q) ? ` (${inSet(q)})` : '';
       return `${who(e.answeredBy, s)} answered ${e.questionId}${place}: ${quote(e.answer)}`;
     },
@@ -389,6 +409,13 @@ export const WAKE_RULES: WakeRules = {
       concerns(s.question(e.questionId), s) ||
       decidesId(e.questionId, s),
     describe: (e, s) => {
+      const asked = s.question(e.questionId);
+      if (asked && reconciles(asked, s)) {
+        return (
+          `your grant-conflict question ${e.questionId} closed without an answer (${e.reason}): ` +
+          'its grants count again as before'
+        );
+      }
       if (!e.by) return `${e.questionId} was withdrawn (${e.reason})`;
       // A dismissal (P9-14, decision 135): the asker must not wait for an answer.
       const q = s.question(e.questionId);

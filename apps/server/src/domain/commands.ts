@@ -21,6 +21,9 @@ import {
   type RemoveStandingApprovalInput,
   type AddApprovalMarkInput,
   type AnswerSendPermissionInput,
+  type AskGrantConflictInput,
+  type ResolveGrantConflictInput,
+  type ResolveGrantConflictResult,
   type ApprovalMark,
   type RemoveApprovalMarkInput,
   type RemoveSendGrantInput,
@@ -158,6 +161,7 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
+import { askGrantConflict, pendingConflictAbout, resolveGrantConflict } from './grant-conflicts.js';
 import {
   addSendGrant,
   checkSendPermissionAnswer,
@@ -279,6 +283,11 @@ export interface AgentControl {
    * Absent: refused.
    */
   answerHeldPublish?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
+  /**
+   * Judges again the held sends and publishes of a scope (P13-27): after a grant-conflict answer
+   * changed which grants are in force (P13-34), a held send they now cover is approved.
+   */
+  recheckHeldSends?(scope: { projectId?: Id }): void;
 }
 
 export interface CommandsOptions {
@@ -1701,6 +1710,15 @@ export class Commands implements DomainCommands {
       input.questionId,
     );
     const { replies, from } = checkSendPermissionAnswer(this.log.db, question, input);
+    // Cosmin is asked how his words fit his grants (P13-34): that answer decides this send.
+    const conflict = pendingConflictAbout(this.log.tables, question.id);
+    if (conflict) {
+      throw new DomainError(
+        'invalid',
+        `question ${conflict.id} asks Cosmin how his words fit his grants: carry out his answer ` +
+          'with resolve_grant_conflict first',
+      );
+    }
     // A publish's grant question (P13-29): no session waits on it; the runtime arms the allowance.
     const carryOut =
       question.context.sendPermission?.publish !== undefined
@@ -1758,6 +1776,28 @@ export class Commands implements DomainCommands {
           (e.type === 'question.cancelled' && e.questionId === question.id),
       );
     return { value: grant ? { grant } : {}, events };
+  }
+
+  /**
+   * A decider asks Cosmin how his new words fit the grants in force (P13-34, SPEC decision 166):
+   * checked and carried out by `askGrantConflict` — the question opened, its grants paused.
+   */
+  askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => askGrantConflict(ctx, this.log.db, input, Date.now()));
+  }
+
+  /**
+   * The decider carries out Cosmin's answer to its grant-conflict question (P13-34): checked and
+   * done in one transaction (`resolveGrantConflict`), then the scope's held sends are judged
+   * again against the grants now in force — the send he was asked about among them.
+   */
+  async resolveGrantConflict(
+    input: ResolveGrantConflictInput,
+  ): Promise<CommandResult<ResolveGrantConflictResult>> {
+    const { value, events } = await this.run((ctx) => resolveGrantConflict(ctx, input, Date.now()));
+    const { scope, ...result } = value;
+    this.agents?.recheckHeldSends?.(scope);
+    return { value: result, events };
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */

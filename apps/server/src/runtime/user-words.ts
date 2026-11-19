@@ -1,6 +1,7 @@
 import {
   PICKED_OPTION_PREFIX,
   answerDetailOf,
+  quoteFound,
   relayedQuestionOf,
   type Agent,
   type Id,
@@ -59,7 +60,10 @@ interface Said {
  * ("don't post to Instagram today") must never become task words a send is approved by, and a
  * grant's "only today" is enforced by its end time, never by a quote of the same line. The cost,
  * accepted: a new instruction typed to a decider while exactly one send card of its is open is
- * not task words either (it fails closed: a send it would cover gets a card).
+ * not task words either (it fails closed: a send it would cover gets a card). Likewise (P13-34)
+ * his answers and replies to grant-conflict questions, and every line of his to a decider that one
+ * of its grant-conflict questions quotes as his new words: how far a send may go is settled by that
+ * question and its grants alone.
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
  * Never throws: whatever cannot be read counts as no words (a push then goes to the user).
@@ -89,19 +93,29 @@ function collect(log: EventLogReader, taskId: Id): string[] {
     : [];
 
   const said: Said[] = [];
-  /** A send-permission question (Auto): his reply to it is for its grant, never a task word. */
-  const isSendQuestion = (id: Id) => tables.questions.get(id)?.context.sendPermission !== undefined;
+  /**
+   * A send-permission question (Auto), or a grant-conflict question (P13-34): his reply to it is
+   * for its grants, never a task word.
+   */
+  const isGrantQuestion = (id: Id) => {
+    const context = tables.questions.get(id)?.context;
+    return context?.sendPermission !== undefined || context?.grantConflict !== undefined;
+  };
+  const conflicts = tables.questions.all().flatMap((q) => q.context.grantConflict ?? []);
   const messagesTo = (agentId: Id, limit: number, until?: string): Said[] => {
     /** A plain line the server takes as a send-permission answer (P13-33): that answer's alone. */
     const answers = plainLineAnswer(log.db, agentId);
+    /** His words a grant-conflict question of this decider quotes (P13-34): that question's alone. */
+    const quoted = conflicts.filter((c) => c.deciderId === agentId).map((c) => c.newWords);
     return log
       .latestOf('message.sent', agentId, limit, until)
       .flatMap(({ seq, at, event }) =>
         event.type === 'message.sent' &&
         event.sender.type === 'user' &&
         event.text.trim() &&
-        !(event.replyTo?.kind === 'question' && isSendQuestion(event.replyTo.id)) &&
-        !(event.replyTo?.kind !== 'question' && answers(seq, at) !== undefined)
+        !(event.replyTo?.kind === 'question' && isGrantQuestion(event.replyTo.id)) &&
+        !(event.replyTo?.kind !== 'question' && answers(seq, at) !== undefined) &&
+        !quoted.some((words) => quoteFound(words, [event.text]))
           ? [{ at, seq, text: event.text }]
           : [],
       );
@@ -125,6 +139,7 @@ function collect(log: EventLogReader, taskId: Id): string[] {
       q.answeredBy?.type === 'user' &&
       typeof q.answer === 'string' &&
       q.context.sendPermission === undefined &&
+      q.context.grantConflict === undefined &&
       (asking.has(q.originAgentId) || relaysProject(q))
     ) {
       const texts = [...pickedActionsOf(q, q.answer), freeTextOf(q, q.answer)];

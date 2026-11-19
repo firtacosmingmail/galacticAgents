@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import {
   excerpt,
-  isGrantLive,
+  isGrantInForce,
   quoteFound,
   SEND_GRANT_MAX_DAYS,
   type Actor,
@@ -18,6 +18,7 @@ import type { Database } from '../db/database.js';
 import type { Tables } from '../db/tables.js';
 import { redactSecrets } from '../runtime/redact.js';
 import { DomainError, must } from './errors.js';
+import { cancelQuestion } from './questions.js';
 import type { CommandContext } from './event-log.js';
 import { saveStandalone, standaloneOf } from './waykeeper-approvals.js';
 
@@ -74,8 +75,8 @@ export function addSendGrant(
   return grant;
 }
 
-/** The grant `grantId` and the project it belongs to (absent: standalone), or `not_found`. */
-function findGrant(tables: Tables, grantId: Id): SendGrant {
+/** The grant `grantId` (its `projectId` absent: standalone), or `not_found`. */
+export function findGrant(tables: Tables, grantId: Id): SendGrant {
   const standalone = standaloneOf(tables).sendGrants.find((g) => g.id === grantId);
   if (standalone) return standalone;
   for (const p of tables.projects.all()) {
@@ -106,6 +107,70 @@ export function removeSendGrant(
   return takeGrant(ctx, grantId, by, reason);
 }
 
+/**
+ * Ends a grant on the decider's say, carrying out Cosmin's answer to a grant-conflict question
+ * (P13-34): only `resolveGrantConflict` calls it, after checking the answered question. Logged
+ * as `send_grant.removed` with `by` the decider. Direct removal stays the user's alone.
+ */
+export function endGrantByAnswer(
+  ctx: CommandContext,
+  grantId: Id,
+  deciderId: Id,
+  reason: string,
+): SendGrant {
+  return takeGrant(ctx, grantId, { type: 'agent', id: deciderId }, reason);
+}
+
+/** Writes `grant` back in place, in its project's row or standalone's. */
+function putGrant(ctx: CommandContext, grant: SendGrant): void {
+  const swap = (all: readonly SendGrant[]) => all.map((g) => (g.id === grant.id ? grant : g));
+  if (grant.projectId === undefined) {
+    const standalone = standaloneOf(ctx.tables);
+    saveStandalone(ctx.tables, { ...standalone, sendGrants: swap(standalone.sendGrants) });
+    return;
+  }
+  const project = must(ctx.tables.projects.get(grant.projectId), 'project', grant.projectId);
+  ctx.tables.projects.upsert({ ...project, sendGrants: swap(project.sendGrants ?? []) });
+}
+
+/** Pauses `grant` for the grant-conflict question `questionId` (P13-34): it covers nothing. */
+export function pauseGrant(ctx: CommandContext, grant: SendGrant, questionId: Id): void {
+  putGrant(ctx, { ...grant, pausedBy: questionId });
+  ctx.emit({
+    type: 'send_grant.paused',
+    grantId: grant.id,
+    ...(grant.projectId !== undefined ? { projectId: grant.projectId } : {}),
+    questionId,
+  });
+}
+
+/** Lets a grant paused by `questionId` count again (P13-34); any other grant is left alone. */
+export function unpauseGrant(
+  ctx: CommandContext,
+  grant: SendGrant,
+  questionId: Id,
+  reason: string,
+): void {
+  if (grant.pausedBy !== questionId) return;
+  const { pausedBy: _old, ...rest } = grant;
+  putGrant(ctx, rest);
+  ctx.emit({
+    type: 'send_grant.unpaused',
+    grantId: grant.id,
+    ...(grant.projectId !== undefined ? { projectId: grant.projectId } : {}),
+    questionId,
+    reason,
+  });
+}
+
+/** Every stored grant (live or not) paused by `questionId`. */
+export function grantsPausedBy(tables: Tables, questionId: Id): SendGrant[] {
+  return [
+    ...standaloneOf(tables).sendGrants,
+    ...tables.projects.all().flatMap((p) => p.sendGrants ?? []),
+  ].filter((g) => g.pausedBy === questionId);
+}
+
 function takeGrant(ctx: CommandContext, grantId: Id, by: Actor, reason: string): SendGrant {
   const grant = findGrant(ctx.tables, grantId);
   dropGrant(ctx, grant);
@@ -134,19 +199,33 @@ function dropGrant(ctx: CommandContext, grant: SendGrant): void {
   ctx.tables.projects.upsert(rest.length > 0 ? { ...row, sendGrants: rest } : row);
 }
 
-/** The grants of a scope (a project's, or standalone's when `projectId` is absent) still live. */
-export function liveGrants(tables: Tables, scope: { projectId?: Id }, now: number): SendGrant[] {
-  const all =
-    scope.projectId === undefined
-      ? standaloneOf(tables).sendGrants
-      : (tables.projects.get(scope.projectId)?.sendGrants ?? []);
-  return all.filter((g) => isGrantLive(g, now));
+/** Every stored grant of a scope (a project's, or standalone's when `projectId` is absent). */
+export function grantsOf(tables: Tables, scope: { projectId?: Id }): SendGrant[] {
+  return scope.projectId === undefined
+    ? standaloneOf(tables).sendGrants
+    : (tables.projects.get(scope.projectId)?.sendGrants ?? []);
 }
 
-/** Ends every grant of a project that ended, as the system. */
+/**
+ * The grants of a scope (a project's, or standalone's when `projectId` is absent) in force: live
+ * and not paused by a grant-conflict question (`isGrantInForce`, P13-34). Only these cover a send.
+ */
+export function liveGrants(tables: Tables, scope: { projectId?: Id }, now: number): SendGrant[] {
+  return grantsOf(tables, scope).filter((g) => isGrantInForce(g, now));
+}
+
+/**
+ * Ends every grant of a project that ended, as the system, and withdraws its open grant-conflict
+ * questions (P13-34): nothing is left to reconcile.
+ */
 export function endSendGrants(ctx: CommandContext, projectId: Id, reason: string): void {
   for (const g of ctx.tables.projects.get(projectId)?.sendGrants ?? []) {
     takeGrant(ctx, g.id, SYSTEM, reason);
+  }
+  for (const q of ctx.tables.questions.all()) {
+    if (q.status === 'open' && q.context.grantConflict?.projectId === projectId) {
+      cancelQuestion(ctx, q.id, reason);
+    }
   }
 }
 
