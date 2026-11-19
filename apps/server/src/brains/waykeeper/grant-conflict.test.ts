@@ -971,3 +971,39 @@ describe('fix round 2 (P13-34)', () => {
     }
   });
 });
+
+describe('fix round 3 (P13-34)', () => {
+  it('Replace needs his new words in full: a quote dropping "but just today" is refused', async () => {
+    const { c, grantA, questionId, resolve, grantOf } = await conflictViaCard();
+    await c.commands.answerQuestion({ questionId, answer: GRANT_CONFLICT_OPTIONS[0], by: USER });
+    await expect(
+      resolve({
+        questionId,
+        endGrantIds: [grantA.id],
+        newGrant: {
+          words: 'send all messages about the launch to the users',
+          summary: 'Launch messages',
+        },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid', message: expect.stringContaining('in full') });
+    expect(grantOf(grantA.id)!.pausedBy).toBe(questionId);
+    await resolve({
+      questionId,
+      endGrantIds: [grantA.id],
+      newGrant: { words: TODAY_WORDS, summary: 'Launch messages, today', endsAt: midnight() },
+    });
+    expect(c.ofType('send_grant.added').at(-1)!.grant.words).toBe(TODAY_WORDS);
+  });
+
+  it('Keep both needs his new words in full too', async () => {
+    const { c, questionId, resolve } = await conflictViaCard();
+    await c.commands.answerQuestion({ questionId, answer: GRANT_CONFLICT_OPTIONS[2], by: USER });
+    await expect(
+      resolve({
+        questionId,
+        endGrantIds: [],
+        newGrant: { words: 'messages about the launch to the users', summary: 'x' },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+  });
+});

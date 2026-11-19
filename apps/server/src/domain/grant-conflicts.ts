@@ -496,17 +496,20 @@ function checkPickedOption(
   const refuse = (what: string) => {
     throw new DomainError('invalid', `Cosmin picked "${picked}": ${what}`);
   };
-  const fromNewWords = newGrant !== undefined && quoteFound(newGrant.words, [conflict.newWords]);
+  // His new words in full (fix round 3): a limit such as "but just today" cannot be dropped.
+  const fromNewWords = newGrant !== undefined && newGrant.words.trim() === conflict.newWords.trim();
   if (picked === replace) {
     if ([...stored.keys()].some((id) => !ending.includes(id))) {
       refuse('end every earlier grant (endGrantIds = all of them)');
     }
-    if (!fromNewWords) refuse('make the new grant from his new words');
+    if (!fromNewWords) refuse('make the new grant from his new words, in full');
     return;
   }
   if (ending.length > 0) refuse('end no grant');
   if (picked === keepEarlier && newGrant !== undefined) refuse('make no new grant');
-  if (picked === keepBoth && !fromNewWords) refuse('make the new grant from his new words');
+  if (picked === keepBoth && !fromNewWords) {
+    refuse('make the new grant from his new words, in full');
+  }
 }
 
 /**

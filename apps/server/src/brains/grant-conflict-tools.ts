@@ -121,7 +121,7 @@ export const resolveGrantConflictTool: BrainTool = {
     "Carries out Cosmin's answer to your grant-conflict question, only after he answered. " +
     'endGrantIds = the earlier grants his answer ends (replace: all of them; keep: none); the ' +
     'others count again. newGrant when his answer keeps the new words (replace, keep both, or a ' +
-    'solution that makes one): words = his exact words, copied from the new words or his answer; ' +
+    'solution that makes one): words = his exact words — after replace or keep both, the new words in full, unchanged; after your own option or his own text, copied from the new words or his answer; ' +
     'summary = one line of what it allows; endsAt only when he gave an end ("today" → the coming ' +
     'local midnight, "this week" → the end of Sunday). Never end a grant he did not ask to end. ' +
     'When his answer is unclear, ask him in chat and do not call this yet: the grants stay paused.',
