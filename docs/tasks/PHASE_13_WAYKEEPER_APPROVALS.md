@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-33 done (2026-11-19) (branch `agent-auto-grants`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 33/33
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-34 done (2026-11-19) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 34/34
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -50,6 +50,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 23 | P13-31 | Docs and the board (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
 | 24 | P13-32 | A job approved to publish publishes in Auto (added 2026-11-19; SPEC decision 165). |
 | 25 | P13-33 | A chat line taken as a send-card answer is not task words (added 2026-11-19; SPEC decision 164). |
+| 26 | P13-34 | A conflicting grant is reconciled with Cosmin (added 2026-11-19; SPEC decision 166). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -215,3 +216,13 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
   - The line stays out of task words when Cosmin then taps Allow once, when the Steward stops first, when the decider's answer is refused, and before the decider answers (a send judged meanwhile is held, not approved by quote).
   - A plain chat line a deny was taken from is not task words either.
   - A plain chat line with no open send question, or sent while two were open, stays task words (`brains/waykeeper/send-permission.test.ts`, `runtime/user-words.test.ts`).
+
+### P13-34 — A conflicting grant is reconciled with Cosmin (added 2026-11-19)
+- **Status:** done (2026-11-19) · **Depends on:** P13-33
+- Cosmin (2026-11-19, SPEC decision 166): when his new send words conflict with a grant in force, the decider asks him how to reconcile them (replace, keep the earlier, keep both, or its own solution) and pauses the earlier grant while it asks.
+- **Acceptance:**
+  - A conflicting send-card answer or chat line → `ask_grant_conflict` opens a user-held question with the three fixed options first, then the decider's; the grants are paused (`send_grant.paused`) and a send they would cover is held while it is open.
+  - `resolve_grant_conflict` after his answer: Replace ends the grant (`send_grant.removed`, `by` the decider, reason quoting the answer), makes the new grant and the held card is answered; Keep the earlier unpauses it with no new grant; Keep both unpauses it and makes the new grant.
+  - Refused: words not his, a grant of another scope, ended or already paused by an open question; resolving before his answer, on another decider's question, twice, ending a grant not in the question, new-grant words not his; `removeSendGrant` by an agent; `answer_send_permission` while the conflict question is pending.
+  - The question dismissed or its decider stopped → grants unpaused; the project failed → grants ended and the question withdrawn; a paused grant that expired stays expired after Keep.
+  - Prompts, wake lines, the web card and the paused label (`brains/waykeeper/grant-conflict.test.ts`, `panel/cards/send-permission-card.test.tsx`, `panel/status/send-grants.test.tsx`).
