@@ -158,3 +158,68 @@ describe('the send card (P13-30)', () => {
     expect(within(article).queryByRole('list', { name: 'the command’s parts' })).toBeNull();
   });
 });
+
+describe('the grant-conflict card (P13-34)', () => {
+  const OPTIONS = [
+    'Replace the earlier grant with the new one',
+    'Keep the earlier grant and ignore the new words',
+    'Keep both',
+    'Keep the weekly grant but skip today',
+  ];
+  const conflict: Question = {
+    id: 'q-2',
+    kind: 'permission',
+    originAgentId: 'a-wk',
+    holder: { type: 'user' },
+    status: 'open',
+    context: {
+      text: 'Earlier you said: "…". Now you said: "…". These conflict. What should I do?',
+      options: OPTIONS,
+      grantConflict: {
+        deciderId: 'a-wk',
+        grants: [
+          {
+            id: 'sg-1',
+            words: 'send all launch messages this week',
+            summary: 'Launch messages, this week',
+            endsAt: '2026-11-22T22:00:00.000Z',
+          },
+        ],
+        newWords: 'send the launch messages but just today',
+        options: ['Keep the weekly grant but skip today'],
+      },
+    },
+    version: 1,
+    createdAt: fx.NOW,
+    updatedAt: fx.NOW,
+  };
+
+  it('quotes the earlier grant with its end and the new words, offers the options in order', async () => {
+    show(conflict);
+    const article = screen.getByRole('article');
+    const earlier = within(article).getByRole('list', { name: 'earlier grants' });
+    expect(earlier.textContent).toContain('“send all launch messages this week”');
+    expect(earlier.textContent).toContain('until ');
+    expect(within(article).getByLabelText('new words').textContent).toBe(
+      '“send the launch messages but just today”',
+    );
+    const buttons = within(article)
+      .getAllByRole('button')
+      .map((b) => b.textContent)
+      .filter((t) => OPTIONS.includes(t ?? ''));
+    expect(buttons).toEqual(OPTIONS);
+    expect(within(article).queryByRole('button', { name: 'Allow once' })).toBeNull();
+    expect(blocking(await axeFindings(article))).toEqual([]);
+  });
+
+  it('an option or his own words answer the question', async () => {
+    show(conflict);
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Keep both' })));
+    expect(api.answer.mock.calls[0]!.slice(0, 3)).toEqual(['q-2', 'Keep both', 1]);
+    fireEvent.change(screen.getByRole('textbox', { name: 'answer' }), {
+      target: { value: 'only the newsletter' },
+    });
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Answer' })));
+    expect(api.answer.mock.calls[1]!.slice(0, 3)).toEqual(['q-2', 'only the newsletter', 1]);
+  });
+});

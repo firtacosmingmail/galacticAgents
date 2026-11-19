@@ -8,7 +8,8 @@ import { when } from './ApprovalsLog.js';
  * or standalone work's (`projectId` undefined) in the settings. Each live grant shows what it
  * allows, the user's words, its end, how many sends it allowed and Remove — the user's only, from
  * the Mac or the phone. A grant made from the phone says so; while the scope's Auto is off the
- * grants are kept but unused, and shown "paused". Ended and removed grants are not shown.
+ * grants are kept but unused, and shown "paused". A grant a grant-conflict question paused
+ * (P13-34) says "Paused — waiting for your answer". Ended and removed grants are not shown.
  */
 export function SendGrants({
   grants,
@@ -42,6 +43,11 @@ export function SendGrants({
               {`"${g.summary}" · "${g.words}" · ${g.endsAt ? `ends ${when(g.endsAt)}` : 'no end'}`}
             </span>
             <span className="muted">{`used ${uses.get(g.id) ?? 0}×`}</span>
+            {g.pausedBy !== undefined && (
+              <span className="pill" data-question={g.pausedBy}>
+                Paused — waiting for your answer
+              </span>
+            )}
             {!autoOn && <span className="pill">paused (Auto is off)</span>}
             {g.origin === 'remote' && <span className="muted">from the phone</span>}
             <button

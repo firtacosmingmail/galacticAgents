@@ -97,6 +97,13 @@ describe('send grants (P13-30)', () => {
     expect(screen.getByText('paused (Auto is off)')).toBeTruthy();
   });
 
+  it('marks a grant a grant-conflict question paused (P13-34)', () => {
+    list([grant({ pausedBy: 'q-9' })]);
+    expect(screen.getByText('Paused — waiting for your answer')).toBeTruthy();
+    list([grant({ id: 'sg-2' })]);
+    expect(screen.getAllByText('Paused — waiting for your answer')).toHaveLength(1);
+  });
+
   it('says "from the phone" for a grant made from a remote client', () => {
     list([grant({ origin: 'remote' })]);
     expect(screen.getByText('from the phone')).toBeTruthy();
