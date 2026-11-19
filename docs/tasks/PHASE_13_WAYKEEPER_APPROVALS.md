@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-32 done (2026-11-19) (branch `agent-auto-grants`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 32/32
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-33 done (2026-11-19) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 33/33
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -49,6 +49,7 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 22 | P13-30 | Web — grants, the send card, standalone settings, log labels (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
 | 23 | P13-31 | Docs and the board (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
 | 24 | P13-32 | A job approved to publish publishes in Auto (added 2026-11-19; SPEC decision 165). |
+| 25 | P13-33 | A chat line taken as a send-card answer is not task words (added 2026-11-19; SPEC decision 164). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -203,3 +204,11 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
   - A remote approval of a card turning `publishes` on is refused (`remote_control`) without `autoApproveRemote`; turning it off remotely is allowed.
   - Storage round trip: a job with `publishes: true` reads back true; an old row (migration default) reads false (`db/long-term-tables.test.ts`).
   - Web: `JobCard` shows the Publishes line when true and not when false; the change card shows the on/off change (`panel/cards/job-cards.test.tsx`).
+
+### P13-33 — A chat line taken as a send-card answer is not task words (added 2026-11-19)
+- **Status:** done (2026-11-19) · **Depends on:** P13-31 · **Parallel with:** P13-32
+- Cosmin's choice (2026-11-19): a plain chat line to the decider counted as the answer to its only open send question (final review I2) also stayed in his task words, so a later send could be approved by a quote of it with no end time the code enforces. Now the answer records the messages it was taken from (`question.cancelled.answeredWith`, `meta.answeredWith`) and `userWordsFor` leaves them out.
+- **Acceptance:**
+  - A plain chat line consumed as the answer to the decider's only open send question is not in `userWordsFor`; the grant is still made from it; a later send in the same task that only a quote of that line would cover is held (`brains/waykeeper/send-permission.test.ts`).
+  - A plain chat line a deny was taken from is not task words either.
+  - A plain chat line with no open send question, or sent while two were open, stays task words (`brains/waykeeper/send-permission.test.ts`, `runtime/user-words.test.ts`).
