@@ -19,6 +19,8 @@ import { stewardDeclares } from '../../runtime/tool-runtimes.js';
 import { slugify, workspaceMeta } from '../../workspace/workspaces.js';
 import type { BrainQueries, BrainTool, BrainToolContext } from '../definition.js';
 import { checkChoice, modelInput, providerInput } from '../provider-input.js';
+import { answerSendPermissionTool } from '../send-permission-tool.js';
+import { GRANT_CONFLICT_TOOLS } from '../grant-conflict-tools.js';
 import { asInput, isLiving, oneOf, S, str, strings } from './input.js';
 import { findRelated, words } from './related.js';
 import { stewardPrompt as stewardTemplate } from '../steward-prompt.js';
@@ -1216,6 +1218,8 @@ export function harmonizerTools(deps: HarmonizerDeps): BrainTool[] {
     askUser,
     freePlanets,
     freeMoons,
+    answerSendPermissionTool,
+    ...GRANT_CONFLICT_TOOLS,
   ];
 }
 

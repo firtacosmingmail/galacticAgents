@@ -8,6 +8,8 @@ import {
   type HistoryEventsParams,
   type HistoryEventsResponse,
   type Id,
+  type StandaloneDecisionsParams,
+  type StandaloneDecisionsResponse,
 } from '@galactic/protocol';
 
 /**
@@ -122,6 +124,47 @@ export class HistoryEvents {
       // A full page stops at its last event; otherwise the whole window was read.
       const seq = filled ?? Math.max(after, Math.min(end, last));
       return { projectId, events, seq, hasMore: seq < last, membership };
+    })();
+  }
+
+  /**
+   * The `permission.decided` events of standalone work (P13-30; design 2026-11-18 §4.5): of the
+   * agents in no project now — the Harmonizer, and Stewards whose task has no project — paged as
+   * `read` pages, one window at a time.
+   */
+  readStandaloneDecisions(query: StandaloneDecisionsParams): StandaloneDecisionsResponse {
+    const { limit } = query;
+    const after = query.after ?? 0;
+    return this.db.transaction(() => {
+      const agents = new Set(
+        (
+          this.stmt(
+            `SELECT a.id AS id FROM agents a LEFT JOIN tasks t ON t.id = a.task_id
+              WHERE a.project_id IS NULL AND t.project_id IS NULL`,
+          ).all() as { id: Id }[]
+        ).map((r) => r.id),
+      );
+      const end = after + this.window;
+      const rows = this.stmt(
+        `SELECT id, at, payload FROM events
+          WHERE id > ? AND id <= ? AND type = 'permission.decided' ORDER BY id LIMIT ?`,
+      ).all(after, end, this.window) as { id: number; at: string; payload: string }[];
+      const events: EventEnvelope[] = [];
+      let filled: number | undefined;
+      for (const row of rows) {
+        const event = JSON.parse(row.payload) as Event;
+        if (event.type !== 'permission.decided' || !agents.has(event.agentId)) continue;
+        events.push({ seq: row.id, at: row.at, event });
+        if (events.length >= limit) {
+          filled = row.id;
+          break;
+        }
+      }
+      const last = (
+        this.stmt('SELECT COALESCE(MAX(id), 0) AS seq FROM events').get() as { seq: number }
+      ).seq;
+      const seq = filled ?? Math.max(after, Math.min(end, last));
+      return { events, seq, hasMore: seq < last };
     })();
   }
 
@@ -295,13 +338,20 @@ export function touches(event: Event, m: Members): boolean {
     case 'permission.rule_removed':
     case 'waykeeper_approvals.set':
     case 'standing_approval.removed':
-    case 'approval_mark.removed':
-    case 'approval.recorded':
       return m.projects.has(event.projectId);
+    // A standalone mark, grant or record (no projectId) belongs to no project's history.
+    case 'approval.recorded':
+    case 'approval_mark.removed':
+    case 'send_grant.removed':
+    case 'send_grant.paused':
+    case 'send_grant.unpaused':
+      return event.projectId !== undefined && m.projects.has(event.projectId);
+    case 'send_grant.added':
+      return event.grant.projectId !== undefined && m.projects.has(event.grant.projectId);
     case 'standing_approval.added':
       return m.projects.has(event.approval.projectId);
     case 'approval_mark.added':
-      return m.projects.has(event.mark.projectId);
+      return event.mark.projectId !== undefined && m.projects.has(event.mark.projectId);
     case 'control.stop':
     case 'control.cancel':
     case 'control.pause':

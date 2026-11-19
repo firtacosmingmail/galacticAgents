@@ -11,13 +11,16 @@ import {
   type Question,
   type RecordedApproval,
   type RequestOrigin,
+  type StandaloneApprovals,
   type StandingApproval,
+  emptyStandaloneApprovals,
   type ToolCall,
 } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { RULES_END_IN } from './project-rules.js';
 import { redactSecrets } from '../runtime/redact.js';
+import type { Tables } from '../db/tables.js';
 import { MAX_PRECEDENT_CHARS, precedentOf } from '../runtime/scope-watch.js';
 
 /**
@@ -29,6 +32,20 @@ import { MAX_PRECEDENT_CHARS, precedentOf } from '../runtime/scope-watch.js';
  */
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** Standalone work's approvals (no project): the one row 'standalone', empty when never written. */
+export function standaloneOf(tables: Tables): StandaloneApprovals {
+  const { id: _id, ...rest } = tables.standalone.get('standalone') ?? {
+    id: 'standalone',
+    ...emptyStandaloneApprovals(),
+  };
+  return rest;
+}
+
+/** Writes standalone work's approvals back to their row. */
+export function saveStandalone(tables: Tables, value: StandaloneApprovals): void {
+  tables.standalone.upsert({ id: 'standalone', ...value });
+}
 
 /** Turns the project's Waykeeper approvals on or off; `on` is refused for a project that ended. */
 export function setWaykeeperApprovals(
@@ -60,15 +77,17 @@ export function setWaykeeperApprovals(
 }
 
 /**
- * Stores an approval mark for `projectId`; returns it. Refused for a project that ended and when
- * `MAX_APPROVAL_MARKS` are stored. A mark with an equal match is returned as is, with no event.
+ * Stores an approval mark for `projectId` (absent: standalone work); returns it. Refused for a
+ * project that ended and when `MAX_APPROVAL_MARKS` are stored. A mark with an equal match is
+ * returned as is, with no event.
  */
 export function addApprovalMark(
   ctx: CommandContext,
-  projectId: Id,
+  projectId: Id | undefined,
   match: ApprovalMarkMatch,
   made: { example: string; fromSeq: number; by: Actor; origin: RequestOrigin },
 ): ApprovalMark {
+  if (projectId === undefined) return addStandaloneMark(ctx, match, made);
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (RULES_END_IN.has(project.state)) {
     throw new DomainError(
@@ -103,6 +122,35 @@ export function addApprovalMark(
   return mark;
 }
 
+function addStandaloneMark(
+  ctx: CommandContext,
+  match: ApprovalMarkMatch,
+  made: { example: string; fromSeq: number; by: Actor; origin: RequestOrigin },
+): ApprovalMark {
+  const standalone = standaloneOf(ctx.tables);
+  const key = JSON.stringify(match);
+  const same = standalone.approvalMarks.find((m) => JSON.stringify(m.match) === key);
+  if (same) return same;
+  if (standalone.approvalMarks.length >= MAX_APPROVAL_MARKS) {
+    throw new DomainError(
+      'invalid',
+      `standalone work already has ${MAX_APPROVAL_MARKS} approval marks`,
+    );
+  }
+  const mark: ApprovalMark = {
+    id: `am-${randomUUID()}`,
+    match,
+    example: made.example,
+    createdBy: made.by,
+    createdAt: ctx.now,
+    origin: made.origin,
+    fromSeq: made.fromSeq,
+  };
+  saveStandalone(ctx.tables, { ...standalone, approvalMarks: [...standalone.approvalMarks, mark] });
+  ctx.emit({ type: 'approval_mark.added', mark });
+  return mark;
+}
+
 /**
  * A mark's example (P13-16): the request in one redacted line, at most `MAX_PRECEDENT_CHARS` (the
  * mark's `example` cap) — a Bash call as its command, any other call as `precedentOf` writes it.
@@ -116,14 +164,27 @@ export function markExample(call: ToolCall): string {
   return line.length <= MAX_PRECEDENT_CHARS ? line : `${line.slice(0, MAX_PRECEDENT_CHARS - 1)}…`;
 }
 
-/** Removes one approval mark; `not_found` when the project has no such mark. */
+/** Removes one approval mark; `not_found` when the project (absent: standalone) has no such mark. */
 export function removeApprovalMark(
   ctx: CommandContext,
-  projectId: Id,
+  projectId: Id | undefined,
   markId: Id,
   by: Actor,
   reason: string,
 ): ApprovalMark {
+  if (projectId === undefined) {
+    const standalone = standaloneOf(ctx.tables);
+    const found = standalone.approvalMarks.find((m) => m.id === markId);
+    if (!found) {
+      throw new DomainError('not_found', `standalone work has no approval mark ${markId}`);
+    }
+    saveStandalone(ctx.tables, {
+      ...standalone,
+      approvalMarks: standalone.approvalMarks.filter((m) => m.id !== markId),
+    });
+    ctx.emit({ type: 'approval_mark.removed', markId, by, reason });
+    return found;
+  }
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   const mark = project.approvalMarks?.find((m) => m.id === markId);
   if (!mark) {
@@ -137,14 +198,24 @@ export function removeApprovalMark(
 }
 
 /**
- * Records an approval on the project, keeping the newest `MAX_RECORDED_APPROVALS`. Refused for a
- * project that ended: its records are gone and stay gone.
+ * Records an approval on the project — or on standalone work's approvals when `projectId` is
+ * undefined (P13-27) — keeping the newest `MAX_RECORDED_APPROVALS`. Refused for a project that
+ * ended: its records are gone and stay gone.
  */
 export function recordApproval(
   ctx: CommandContext,
-  projectId: Id,
+  projectId: Id | undefined,
   approval: RecordedApproval,
 ): void {
+  if (projectId === undefined) {
+    const standalone = standaloneOf(ctx.tables);
+    saveStandalone(ctx.tables, {
+      ...standalone,
+      recordedApprovals: [...standalone.recordedApprovals, approval].slice(-MAX_RECORDED_APPROVALS),
+    });
+    ctx.emit({ type: 'approval.recorded', approval });
+    return;
+  }
   const project = must(ctx.tables.projects.get(projectId), 'project', projectId);
   if (RULES_END_IN.has(project.state)) {
     throw new DomainError(
@@ -273,14 +344,28 @@ export function recordForwardedAllow(
   if (!isJudgedKind(forward.kind)) return;
   // A push or an upload can never become a standing approval (P13-10): no repeat to count.
   if (isPushOrUpload(question.context)) return;
-  const projectId = projectIdOfAsker(ctx, question);
-  const project = projectId ? ctx.tables.projects.get(projectId) : undefined;
-  if (!project || RULES_END_IN.has(project.state)) return;
-  recordApproval(ctx, project.id, {
+  const approval: RecordedApproval = {
     kind: forward.kind,
     summary: precedentOf(call),
     agentId: question.originAgentId,
     questionId: question.id,
     at: ctx.now,
-  });
+  };
+  const projectId = projectIdOfAsker(ctx, question);
+  if (projectId === undefined) {
+    // An asteroid's Steward (P13-27): its approvals are standalone work's, the Harmonizer's.
+    if (isAsteroidSteward(ctx, question.originAgentId)) recordApproval(ctx, undefined, approval);
+    return;
+  }
+  const project = ctx.tables.projects.get(projectId);
+  if (!project || RULES_END_IN.has(project.state)) return;
+  recordApproval(ctx, project.id, approval);
+}
+
+/** A Steward of a task outside any project (an asteroid). */
+function isAsteroidSteward(ctx: CommandContext, agentId: Id): boolean {
+  const agent = ctx.tables.agents.get(agentId);
+  if (agent?.role !== 'steward' || !agent.taskId || agent.projectId) return false;
+  const task = ctx.tables.tasks.get(agent.taskId);
+  return task !== undefined && task.projectId === undefined;
 }

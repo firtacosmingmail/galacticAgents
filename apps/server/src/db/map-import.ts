@@ -10,6 +10,7 @@ import {
   type ExportedEvent,
   type ExportedRows,
   type Id,
+  type StandaloneApprovals,
   type WorldState,
 } from '@galactic/protocol';
 import { EventLog } from '../domain/event-log.js';
@@ -156,6 +157,19 @@ export function foldRows(seed: readonly Body[], events: readonly ExportedEvent[]
     jobs: Object.values(world.jobs ?? {}),
     panels: Object.values(world.panels ?? {}),
   };
+}
+
+/**
+ * Standalone work's marks, grants and recorded approvals as the log folds them: the one row
+ * 'standalone' (migration 0022), which the export's rows do not list, so it is always the log's.
+ */
+export function foldStandalone(events: readonly ExportedEvent[]): StandaloneApprovals {
+  let world: WorldState = emptyWorld();
+  for (const e of events) {
+    const envelope = { seq: e.seq, at: e.at, event: e.event } as unknown as EventEnvelope;
+    world = (applyEvent(world, envelope) as WorldState | undefined) ?? world;
+  }
+  return world.standalone;
 }
 
 /** JSON with sorted keys: two rows are equal when their canonical forms are. */
@@ -358,6 +372,14 @@ export async function importMap(
         );
       }
       writeRows(t, rows, data.rows);
+      const standalone = foldStandalone(data.events);
+      if (
+        standalone.approvalMarks.length > 0 ||
+        standalone.sendGrants.length > 0 ||
+        standalone.recordedApprovals.length > 0
+      ) {
+        t.standalone.upsert({ id: 'standalone', ...standalone });
+      }
       let chunks = 0;
       if (data.transcripts) {
         const chunk = db.prepare(

@@ -472,6 +472,23 @@ function StewardSourcesEditor({ id, draft, setDraft, disabled }: EditorProps<boo
   );
 }
 
+function StandaloneAutoEditor({ id, draft, setDraft, disabled }: EditorProps<boolean>) {
+  return (
+    <div className="set-field">
+      <label className="set-check" htmlFor={id}>
+        <input
+          id={id}
+          type="checkbox"
+          checked={draft}
+          disabled={disabled}
+          onChange={(e) => setDraft(e.target.checked)}
+        />
+        Auto for standalone tasks
+      </label>
+    </div>
+  );
+}
+
 const BRAIN_MCP: { value: BrainUserMcp; label: string; hint: string }[] = [
   {
     value: 'none',
@@ -658,6 +675,23 @@ export const APP_NAME: SectionSpec<string> = {
   validate: validateAppName,
   toPatch: (d) => ({ appName: d.trim() === '' ? null : d.trim() }),
   Editor: AppNameEditor,
+};
+
+/**
+ * Auto for standalone tasks (P13-30; design 2026-11-18 §4.5): the switch of the "Standalone
+ * tasks" section, whose page footer adds their marks, send grants and approvals log. On the
+ * settings page only, and only for a server that sends the setting. Turning it on works from the
+ * Mac (or where `autoApproveRemote` allows); turning it off from anywhere.
+ */
+export const STANDALONE_AUTO: SectionSpec<boolean> = {
+  field: 'standaloneAuto',
+  title: 'Standalone tasks',
+  intro:
+    'In Auto, the Harmonizer approves a standalone task’s requests without asking you, except your “Always asks me” marks and a send or spend no grant covers: for those it asks you, and your reply can become a grant. Off: every request asks you as a card.',
+  fromSettings: (s) => s.standaloneAuto === true,
+  validate: () => undefined,
+  toPatch: (d) => ({ standaloneAuto: d }),
+  Editor: StandaloneAutoEditor,
 };
 
 /** A section of any draft type (the list below mixes them; each is used with its own). */

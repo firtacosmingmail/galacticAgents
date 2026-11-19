@@ -6,6 +6,7 @@ import type {
   Event,
   EventEnvelope,
   Id,
+  Question,
   ToolDefinition,
 } from '@galactic/protocol';
 import { leadingSlashCommand } from '@galactic/protocol';
@@ -498,9 +499,48 @@ export class BrainRunner {
     } else if (this.shouldReset()) {
       this.startReset();
     } else {
+      this.nudgeUnresolvedConflicts();
       this.schedule();
     }
     this.notify();
+  }
+
+  /** Grant-conflict questions this runner already re-woke its brain about (P13-34). */
+  private readonly nudged = new Set<Id>();
+
+  /**
+   * A turn ended with nothing waiting while Cosmin's answer to a grant-conflict question of the
+   * brain's scope is still not carried out (P13-34, fix round 1): one more turn reminds it, once
+   * per question, so a turn that ended without `resolve_grant_conflict` does not strand the
+   * paused grants. The seed lists it every turn as well.
+   */
+  private nudgeUnresolvedConflicts(): void {
+    if (this.mailbox.length > 0) return;
+    const scope =
+      this.placement.projectId !== undefined
+        ? { projectId: this.placement.projectId }
+        : this.definition.role === 'harmonizer'
+          ? {}
+          : undefined;
+    if (!scope) return;
+    let pending: Question[];
+    try {
+      pending = this.opts.queries.unresolvedGrantConflicts?.(scope) ?? [];
+    } catch (error) {
+      this.onError(error, `brain ${this.id ?? this.definition.role} grant conflicts`);
+      return;
+    }
+    for (const q of pending) {
+      if (this.nudged.has(q.id)) continue;
+      this.nudged.add(q.id);
+      this.mailbox.push(
+        this.noteItem(
+          `Cosmin answered your grant-conflict question ${q.id} (${JSON.stringify(q.answer ?? '')}) ` +
+            'and it is not carried out yet: call resolve_grant_conflict, or ask him in chat if ' +
+            'his answer is unclear (the grants stay paused meanwhile)',
+        ),
+      );
+    }
   }
 
   private schedule(): void {

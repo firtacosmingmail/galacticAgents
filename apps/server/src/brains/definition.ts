@@ -9,6 +9,7 @@ import type {
   Job,
   JobRun,
   Panel,
+  SendGrant,
   Project,
   Proposal,
   Question,
@@ -65,6 +66,13 @@ export interface BrainQueries {
   jobRuns(jobId: Id, limit: number): JobRun[];
   /** The project's dashboard panels, in dashboard order (P15-05). */
   panels(projectId: Id): Panel[];
+  /** Every stored send grant of a scope (a project's, or standalone's), paused ones too (P13-34). */
+  sendGrants(scope: { projectId?: Id }): SendGrant[];
+  /**
+   * The scope's grant-conflict questions Cosmin answered that nobody carried out yet (P13-34),
+   * oldest first: its decider's to finish with `resolve_grant_conflict`.
+   */
+  unresolvedGrantConflicts(scope: { projectId?: Id }): Question[];
 }
 
 /** What a tool handler gets besides its input. */

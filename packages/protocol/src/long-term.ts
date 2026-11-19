@@ -16,6 +16,7 @@ import { Id, Meta, Timestamp } from './primitives.js';
  */
 
 export {
+  APPROVED_ON_OPEN,
   FindingContext,
   JobFailureContext,
   LONG_TERM_LIMITS,
@@ -165,6 +166,11 @@ export const Job = z.object({
   followUps: z.array(FollowUp).default([]),
   /** Where the job's data comes from and what it does with it (absent on older jobs). */
   dataMap: JobDataMap.optional(),
+  /**
+   * Cosmin approved on the job's card that its runs publish; in Auto a run's publish goes out
+   * without a publish card — decision 165.
+   */
+  publishes: z.boolean().default(false),
   createdAt: Timestamp,
   updatedAt: Timestamp,
   meta: Meta.optional(),
@@ -214,6 +220,8 @@ export const JobDraft = Job.pick({
   limitQuestionId: true,
   dataMap: true,
 }).extend({
+  /** `Job.publishes`; absent means false (older drafts and cards carry none). */
+  publishes: z.boolean().optional(),
   unattendedRules: z
     .array(
       JobRule.omit({ origin: true }).extend({ id: Id.optional(), label: z.string().optional() }),

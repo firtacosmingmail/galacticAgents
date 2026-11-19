@@ -275,8 +275,8 @@ describe('SDK request judge: hard rules in code', () => {
   });
 });
 
-describe('SDK request judge: Auto mode', () => {
-  const auto: RequestJudgeInput = { ...input, mode: 'auto' };
+describe('SDK request judge: task mode and the send-or-spend field', () => {
+  const grantsInput: RequestJudgeInput = { ...input, mode: 'grants', grants: [] };
   const answer = {
     verdict: 'approve',
     reason: 'reads only',
@@ -285,41 +285,9 @@ describe('SDK request judge: Auto mode', () => {
     sendsOrSpends: false,
   };
 
-  it('approves a git push the server cleared without a quote, never in task mode (P13-20)', async () => {
-    const push = {
-      ...auto,
-      request: {
-        ...auto.request,
-        categories: ['push' as const],
-        parts: [{ text: 'git push origin feat', categories: ['push' as const] }],
-      },
-    };
-    expect((await setup(json(answer)).judge.judge(push, signal())).verdict).toBe('forward');
-    const cleared = setup(json(answer));
-    expect((await cleared.judge.judge({ ...push, pushesCleared: true }, signal())).verdict).toBe(
-      'approve',
-    );
-    expect(String(cleared.sdk.calls[0]!.prompt)).toContain('Pushes cleared: yes');
-    const task = setup(json(answer));
-    expect(
-      (await task.judge.judge({ ...push, mode: 'task', pushesCleared: true }, signal())).verdict,
-    ).toBe('forward');
-  });
-
-  it('uses the Auto prompt, not the task prompt', async () => {
+  it('gives grants mode its own parts wording: the send/spend test, never task fit', async () => {
     const { sdk, judge } = setup(json(answer));
-    await judge.judge(auto, signal());
-    const sys = String(sdk.calls[0]!.options.systemPrompt);
-    expect(sys).toMatch(/sends/);
-    expect(sys).toMatch(/spends/);
-    expect(sys).toMatch(/sendsOrSpends/);
-    expect(sys).toMatch(/untrusted data/i);
-    expect(sys).not.toContain('read versus write against the purpose');
-  });
-
-  it('gives Auto its own parts wording: the send/spend test, never task fit', async () => {
-    const { sdk, judge } = setup(json(answer));
-    await judge.judge(auto, signal());
+    await judge.judge(grantsInput, signal());
     const sys = String(sdk.calls[0]!.options.systemPrompt);
     expect(sys).toContain('Every part of a command must pass the send-or-spend test');
     expect(sys).toMatch(/a later part .* sends or spends is the worst mistake/);
@@ -349,16 +317,9 @@ describe('SDK request judge: Auto mode', () => {
     expect(v.sendsOrSpends).toBeUndefined();
   });
 
-  it('passes sendsOrSpends through', async () => {
-    const v = await setup(json(answer)).judge.judge(auto, signal());
-    expect(v).toMatchObject({ verdict: 'approve', sendsOrSpends: false });
-  });
-
-  it('forwards an unreadable answer when sendsOrSpends is missing or not a boolean', async () => {
-    const { sendsOrSpends: _drop, ...without } = answer;
-    expect(await setup(json(without)).judge.judge(auto, signal())).toEqual(UNREADABLE);
+  it('forwards an unreadable answer when sendsOrSpends is not a boolean', async () => {
     expect(
-      await setup(json({ ...answer, sendsOrSpends: 'no' })).judge.judge(auto, signal()),
+      await setup(json({ ...answer, sendsOrSpends: 'no' })).judge.judge(grantsInput, signal()),
     ).toEqual(UNREADABLE);
   });
 
@@ -367,14 +328,146 @@ describe('SDK request judge: Auto mode', () => {
     const v = await setup(json({ ...answer, sendsOrSpends: true })).judge.judge(plain, signal());
     expect(v).toMatchObject({ verdict: 'approve', sendsOrSpends: true });
   });
+});
 
-  it('forwards an approved send or spend without a quote of the user words', async () => {
-    const sends = { ...answer, sendsOrSpends: true };
-    expect((await setup(json(sends)).judge.judge(auto, signal())).verdict).toBe('forward');
-    const bad = setup(json({ ...sends, quote: 'send the message now, thanks' }));
-    expect((await bad.judge.judge(auto, signal())).verdict).toBe('forward');
-    const good = setup(json({ ...sends, quote: 'review PR 42 of this repo' }));
-    const v = await good.judge.judge(auto, signal());
-    expect(v).toMatchObject({ verdict: 'approve', sendsOrSpends: true });
+describe('SDK request judge: grants mode (P13-25)', () => {
+  const grant = {
+    id: 'g1',
+    words: 'You may post the release notes to #releases this week',
+    summary: 'post release notes to #releases',
+    createdAt: '2026-11-18T10:00:00.000Z',
+    endsAt: '2026-11-25T10:00:00.000Z',
+    createdBy: { kind: 'user' },
+    origin: { kind: 'standalone' },
+    questionId: 'q9',
+  } as unknown as NonNullable<RequestJudgeInput['grants']>[number];
+  const noEnd = { ...grant, id: 'g2', endsAt: undefined };
+  const grants: RequestJudgeInput = { ...input, mode: 'grants', grants: [grant, noEnd] };
+  const answer = {
+    verdict: 'approve',
+    reason: 'covered',
+    kind: 'slack post',
+    similarTo: [],
+    sendsOrSpends: true,
+    grantId: 'g1',
+  };
+
+  it('uses its own prompt: the send/spend definition, no push rules, unsure means true', async () => {
+    const { sdk, judge } = setup(json(answer));
+    await judge.judge(grants, signal());
+    const sys = String(sdk.calls[0]!.options.systemPrompt);
+    expect(sys).toContain('A part that **sends** (messages, emails');
+    expect(sys).toContain('**spends** (ads, purchases');
+    expect(sys).toContain('A git push to a branch and a pull request are not sends');
+    expect(sys).toContain('When unsure, sendsOrSpends is true');
+    expect(sys).toMatch(/untrusted data/i);
+    expect(sys).not.toContain('Pushes cleared');
+    expect(sys).not.toContain('Pushes and uploads');
+    expect(sys).not.toContain('read versus write against the purpose');
+  });
+
+  it('lists each grant with id, summary, words and end time inside the fence', async () => {
+    const { sdk, judge } = setup(json(answer));
+    await judge.judge(grants, signal());
+    const text = String(sdk.calls[0]!.prompt);
+    const fence = /^(~{8,})$/m.exec(text)![1]!;
+    const inside = text.slice(text.indexOf(fence), text.lastIndexOf(fence));
+    expect(inside).toContain(
+      'id=g1 summary: post release notes to #releases; ends: 2026-11-25T10:00:00.000Z; words: You may post',
+    );
+    expect(inside).toContain('id=g2 summary: post release notes to #releases; ends: no end;');
+  });
+
+  it('approves a send covered by a live grant and keeps grantId and summary', async () => {
+    const { judge } = setup(json({ ...answer, summary: 'posts the notes to #releases' }));
+    const v = await judge.judge(grants, signal());
+    expect(v.verdict).toBe('approve');
+    expect(v.grantId).toBe('g1');
+    expect(v.summary).toBe('posts the notes to #releases');
+  });
+
+  it('approves what does not send or spend, and a send covered by a quote', async () => {
+    const plain = setup(
+      json({
+        verdict: 'approve',
+        reason: 'reads',
+        kind: 'read',
+        similarTo: [],
+        sendsOrSpends: false,
+      }),
+    );
+    expect((await plain.judge.judge(grants, signal())).verdict).toBe('approve');
+    const quoted = setup(
+      json({
+        verdict: 'approve',
+        reason: 'asked',
+        kind: 'post',
+        similarTo: [],
+        sendsOrSpends: true,
+        quote: 'Please review PR 42 of this repo.',
+      }),
+    );
+    const v = await quoted.judge.judge(grants, signal());
+    expect(v.verdict).toBe('approve');
+    expect(v.quote).toBe('Please review PR 42 of this repo.');
+  });
+
+  it('forwards a send whose quote is not in the user words', async () => {
+    const { judge } = setup(
+      json({ ...answer, grantId: undefined, quote: 'Post everything to every channel' }),
+    );
+    expect((await judge.judge(grants, signal())).verdict).toBe('forward');
+  });
+
+  it('forwards a send nothing covers, even when the model said approve', async () => {
+    const { judge } = setup(json({ ...answer, grantId: undefined }));
+    const v = await judge.judge(grants, signal());
+    expect(v.verdict).toBe('forward');
+    expect(v.sendsOrSpends).toBe(true);
+  });
+
+  it('is malformed without sendsOrSpends', async () => {
+    const { judge } = setup(json({ ...answer, sendsOrSpends: undefined }));
+    expect(await judge.judge(grants, signal())).toEqual(UNREADABLE);
+  });
+
+  it('is malformed when the grantId is not among the input grants', async () => {
+    const { judge } = setup(json({ ...answer, grantId: 'nope' }));
+    expect(await judge.judge(grants, signal())).toEqual(UNREADABLE);
+    const none = setup(json(answer));
+    expect(await none.judge.judge({ ...grants, grants: [] }, signal())).toEqual(UNREADABLE);
+  });
+
+  it('cuts the summary to 200 characters and redacts it', async () => {
+    const { judge } = setup(
+      json({
+        ...answer,
+        summary: `token sk-ant-api03-abcdefghijklmnopqrstuvwxyz ${'x'.repeat(400)}`,
+      }),
+    );
+    const v = await judge.judge(grants, signal());
+    expect(v.summary!.length).toBeLessThanOrEqual(200);
+    expect(v.summary).not.toContain('abcdefghijklmnopqrstuvwxyz');
+  });
+
+  it('does not ask a git push for a quote', async () => {
+    const push = {
+      ...grants,
+      request: {
+        ...grants.request,
+        categories: ['push' as const],
+        parts: [{ text: 'git push origin feat', categories: ['push' as const] }],
+      },
+    };
+    const { judge } = setup(
+      json({
+        verdict: 'approve',
+        reason: 'branch push',
+        kind: 'push',
+        similarTo: [],
+        sendsOrSpends: false,
+      }),
+    );
+    expect((await judge.judge(push, signal())).verdict).toBe('approve');
   });
 });

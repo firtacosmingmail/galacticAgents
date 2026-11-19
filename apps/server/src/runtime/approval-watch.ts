@@ -1,4 +1,5 @@
 import {
+  isGrantInForce,
   isJudgedKind,
   markLabel,
   needsUserQuote,
@@ -12,10 +13,15 @@ import {
   type RequestJudge,
   type RequestJudgeInput,
   type RequestVerdict,
+  type SendGrant,
+  type SendPermissionContext,
   type StandingApproval,
+  type AllowedBy,
   type ToolCall,
   type WaykeeperForward,
 } from '@galactic/protocol';
+import { homedir } from 'node:os';
+import { isAbsolute, resolve, sep } from 'node:path';
 import { markCovers } from '../domain/approval-marks.js';
 import {
   gitPushOf,
@@ -34,6 +40,236 @@ import { SCOPE_JUDGE_TIMEOUT_MS } from './scope-watch.js';
 const MAX_KIND_CHARS = 200;
 /** The longest judge reason kept (events, the activity line, the transcript, the card). */
 export const MAX_REASON_CHARS = 300;
+
+/**
+ * The categories that stay on this machine (P13-26; design 2026-11-18 §4.2 step 2): reads,
+ * writes, edits and deletes of files, anywhere. A request whose every part is only these, none
+ * opaque, and that is a file tool or only `LOCAL_FILE_COMMANDS` (`onlyFileWork`) is approved in
+ * Auto without the judge. Anything else — running a command, the network, a push, an
+ * unclassified call — may send or spend and goes to the judge.
+ */
+export const LOCAL_ONLY_CATEGORIES: ReadonlySet<PermissionAction> = new Set<PermissionAction>([
+  'read_workspace',
+  'edit_workspace',
+  'destructive',
+  'outside_workspace',
+]);
+
+/** The tools that only read or change files: approved in Auto without the judge (P13-26). */
+export const LOCAL_FILE_TOOLS: ReadonlySet<string> = new Set([
+  'Read',
+  'Write',
+  'Edit',
+  'MultiEdit',
+  'NotebookEdit',
+  'Glob',
+  'Grep',
+  'LS',
+]);
+
+/**
+ * The shell commands that only read or change files (P13-26): a Bash request each of whose
+ * parts runs one of these, by its bare name, is approved in Auto without the judge. A path to a
+ * binary, `sudo`/`doas` or any other wrapper or runner in front, an environment assignment other
+ * than `LANG`/`LC_*` (`PATH`, `LD_PRELOAD`, … change what runs), `find` with `-exec`/`-execdir`/
+ * `-ok`/`-okdir`, and `diff` with `-l`/`--paginate` (it runs `pr`) all go to the judge. Not here:
+ * `sed` (its `e` flag and command run shell code) and `rg` (`--pre`, `--hostname-bin` and more
+ * run a program).
+ */
+export const LOCAL_FILE_COMMANDS: ReadonlySet<string> = new Set([
+  'cat',
+  'head',
+  'tail',
+  'wc',
+  'ls',
+  'find',
+  'grep',
+  'diff',
+  'stat',
+  'file',
+  'mkdir',
+  'touch',
+  'cp',
+  'mv',
+  'rm',
+  'rmdir',
+  'ln',
+  'chmod',
+]);
+
+/** The only environment assignments a file command may carry: the locale. */
+const LOCALE_ASSIGNMENT = /^(?:LANG|LC_[A-Za-z0-9_]*)=/;
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** What may run something else or reach the network from inside a file command's words. */
+const HIDDEN_RUN = /\$\(|`|<\(|>\(|\/dev\/(?:tcp|udp)\//;
+const FIND_RUNS = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+/**
+ * `diff -l`/`--paginate` pipes through `pr` (GNU and BSD): a short-option group holding `l`, or
+ * any long option starting `--p` (GNU takes an unambiguous prefix: `--pag` is `--paginate`).
+ */
+const DIFF_RUNS = (a: string) => /^-[a-zA-Z0-9]*l/.test(a) || a.startsWith('--p');
+
+/** The file tools that write: their target must not be a program folder. */
+const WRITING_FILE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
+
+/**
+ * Where network and external file systems are mounted (final review M2): `/Volumes` (SMB, NFS,
+ * external disks on macOS) and `/net` (the automounter). A file put there may leave the machine.
+ */
+const NETWORK_MOUNTS = ['/Volumes', '/net'];
+
+/**
+ * Whether a path is in a program folder (P13-26, review): a directory on PATH (or the folder
+ * itself), or any path with a segment named `bin` or `sbin`. A file put there shadows a command
+ * the next call runs. A path under a network or external mount (`NETWORK_MOUNTS`) counts too: a
+ * file put there may leave the machine. `~` and relative paths resolve against the Steward's home
+ * and cwd; on macOS the comparison ignores case, as its file system does.
+ */
+export type ProgramFolderTest = (path: string) => boolean;
+
+export function programFolderTest(
+  ctx: PolicyContext,
+  pathEnv: string | undefined,
+  caseInsensitive: boolean,
+): ProgramFolderTest {
+  const fold = (p: string) => (caseInsensitive ? p.toLowerCase() : p);
+  const cwd = ctx.cwd ?? ctx.workspace;
+  const absolute = (p: string): string => {
+    if (p === '~' || p.startsWith('~/')) return resolve(ctx.home ?? homedir(), p.slice(2));
+    return isAbsolute(p) ? resolve(p) : resolve(cwd, p);
+  };
+  const dirs = (pathEnv ?? '')
+    .split(':')
+    .filter((d) => d.length > 0)
+    .map((d) => fold(absolute(d)));
+  const mounts = NETWORK_MOUNTS.map(fold);
+  return (raw: string) => {
+    if (raw.length === 0) return false;
+    const p = fold(absolute(raw));
+    if (p.split(sep).some((seg) => seg === 'bin' || seg === 'sbin')) return true;
+    if (mounts.some((m) => p === m || p.startsWith(m + sep))) return true;
+    return dirs.some((d) => p === d || p.startsWith(d.endsWith(sep) ? d : d + sep));
+  };
+}
+
+/** The characters the shell expands in a word when unquoted: globs, braces, `~`, `$`, … */
+const UNQUOTED_EXPANSION = new Set(['*', '?', '[', ']', '{', '}', '$', '`', '\\', '~']);
+/** The characters the shell still expands inside double quotes. */
+const DOUBLE_QUOTED_EXPANSION = new Set(['$', '`', '\\']);
+
+/**
+ * Whether a shell part's raw text holds any expansion (P13-26, review): an unquoted glob or
+ * brace (`*`, `?`, `[`, `]`, `{`, `}`), a `$`, a backtick or a backslash (unquoted or in double
+ * quotes), or a `~` other than a word's leading `~/` or a bare `~`. The words checked against
+ * program folders are then the words the command gets. Inside single quotes all is literal.
+ */
+export function hasShellExpansion(text: string): boolean {
+  let quote: "'" | '"' | undefined;
+  let wordStart = true;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    const atWordStart = wordStart;
+    wordStart = false;
+    if (quote === "'") {
+      if (c === "'") quote = undefined;
+      continue;
+    }
+    if (quote === '"') {
+      if (c === '"') quote = undefined;
+      else if (DOUBLE_QUOTED_EXPANSION.has(c)) return true;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      quote = c;
+      continue;
+    }
+    if (/\s/.test(c)) {
+      wordStart = true;
+      continue;
+    }
+    if (c === '~') {
+      const next = text[i + 1];
+      if (atWordStart && (next === undefined || next === '/' || /\s/.test(next))) continue;
+      return true;
+    }
+    if (UNQUOTED_EXPANSION.has(c)) return true;
+  }
+  return false;
+}
+
+/** The commands whose `-t DIR` / `--target-directory=DIR` names where files go. */
+const TARGET_DIRECTORY_COMMANDS = new Set(['cp', 'mv', 'ln']);
+
+/**
+ * The path a shell word names, or `undefined` for an option: a redirect's target (`>x`, `2>>x`,
+ * `&>x`), a long option's value (`--target-directory=x`) and, for cp/mv/ln, an attached `-t`
+ * value (`-tDIR`, `-sftDIR`) count.
+ */
+function pathOfWord(word: string, head: string): string | undefined {
+  const w = word.replace(/^(?:\d*>>?|&>>?|<)/, '');
+  if (w.startsWith('--')) {
+    const eq = w.indexOf('=');
+    return eq >= 0 ? w.slice(eq + 1) : undefined;
+  }
+  if (w.startsWith('-')) {
+    if (!TARGET_DIRECTORY_COMMANDS.has(head)) return undefined;
+    const attached = /^-[A-Za-z]*t(.+)$/.exec(w);
+    return attached ? attached[1] : undefined;
+  }
+  return w;
+}
+
+/**
+ * Whether one readable shell part runs a `LOCAL_FILE_COMMANDS` command and nothing else, naming
+ * no program folder (any path word: a copy, link, move, touch, mkdir or chmod target, a redirect).
+ */
+function isFileCommand(text: string, inProgramFolder: ProgramFolderTest): boolean {
+  if (HIDDEN_RUN.test(text)) return false;
+  const words = text.trim().split(/\s+/);
+  let i = 0;
+  while (i < words.length && ENV_ASSIGNMENT.test(words[i]!)) {
+    if (!LOCALE_ASSIGNMENT.test(words[i]!)) return false;
+    i++;
+  }
+  const head = words[i];
+  if (head === undefined || !LOCAL_FILE_COMMANDS.has(head)) return false;
+  // Quotes do not hide an option from the shell: `'-exec'` is `-exec`.
+  const args = words.slice(i + 1).map((a) => a.replace(/['"]/g, ''));
+  if (head === 'find' && args.some((a) => FIND_RUNS.has(a))) return false;
+  if (head === 'diff' && args.some(DIFF_RUNS)) return false;
+  return !args.some((a) => {
+    const path = pathOfWord(a, head);
+    return path !== undefined && inProgramFolder(path);
+  });
+}
+
+/**
+ * Whether a request only reads or changes files (P13-26, review C1): a file tool, or a Bash
+ * request with no shell expansion whose every part is a readable `LOCAL_FILE_COMMANDS` command. The categories alone do
+ * not tell: the gate tags any command naming a path outside the workspace `outside_workspace`.
+ */
+function onlyFileWork(
+  toolCall: ToolCall,
+  parts: readonly CommandPart[],
+  inProgramFolder: ProgramFolderTest,
+): boolean {
+  const { toolName } = toolCall;
+  if (LOCAL_FILE_TOOLS.has(toolName)) {
+    if (!WRITING_FILE_TOOLS.has(toolName)) return true;
+    const input = (toolCall.input ?? {}) as Record<string, unknown>;
+    const target = input['file_path'] ?? input['notebook_path'];
+    return typeof target === 'string' && !inProgramFolder(target);
+  }
+  if (toolName !== 'Bash') return false;
+  // The splitter re-quotes a part's words (`b?n` becomes `'b?n'`): the raw command tells
+  // what the shell expands.
+  const command = ((toolCall.input ?? {}) as Record<string, unknown>)['command'];
+  if (typeof command !== 'string' || hasShellExpansion(command)) return false;
+  return parts.every((p) => p.opaque === undefined && isFileCommand(p.text, inProgramFolder));
+}
+
+/** The held summary when the check fails: treated as a send or a spend with no grant. */
+export const UNCHECKED_SEND_SUMMARY = 'The check could not tell whether this sends or spends.';
 
 /** What the judge is told about the task and the project, read when the request arrives. */
 export interface ApprovalFacts {
@@ -55,6 +291,10 @@ export interface WaykeeperApproval {
   quote?: string;
   /** The request's parts, their texts redacted: logged on the approval (P13-16). */
   parts: CommandPart[];
+  /** Auto (P13-26): what allowed it, for the approvals log. Absent in task mode. */
+  allowedBy?: AllowedBy;
+  /** Auto (P13-26): the send grant that covered it, live when the verdict arrived. */
+  grantId?: Id;
 }
 
 /**
@@ -64,7 +304,8 @@ export interface WaykeeperApproval {
  */
 export interface ApprovalWatchCall {
   agentId: Id;
-  projectId: Id;
+  /** The Steward's project; absent for an asteroid's Steward (standalone work, P13-27). */
+  projectId?: Id;
   /** The raw call: the watch redacts what the judge and the card see. */
   toolCall: ToolCall;
   /** The categories the gate classified the call under. */
@@ -91,8 +332,15 @@ export interface ApprovalWatchCall {
    * that needs the current branch is forwarded.
    */
   git?: GitRead;
+  /**
+   * The project's live send grants (P13-26): read when the request arrives (for the judge) and
+   * again when the verdict does (the grant it names must still be among them); may throw.
+   */
+  grants: () => SendGrant[];
   approve: (d: WaykeeperApproval) => void;
   forward: (context: WaykeeperForward) => void;
+  /** Auto (P13-26): a send or a spend no grant and no words cover: the call stays held. */
+  hold: (context: SendPermissionContext) => void;
 }
 
 /** Why a part can never be approved by the judge, or `undefined` (design §5.4a). */
@@ -116,27 +364,33 @@ function hardRule(part: CommandPart): string | undefined {
 
 /**
  * The approval watch (P13-04; design 2026-11-09-waykeeper-approvals §5.2–5.5): a Steward's `ask`
- * request is held while the request judge looks at it, then approved in the Waykeeper's name or
- * forwarded to the user with the reason. Shares the scope watch's held-call machinery: the same
- * timeout, fail-closed failures and cancel race.
+ * request is held while the request judge looks at it, then answered in the Waykeeper's name.
+ * Shares the scope watch's held-call machinery: the same timeout and cancel race. Never throws
+ * into the runtime; a throw before any callback forwards the call to the user.
  *
- * The judge is not trusted. The hard rules are decided here, before it is called and without it:
- * a guarded write (by a part or by the whole call), a delete outside the worktree and the
- * Steward's scratch folder, a delete whose
- * target a substitution decides, an unreadable part, and inline code or a script file whose raw
- * text mentions a push (`mentionsPush`) are always forwarded. After it, an approval is kept only
- * if every push or upload part is granted by a quote the server finds in the user's own words,
- * any standing approval it names exists on the project (and never covers a push, an upload or an
- * opaque part), and the switch is still on.
+ * Two modes, chosen by `call.auto()` when the request arrives.
  *
- * Auto mode and marks (P13-16; design 2026-11-14-waykeeper-auto-mode §4.2, §4.5): after the hard
- * rules and before the judge, a request one of the project's "Always asks me" marks covers is
- * forwarded, in either mode. In Auto the judge is asked in `auto` mode and must say whether the
- * request sends or spends; an approval is kept only if Auto is still on, no mark covers it by
- * now, and a send or a spend is granted by a quote in the user's own words, like a push. The
- * judge's reason is cut to `MAX_REASON_CHARS`.
- * Every failure — no judge, an error, a timeout, a malformed answer, a throw anywhere before a
- * callback — forwards. Never throws into the runtime.
+ * "Only what fits the task" (`task`): approved or forwarded to the user with the reason. The judge
+ * is not trusted. Decided here, before it is called and without it, and always forwarded: a
+ * guarded write (by a part or by the whole call), a delete outside the worktree and the Steward's
+ * scratch folder, a delete whose target a substitution decides, an unreadable part, inline code or
+ * a script file whose raw text mentions a push (`mentionsPush`), and a git push to the main branch
+ * or to a branch it cannot tell (decision 161). Then a request one of the project's "Always asks
+ * me" marks covers is forwarded (P13-16). After the judge, an approval is kept only if every push
+ * or upload part is granted by a quote the server finds in the user's own words, any standing
+ * approval it names exists on the project (and never covers a push, an upload or an opaque part),
+ * the switch is still on and no mark was added meanwhile. Every failure — no judge, an error, a
+ * timeout, a malformed answer — forwards. The judge's reason is cut to `MAX_REASON_CHARS`.
+ *
+ * Auto (P13-26; design 2026-11-18-auto-approves-all §4.2): everything is approved except a send
+ * or a spend, which needs a grant or the user's words; no hard rules, no push checks. A mark still
+ * forwards. A request that only touches files (`LOCAL_ONLY_CATEGORIES`, `onlyFileWork`; not into a
+ * program folder or a network mount, and no guarded write — a git hook or git configuration runs
+ * on the next approved git command) is approved without the judge. Anything else goes to the
+ * judge in `grants` mode and is approved when it neither sends nor spends, when a grant live at
+ * verdict time covers it, or when the user's own words ask for it (a quote the server finds);
+ * otherwise — or when the check fails — it is held (`hold`) for the grant question. The switch or
+ * Auto turned off, or a mark added, while it was judged forwards, as in task mode.
  */
 export class ApprovalWatch {
   private readonly calls: HeldJudgeCalls;
@@ -146,6 +400,12 @@ export class ApprovalWatch {
       judge: RequestJudge | undefined;
       timeoutMs?: number;
       onError?: (error: unknown) => void;
+      /** Epoch ms, for whether a grant is live (default `Date.now`). */
+      now?: () => number;
+      /** The PATH whose folders are program folders (default `process.env.PATH`). */
+      pathEnv?: string;
+      /** Whether paths compare ignoring case (default: on macOS). */
+      caseInsensitivePaths?: boolean;
     },
   ) {
     this.calls = new HeldJudgeCalls(deps.timeoutMs ?? SCOPE_JUDGE_TIMEOUT_MS);
@@ -168,6 +428,10 @@ export class ApprovalWatch {
       forward: (context) => {
         settled = true;
         call.forward(context);
+      },
+      hold: (context) => {
+        settled = true;
+        call.hold(context);
       },
     };
     try {
@@ -206,17 +470,15 @@ export class ApprovalWatch {
   }
 
   /**
-   * The request's git pushes (P13-20, decision 161): `forward` for a push to the main branch
-   * (`main`, `master`, the remote's default) or one whose branch cannot be told; otherwise the
-   * indexes of the parts that are a single git push to other branches (`cleared`). Other pushes
-   * (`gh pr create`, `npm publish`) are neither.
+   * Task mode's git pushes (P13-20, decision 161): a forward for a push to the main branch
+   * (`main`, `master`, the remote's default) or one whose branch cannot be told; `undefined`
+   * otherwise. Other pushes (`gh pr create`, `npm publish`) are not looked at here.
    */
   private async gitPushes(
     call: ApprovalWatchCall,
     parts: readonly CommandPart[],
-  ): Promise<{ cleared: number[] } | { forward: string; part: number }> {
-    const cleared: number[] = [];
-    if (call.toolCall.toolName !== 'Bash') return { cleared };
+  ): Promise<{ forward: string; part: number } | undefined> {
+    if (call.toolCall.toolName !== 'Bash') return undefined;
     let mains: string[] | undefined;
     for (const [i, part] of parts.entries()) {
       if (!part.categories.includes('push')) continue;
@@ -233,9 +495,8 @@ export class ApprovalWatch {
       if (pushesToMain(push.branches, mains)) {
         return { forward: 'it pushes to the main branch, which only the user can allow', part: i };
       }
-      cleared.push(i);
     }
-    return { cleared };
+    return undefined;
   }
 
   private async decide(call: ApprovalWatchCall): Promise<void> {
@@ -247,7 +508,6 @@ export class ApprovalWatch {
     const shown = parts.map((p) => ({ ...p, text: redactSecrets(p.text) }));
     const unjudged = `not judged: ${call.toolCall.toolName}`.slice(0, MAX_KIND_CHARS);
     // A push or an upload is never a standing approval (P13-10): its card never offers one.
-    /** A push, an upload, a send or a spend: its card never offers a standing approval. */
     let allowOnce = false;
     const forward = (
       reason: string,
@@ -267,6 +527,9 @@ export class ApprovalWatch {
       });
     };
 
+    // -- Auto (P13-26): its own path, without the hard rules or the push checks ---------------
+    if (call.auto()) return this.decideAuto(call, parts, shown, forward, unjudged);
+
     // -- the hard rules: decided here, never by the judge ------------------------------------
     for (const [i, part] of parts.entries()) {
       const rule = hardRule(part);
@@ -284,33 +547,19 @@ export class ApprovalWatch {
         unjudged,
       );
     }
-    // -- git pushes (P13-20, decision 161): never to the main branch; in Auto, approved elsewhere
+    // -- git pushes (P13-20, decision 161): never to the main branch --------------------------
     const pushes = await this.gitPushes(call, parts);
-    if ('forward' in pushes) {
+    if (pushes) {
       return forward(`Never approved by the Waykeeper: ${pushes.forward}.`, unjudged, pushes.part);
     }
-    const mode: RequestJudgeInput['mode'] = call.auto() ? 'auto' : 'task';
-    // In Auto a git push to a branch other than main needs no quote; any other push still does.
-    const pushesCleared =
-      mode === 'auto' && call.toolCall.toolName === 'Bash' && pushes.cleared.length > 0;
-    const withoutPush = (p: CommandPart): CommandPart => ({
-      ...p,
-      categories: p.categories.filter((c) => c !== 'push'),
-    });
-    const quoteNeeded = parts.map((p, i) =>
-      needsUserQuote(pushesCleared && pushes.cleared.includes(i) ? withoutPush(p) : p),
-    );
-    const allPushesCleared =
-      pushesCleared &&
-      parts.every((p, i) => !p.categories.includes('push') || pushes.cleared.includes(i));
+    const mode: RequestJudgeInput['mode'] = 'task';
+    const quoteNeeded = parts.map((p) => needsUserQuote(p));
     // A push the gate saw in the whole call (an unsplit tool's input) needs the user's words too.
     const callNeedsQuote =
       quoteNeeded.some(Boolean) ||
       needsUserQuote({
         text: parts.map((p) => p.text).join(' '),
-        categories: [...new Set([...call.categories, ...whole.actions])].filter(
-          (c) => !(allPushesCleared && c === 'push'),
-        ),
+        categories: [...new Set([...call.categories, ...whole.actions])],
       });
     const quotePart = quoteNeeded.indexOf(true);
     allowOnce = callNeedsQuote;
@@ -336,7 +585,6 @@ export class ApprovalWatch {
 
     const input: RequestJudgeInput = {
       mode,
-      ...(allPushesCleared ? { pushesCleared: true } : {}),
       task: known.task,
       workspace: call.ctx.workspace,
       cwd: call.ctx.cwd ?? call.ctx.workspace,
@@ -357,8 +605,6 @@ export class ApprovalWatch {
     const verdict = validVerdict(outcome.value, parts.length, mode);
     if (!verdict) return forward('The check gave a malformed answer: no verdict.', unjudged);
 
-    const sendsOrSpends = mode === 'auto' && verdict.sendsOrSpends === true;
-    if (sendsOrSpends) allowOnce = true;
     const similar = similarOf(verdict.similarTo, known.recordedApprovals);
     const kind = verdict.kind;
     if (verdict.verdict === 'forward') {
@@ -374,14 +620,6 @@ export class ApprovalWatch {
         similar,
       );
     }
-    if (mode === 'auto' && !call.auto()) {
-      return forward(
-        'Auto mode was turned off while the request was judged.',
-        kind,
-        undefined,
-        similar,
-      );
-    }
     // A mark added while the request was judged still makes it ask.
     let markedNow: ReturnType<typeof markForward>;
     try {
@@ -391,13 +629,11 @@ export class ApprovalWatch {
     }
     if (markedNow) return forward(markedNow.reason, kind, markedNow.part, similar);
     const failing = quotePart >= 0 ? quotePart : undefined;
-    const needsQuote = callNeedsQuote || sendsOrSpends;
+    const needsQuote = callNeedsQuote;
     if (needsQuote) {
-      const what = callNeedsQuote ? 'a push or an upload' : 'a send or a spend';
-      const What = callNeedsQuote ? 'A push or an upload' : 'A send or a spend';
       if (verdict.quote === undefined || !quoteFound(verdict.quote, known.userWords)) {
         return forward(
-          `${What} needs the user's own words asking for it. The judge said: ${verdict.reason}`,
+          `A push or an upload needs the user's own words asking for it. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -405,7 +641,7 @@ export class ApprovalWatch {
       }
       if (verdict.standingApprovalId !== undefined) {
         return forward(
-          `A standing approval never covers ${what}. The judge said: ${verdict.reason}`,
+          `A standing approval never covers a push or an upload. The judge said: ${verdict.reason}`,
           kind,
           failing,
           similar,
@@ -443,6 +679,237 @@ export class ApprovalWatch {
       parts: shown,
     });
   }
+
+  /** The scope's send grants in force now (live, not paused); none when they cannot be read. */
+  private liveGrants(call: ApprovalWatchCall): SendGrant[] {
+    const now = (this.deps.now ?? Date.now)();
+    try {
+      return call.grants().filter((g) => isGrantInForce(g, now));
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Auto (P13-26; design 2026-11-18-auto-approves-all §4.2), in this order: a mark forwards; a
+   * request that only touches files (`LOCAL_ONLY_CATEGORIES`, no opaque part) is approved
+   * without the judge; else the judge, in `grants` mode, says whether it sends or spends. Not a
+   * send → approved; a grant still live when the verdict arrives → approved with it; the user's
+   * own words (a quote the server finds) → approved for this call; else held. A failed check
+   * holds too. The switch or Auto turned off, or a mark added, while judged → forwarded.
+   */
+  private async decideAuto(
+    call: ApprovalWatchCall,
+    parts: CommandPart[],
+    shown: CommandPart[],
+    forward: (reason: string, kind: string, failingPart?: number) => void,
+    unjudged: string,
+  ): Promise<void> {
+    let marked: ReturnType<typeof markForward>;
+    try {
+      marked = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", unjudged);
+    }
+    if (marked) return forward(marked.reason, unjudged, marked.part);
+
+    let whole: ReturnType<typeof classifyToolCall> | undefined;
+    try {
+      whole = classifyToolCall(call.toolCall, call.ctx);
+    } catch {
+      whole = undefined;
+    }
+    const categories = [...new Set([...call.categories, ...(whole?.actions ?? [])])];
+    const localOnly = (cs: readonly PermissionAction[]) =>
+      cs.length > 0 && cs.every((c) => LOCAL_ONLY_CATEGORIES.has(c));
+    // A guarded write (agent or git configuration, .git/hooks, the deliverables folder) goes to
+    // the judge: a hook or `core.fsmonitor` runs on the next approved git command (final review I1).
+    if (
+      whole !== undefined &&
+      whole.unclassified !== true &&
+      whole.guarded !== true &&
+      parts.length > 0 &&
+      parts.every((p) => p.opaque === undefined && !p.guarded && localOnly(p.categories)) &&
+      localOnly(categories) &&
+      onlyFileWork(
+        call.toolCall,
+        parts,
+        programFolderTest(
+          call.ctx,
+          'pathEnv' in this.deps ? this.deps.pathEnv : process.env['PATH'],
+          this.deps.caseInsensitivePaths ?? process.platform === 'darwin',
+        ),
+      )
+    ) {
+      if (!call.active()) return;
+      call.approve({
+        reason: 'Auto: it only reads or changes files.',
+        allowedBy: 'auto',
+        parts: shown,
+      });
+      return;
+    }
+
+    const hold = (summary: string) => {
+      if (!call.active()) return;
+      call.hold({ summary: redactSecrets(summary), parts: shown, grants: this.liveGrants(call) });
+    };
+    const judge = this.deps.judge;
+    if (!judge) return hold(UNCHECKED_SEND_SUMMARY);
+    let facts: ApprovalFacts | undefined;
+    try {
+      facts = call.facts();
+    } catch {
+      facts = undefined;
+    }
+    if (!facts) return hold(UNCHECKED_SEND_SUMMARY);
+    const known = facts;
+
+    const input: RequestJudgeInput = {
+      mode: 'grants',
+      grants: this.liveGrants(call),
+      task: known.task,
+      workspace: call.ctx.workspace,
+      cwd: call.ctx.cwd ?? call.ctx.workspace,
+      userWords: [...known.userWords],
+      recentActions: [...known.recentActions],
+      standingApprovals: [...known.standingApprovals],
+      recordedApprovals: [...known.recordedApprovals],
+      request: {
+        toolName: call.toolCall.toolName,
+        ...(call.toolCall.input !== undefined ? { input: redactValue(call.toolCall.input) } : {}),
+        categories,
+        parts: shown,
+      },
+    };
+    const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
+    if (outcome === 'cancelled' || !call.active()) return;
+    const verdict = outcome.ok ? validVerdict(outcome.value, parts.length, 'grants') : undefined;
+    const kind = verdict?.kind ?? unjudged;
+
+    // -- changes while it was judged: as in task mode, a card -----------------------------------
+    if (!call.switchOn()) {
+      return forward('Waykeeper approvals were turned off while the request was judged.', kind);
+    }
+    if (!call.auto()) {
+      return forward('Auto mode was turned off while the request was judged.', kind);
+    }
+    let markedNow: ReturnType<typeof markForward>;
+    try {
+      markedNow = markForward(call, parts);
+    } catch {
+      return forward("The project's marks could not be read.", kind);
+    }
+    if (markedNow) return forward(markedNow.reason, kind, markedNow.part);
+
+    if (!verdict) return hold(UNCHECKED_SEND_SUMMARY);
+    const reason = redactSecrets(verdict.reason);
+    if (verdict.sendsOrSpends !== true) {
+      call.approve({ reason, allowedBy: 'auto', parts: shown });
+      return;
+    }
+    const cover = coverOf(verdict, this.liveGrants(call), known.userWords);
+    if (cover) return call.approve({ reason, ...cover, parts: shown });
+    hold(verdict.summary || verdict.kind || verdict.reason);
+  }
+
+  /**
+   * A Steward's `request_publish` in Auto (P13-29; design 2026-11-18 §4.6): the publish is a
+   * send, so the judge (in `grants` mode, given the platform, account, text and files as the
+   * request) only says what covers it. Covered: a grant still live when the verdict arrives, or
+   * the user's own words (a quote the server finds). Anything else — no judge, no facts, a
+   * malformed answer, a verdict naming no cover — is `held`, with the live grants that did not
+   * cover it. `off`: Auto was turned off while it was judged. `cancelled`: the Steward ended.
+   */
+  async judgePublish(call: PublishJudgeCall): Promise<PublishCover> {
+    const grantsNow = (): SendGrant[] => {
+      const now = (this.deps.now ?? Date.now)();
+      try {
+        return call.grants().filter((g) => isGrantInForce(g, now));
+      } catch {
+        return [];
+      }
+    };
+    const held = (summary: string): PublishCover => ({
+      held: { summary: redactSecrets(summary), grants: grantsNow() },
+    });
+    const judge = this.deps.judge;
+    if (!judge) return held(UNCHECKED_SEND_SUMMARY);
+    let facts: ApprovalFacts | undefined;
+    try {
+      facts = call.facts();
+    } catch {
+      facts = undefined;
+    }
+    if (!facts) return held(UNCHECKED_SEND_SUMMARY);
+    const input: RequestJudgeInput = {
+      mode: 'grants',
+      grants: grantsNow(),
+      task: facts.task,
+      workspace: call.ctx.workspace,
+      cwd: call.ctx.cwd ?? call.ctx.workspace,
+      userWords: [...facts.userWords],
+      recentActions: [...facts.recentActions],
+      standingApprovals: [...facts.standingApprovals],
+      recordedApprovals: [...facts.recordedApprovals],
+      request: {
+        toolName: call.toolCall.toolName,
+        ...(call.toolCall.input !== undefined ? { input: redactValue(call.toolCall.input) } : {}),
+        categories: ['network'],
+        parts: [],
+      },
+    };
+    const outcome = await this.calls.run(call.agentId, (signal) => judge.judge(input, signal));
+    if (outcome === 'cancelled') return 'cancelled';
+    if (!call.auto()) return 'off';
+    const verdict = outcome.ok ? validVerdict(outcome.value, 0, 'grants') : undefined;
+    if (!verdict) return held(UNCHECKED_SEND_SUMMARY);
+    // A publish always sends: only a grant or the user's words cover it, whatever else it says.
+    const cover = coverOf(verdict, grantsNow(), facts.userWords);
+    if (cover) return { covered: { reason: redactSecrets(verdict.reason), ...cover, parts: [] } };
+    return held(verdict.summary || verdict.kind || verdict.reason);
+  }
+}
+
+/** A publish request for `ApprovalWatch.judgePublish` (P13-29). */
+export interface PublishJudgeCall {
+  agentId: Id;
+  /** The request as the judge reads it: `request_publish` with the platform, account, text, files. */
+  toolCall: ToolCall;
+  /** The Steward's policy context: its workspace and worktree. */
+  ctx: PolicyContext;
+  facts: () => ApprovalFacts | undefined;
+  /** The scope's grants: read for the judge and again when the verdict arrives; may throw. */
+  grants: () => SendGrant[];
+  /** Whether the scope is still in Auto when the verdict arrives. */
+  auto: () => boolean;
+}
+
+/** What covered a publish in Auto, or what its grant question shows (P13-29). */
+export type PublishCover =
+  | { covered: WaykeeperApproval }
+  | { held: { summary: string; grants: SendGrant[] } }
+  | 'off'
+  | 'cancelled';
+
+/**
+ * What covers a send or a spend, checked by the server (P13-26, P13-29): the grant the verdict
+ * names when it is among `live` now, else the verdict's quote when it is found verbatim in the
+ * user's words; `undefined` when neither.
+ */
+function coverOf(
+  verdict: RequestVerdict,
+  live: readonly SendGrant[],
+  userWords: readonly string[],
+): Pick<WaykeeperApproval, 'allowedBy' | 'grantId' | 'quote'> | undefined {
+  const grantId = verdict.grantId;
+  if (grantId !== undefined && live.some((g) => g.id === grantId)) {
+    return { allowedBy: 'grant', grantId };
+  }
+  if (verdict.quote !== undefined && quoteFound(verdict.quote, userWords)) {
+    return { allowedBy: 'task_words', quote: verdict.quote };
+  }
+  return undefined;
 }
 
 /**
@@ -512,7 +979,9 @@ function validVerdict(
   }
   if (v.quote !== undefined && typeof v.quote !== 'string') return undefined;
   // Auto's one question is whether it sends or spends: an answer without it is no answer.
-  if (mode === 'auto' && typeof v.sendsOrSpends !== 'boolean') return undefined;
+  if (mode !== 'task' && typeof v.sendsOrSpends !== 'boolean') return undefined;
+  if (v.grantId !== undefined && typeof v.grantId !== 'string') return undefined;
+  if (v.summary !== undefined && typeof v.summary !== 'string') return undefined;
   const reason =
     v.reason.length <= MAX_REASON_CHARS ? v.reason : `${v.reason.slice(0, MAX_REASON_CHARS - 1)}…`;
   return {
@@ -527,5 +996,9 @@ function validVerdict(
       : {}),
     ...(typeof v.quote === 'string' ? { quote: v.quote } : {}),
     ...(typeof v.sendsOrSpends === 'boolean' ? { sendsOrSpends: v.sendsOrSpends } : {}),
+    ...(typeof v.grantId === 'string' ? { grantId: v.grantId } : {}),
+    ...(typeof v.summary === 'string' && v.summary.trim()
+      ? { summary: v.summary.trim().slice(0, 200) }
+      : {}),
   };
 }

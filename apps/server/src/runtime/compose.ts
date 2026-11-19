@@ -76,6 +76,8 @@ export interface ComposeOptions {
   scopeJudge?: ScopeJudge;
   /** The Waykeeper's request judge (P13-03), handed to the runtime; not used yet. */
   requestJudge?: RequestJudge;
+  /** Whether Auto is on for standalone work (P13-27; `Settings.standaloneAuto`), read per request. */
+  standaloneAuto?: () => boolean;
   /** Adapters to register; default: the fake adapter only (dev mode without Claude). */
   adapters?: AgentAdapter[];
   log?: EventLogOptions;
@@ -401,6 +403,7 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
     publishAllowances,
     ...(opts.scopeJudge ? { scopeJudge: opts.scopeJudge } : {}),
     ...(opts.requestJudge ? { requestJudge: opts.requestJudge } : {}),
+    ...(opts.standaloneAuto ? { standaloneAuto: opts.standaloneAuto } : {}),
     caps: { ...(opts.caps ?? {}), defaults: defaultCaps },
     ...(opts.inboxHistory !== undefined ? { inboxHistory: opts.inboxHistory } : {}),
     ...(opts.now ? { now: opts.now } : {}),
@@ -634,7 +637,9 @@ export function composeRuntime(db: Database, opts: ComposeOptions = {}): Compose
   // asks before spending and, on a job run, reports findings and the run (P10-05).
   runtime.setStewardTools((agent) => [
     ...(deliverables ? stewardDeliverableTools(deliverables, agent) : []),
-    ...stewardJobTools(commands, log.tables, agent),
+    ...stewardJobTools(commands, log.tables, agent, {
+      publishInAuto: (input) => runtime.requestPublishInAuto(input),
+    }),
   ]);
   // A task Steward hears its spend answer as one message (P10-05).
   const spendRelay = new SpendRelay({

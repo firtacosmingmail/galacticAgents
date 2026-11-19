@@ -16,6 +16,8 @@ import { SpendActions, SpendDetails } from './SpendCard.js';
 import { PublishActions, PublishDetails } from './PublishCard.js';
 import { LaunchActions, LaunchDetails, OffScriptActions, OffScriptDetails } from './LaunchCard.js';
 import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
+import { SendPermissionActions, SendPermissionDetails } from './SendPermissionCard.js';
+import { GrantConflictActions, GrantConflictDetails } from './GrantConflictCard.js';
 
 /**
  * Question cards (P2-18, extracted for the panel in P25-06; SPEC §2.6): one open question with its
@@ -31,7 +33,10 @@ import { UsageLimitActions, UsageLimitDetails } from './UsageLimitCard.js';
  * amount with Approve / Refuse only (P10-07; `FindingCard`, `SpendCard`). A `publish` approval shows
  * the post with an editable text and Approve / Refuse (P11-09; `PublishCard`), and a usage-limit
  * clarification its fixed options as buttons (`UsageLimitCard`). A `launch` approval and an
- * off-script permission question show fixed buttons only (P12-09; `LaunchCard`).
+ * off-script permission question show fixed buttons only (P12-09; `LaunchCard`). A held send
+ * (`sendPermission`) shows what it sends, Allow once / Don't allow and, with a decider, a reply
+ * box (P13-30; `SendPermissionCard`). A grant-conflict question (`grantConflict`) quotes the
+ * earlier grants and the new words, with its options and an answer box (P13-34; `GrantConflictCard`).
  *
  * The cards read nothing but the store: the same question renders the same everywhere (the
  * inbox, a chat thread, the Steward view), and an answer anywhere updates all of them when the
@@ -131,6 +136,8 @@ export function QuestionCard({
   const launch = q.kind === 'launch';
   const offScript = permission && q.context.offScript !== undefined;
   const usageLimit = q.context.usageLimit !== undefined;
+  const send = permission ? q.context.sendPermission : undefined;
+  const conflict = permission ? q.context.grantConflict : undefined;
   const finding = q.context.finding;
   const call = q.context.toolCall;
   const userHeld = q.holder.type === 'user';
@@ -163,13 +170,25 @@ export function QuestionCard({
     >
       <header>
         <span className={`pill kind-${q.kind}`}>
-          {finding ? 'finding' : usageLimit ? 'usage limit' : offScript ? 'off script' : q.kind}
+          {finding
+            ? 'finding'
+            : usageLimit
+              ? 'usage limit'
+              : offScript
+                ? 'off script'
+                : conflict
+                  ? 'grant conflict'
+                  : q.kind}
         </span>
         <span className="muted">held by {actorLabel(q.holder, world)}</span>
         {/* Dismiss (P9-14): not while an answer to it waits in the offline queue. */}
         {!(queued && isPending(queued)) && <DismissQuestion question={q} onStale={stale} />}
       </header>
-      {spend ? (
+      {conflict ? (
+        <GrantConflictDetails conflict={conflict} />
+      ) : send ? (
+        <SendPermissionDetails question={q} send={send} origin={<OriginContext question={q} />} />
+      ) : spend ? (
         <SpendDetails question={q} />
       ) : publish ? (
         <PublishDetails question={q} />
@@ -187,7 +206,7 @@ export function QuestionCard({
           <OriginContext question={q} />
         </>
       )}
-      {permission && !offScript && call && (
+      {permission && !offScript && !send && call && (
         <p className="tool-call">
           {q.context.permissionAction ? (
             <strong>{q.context.permissionAction.replace(/_/g, ' ')}: </strong>
@@ -214,6 +233,19 @@ export function QuestionCard({
                 ?.focus(),
             )
           }
+        />
+      ) : conflict ? (
+        <GrantConflictActions
+          options={q.context.options ?? []}
+          busy={busy}
+          onAnswer={(a) => void answer(a)}
+        />
+      ) : send ? (
+        <SendPermissionActions
+          question={q}
+          send={send}
+          busy={busy}
+          onAnswer={(a) => void answer(a)}
         />
       ) : spend ? (
         <SpendActions busy={busy} onAnswer={(a) => void answer(a)} />

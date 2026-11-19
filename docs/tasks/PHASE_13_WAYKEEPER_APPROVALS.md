@@ -1,7 +1,7 @@
 # Phase 13 — Waykeeper approvals
 
-**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16) (branch `agent-publishes-scope`)
-**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 22/22
+**Current task:** — · **Task status:** P13-09–P13-18 done (2026-11-14); P13-19, P13-20 done (2026-11-15); P13-21, P13-22 done (2026-11-16); P13-23–P13-28 done (2026-11-18); P13-29–P13-34 done (2026-11-19) (branch `agent-auto-grants`)
+**Phase status:** feature done (2026-11-11), merged into `main` (PR #12); follow-up 34/34
 
 > Keep the two lines above current. The ticket flow is described in `/CLAUDE.md` and `docs/tasks/README.md`.
 
@@ -39,6 +39,18 @@ The plan's Global Constraints bind every task. Branch flow: the phase branch is 
 | 12 | P13-20 | Auto approves git pushes, never to main (added 2026-11-15). |
 | 13 | P13-21 | A push or a PR is not publishing; `=` separators are readable (added 2026-11-16). |
 | 14 | P13-22 | Outward steps last: publishing, pushes, deploys, account changes and cleanup in small final steps (added 2026-11-16). |
+| 15 | P13-23 | Protocol shapes, events, projection, migration, board (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 16 | P13-24 | Domain — grants and the standalone scope (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 17 | P13-25 | The request judge's `grants` mode (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 18 | P13-26 | The approval watch's new Auto path (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 19 | P13-27 | Runtime — no bypass paths; holding a send (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 20 | P13-28 | The Waykeeper's `answer_send_permission` (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 21 | P13-29 | `request_publish` in Auto (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 22 | P13-30 | Web — grants, the send card, standalone settings, log labels (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 23 | P13-31 | Docs and the board (added 2026-11-18); plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`. |
+| 24 | P13-32 | A job approved to publish publishes in Auto (added 2026-11-19; SPEC decision 165). |
+| 25 | P13-33 | A chat line taken as a send-card answer is not task words (added 2026-11-19; SPEC decision 164). |
+| 26 | P13-34 | A conflicting grant is reconciled with Cosmin (added 2026-11-19; SPEC decision 166). |
 
 P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 
@@ -144,3 +156,76 @@ P13-01…07 run in order; P13-08 runs beside P13-07; P13-09…11 run together.
 - **Status:** done (2026-11-16) · **Depends on:** P13-21 · **Parallel with:** —
 - Cosmin: the Steward did a lot of other work (reading PRs, Figma, branching); "the publishing part should have been in the end". Then: "I want the publishing tasks to be as granular as possible with commands that are only for that, and as close as possible to the end of the project or task. The same thing for the cleanup tasks. […] For the last ones ask for input. But don't block the work that does not need me, for something that can be postponed in the end of the task." Today `publishes` is a property of the whole task (decision 146), so the publishing policy and the bypass of Waykeeper approvals cover the Steward's whole run; the fix is to make the publishing task small and last, not to change the policy. SPEC decision 163.
 - **Acceptance:** the Waykeeper's prompt plans what needs nobody first (fetch, read, implement, review, test locally) and the outward steps last (push and PR, database changes and deploys to shared environments, account or settings changes, publishing, cleanup): a Steward may push its own branch and open its PR as the last step of its task; every other outward step and every publish is its own final task, blockedBy the tasks it needs, naming only those commands; questions about the final steps wait for the final task. A publishing task waits only for the tasks it needs (Cosmin: "a publishing task should wait for tasks that it needs for the publishing"); no server check, since the server cannot tell which those are. Every Steward's etiquette says the same order, and that a question only about a final step waits until the rest is done. Tests in `providers.test.ts` and `steward-prompt.test.ts`.
+
+### P13-23 — Protocol shapes, events, projection, migration, board (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-22 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 1 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-24 — Domain — grants and the standalone scope (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-23 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 2 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-25 — The request judge's `grants` mode (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-23 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 3 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-26 — The approval watch's new Auto path (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-24, P13-25 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 4 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-27 — Runtime — no bypass paths; holding a send (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-26 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 5 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-28 — The Waykeeper's `answer_send_permission` (added 2026-11-18)
+- **Status:** done (2026-11-18) · **Depends on:** P13-27 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 6 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-29 — `request_publish` in Auto (added 2026-11-18)
+- **Status:** done (2026-11-19) · **Depends on:** P13-27 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 7 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-30 — Web — grants, the send card, standalone settings, log labels (added 2026-11-18)
+- **Status:** done (2026-11-19) · **Depends on:** P13-24, P13-28 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 8 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-31 — Docs and the board (added 2026-11-18)
+- **Status:** done (2026-11-19) · **Depends on:** P13-29, P13-30 · **Parallel with:** —
+- Auto approves everything; sends and spends need a grant (SPEC decision 164; design `docs/superpowers/specs/2026-11-18-auto-approves-all-design.md`). Task 9 of plan `docs/superpowers/plans/2026-11-18-auto-approves-all.md`: its steps and acceptance are there.
+
+### P13-32 — A job approved to publish publishes in Auto (added 2026-11-19)
+- **Status:** done (2026-11-19) · **Depends on:** P13-29, P13-31 · **Parallel with:** —
+- Cosmin's answer to the SPEC §8 question on a job's publish follow-up run (SPEC decision 165): a job approved on its card to publish (`Job.publishes`, migration 0023) publishes in Auto without a publish card each time; outside Auto the card stays.
+- **Acceptance:**
+  - In Auto, a job with `publishes: true`: its run's `request_publish` opens no card for Cosmin — the question is answered `Approve` by the Waykeeper, a `publish` follow-up is queued on the job, and a `permission.decided{allow}` with the decision-165 reason is logged (`runtime/job-publish-auto.test.ts`).
+  - The Auto-approved publish produces no notification (push, page, desktop: `notificationOf` skips a question marked `APPROVED_ON_OPEN`); the card with Auto off is notified as today (fix round 1 of the review).
+  - In Auto with no decider: the publish card opens as today.
+  - Same job, Auto off: the publish card opens as today (question open, unanswered, no follow-up).
+  - In Auto, a job without `publishes`: the card opens as today.
+  - In Auto, a stopped job with `publishes: true`: nothing is approved (today's stopped-job refusal).
+  - `propose_job` with `publishes: true` on a Gemini follow-up provider (or Gemini with no follow-up provider) is refused with `cannot publish` and creates nothing (`brains/waykeeper/job-tools.test.ts`, `domain/jobs.test.ts`).
+  - A remote approval of a card turning `publishes` on is refused (`remote_control`) without `autoApproveRemote`; turning it off remotely is allowed.
+  - Storage round trip: a job with `publishes: true` reads back true; an old row (migration default) reads false (`db/long-term-tables.test.ts`).
+  - Web: `JobCard` shows the Publishes line when true and not when false; the change card shows the on/off change (`panel/cards/job-cards.test.tsx`).
+
+### P13-33 — A chat line taken as a send-card answer is not task words (added 2026-11-19)
+- **Status:** done (2026-11-19) · **Depends on:** P13-31 · **Parallel with:** P13-32
+- Cosmin's choice (2026-11-19): a plain chat line to the decider counted as the answer to its only open send question (final review I2) also stayed in his task words, so a later send could be approved by a quote of it with no end time the code enforces. Now `userWordsFor` applies the same rule (`plainLineAnswer`, shared with `sendPermissionReplies`): a plain line to a decider while that decider had exactly one open send question is not task words, however the question closes and before it is answered.
+- **Acceptance:**
+  - A plain chat line consumed as the answer to the decider's only open send question is not in `userWordsFor`; the grant is still made from it; a later send in the same task that only a quote of that line would cover is held (`brains/waykeeper/send-permission.test.ts`).
+  - The line stays out of task words when Cosmin then taps Allow once, when the Steward stops first, when the decider's answer is refused, and before the decider answers (a send judged meanwhile is held, not approved by quote).
+  - A plain chat line a deny was taken from is not task words either.
+  - A plain chat line with no open send question, or sent while two were open, stays task words (`brains/waykeeper/send-permission.test.ts`, `runtime/user-words.test.ts`).
+
+### P13-34 — A conflicting grant is reconciled with Cosmin (added 2026-11-19)
+- **Status:** done (2026-11-19) · **Depends on:** P13-33
+- Cosmin (2026-11-19, SPEC decision 166): when his new send words conflict with a grant in force, the decider asks him how to reconcile them (replace, keep the earlier, keep both, or its own solution) and pauses the earlier grant while it asks.
+- **Acceptance:**
+  - A conflicting send-card answer or chat line → `ask_grant_conflict` opens a user-held question with the three fixed options first, then the decider's; the grants are paused (`send_grant.paused`) and a send they would cover is held while it is open.
+  - `resolve_grant_conflict` after his answer: Replace ends the grant (`send_grant.removed`, `by` the decider, reason quoting the answer), makes the new grant and the held card is answered; Keep the earlier unpauses it with no new grant; Keep both unpauses it and makes the new grant.
+  - Refused: words not his, a grant of another scope, ended, or paused by another conflict question (open, or answered and not carried out — no takeover); resolving before his answer, on another decider's question, twice, ending a grant not in the question, new-grant words not his; `removeSendGrant` by an agent; `answer_send_permission` while the conflict question is pending.
+  - The question dismissed or its decider stopped → grants unpaused; the project failed → grants ended and the question withdrawn; a paused grant that expired stays expired after Keep.
+  - Fix round 1: a picked fixed option is enforced in code (each deviation refused); after a resolved conflict his earlier reply on the send card never allows it; the project's current Waykeeper carries out an answer; the seed and one idle reminder list answered-unresolved conflicts; Resume grant (user-only) and the paused label by question state.
+  - Fix round 2: no re-ask over any paused grant; the card is bound from where his words came; words no grant took up never allow a card; resumed grants drop out of resolution; look-alike options refused.
+  - Fix rounds 3–4: Replace and Keep both take his new words in full as the new grant's words; a typed answer equal to a fixed option (case, quotes, punctuation aside) is enforced as it; quoted look-alike decider options refused.
+  - Prompts, wake lines, the web card and the paused label (`brains/waykeeper/grant-conflict.test.ts`, `panel/cards/send-permission-card.test.tsx`, `panel/status/send-grants.test.tsx`).

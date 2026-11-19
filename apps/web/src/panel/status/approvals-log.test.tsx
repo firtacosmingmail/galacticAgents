@@ -43,10 +43,10 @@ function history(events: object[]) {
     hasMore: false,
   });
 }
-function show() {
+function show(over: Partial<typeof fx.project> = {}) {
   return render(
     <ApiContext.Provider value={api as unknown as Api}>
-      <ApprovalsLog project={{ ...fx.project, id: 'p' }} />
+      <ApprovalsLog project={{ ...fx.project, id: 'p', ...over }} />
     </ApiContext.Provider>,
   );
 }
@@ -140,5 +140,63 @@ describe('the approvals log by category (P13-17)', () => {
     );
     expect(screen.getByRole('alert').textContent).toMatch(/Too old to mark\./);
     expect(screen.queryByText('Marked')).toBeNull();
+  });
+});
+
+describe('what allowed a send, in the log (P13-30)', () => {
+  const grant = {
+    id: 'sg-1',
+    projectId: 'p',
+    words: 'post them today',
+    summary: 'Instagram posts as @myshop, today',
+    createdAt: daysAgo(1),
+    createdBy: { type: 'user' as const },
+    origin: 'local' as const,
+    questionId: 'q-9',
+  };
+  async function open(name: string) {
+    const group = await screen.findByRole('button', { name });
+    await act(async () => fireEvent.click(group));
+  }
+  const net = [part('curl -X POST x', ['network'])];
+
+  it('labels an approval under a grant with its summary', async () => {
+    history([decided(1, daysAgo(1), { parts: net, allowedBy: 'grant', grantId: 'sg-1' })]);
+    show({ sendGrants: [grant] });
+    await open('Network · 1');
+    expect(screen.getByRole('listitem').textContent).toContain(
+      'under grant: Instagram posts as @myshop, today',
+    );
+  });
+
+  it('labels an approval by the task’s words', async () => {
+    history([decided(1, daysAgo(1), { parts: net, allowedBy: 'task_words', quote: 'post it' })]);
+    show();
+    await open('Network · 1');
+    expect(screen.getByRole('listitem').textContent).toContain('allowed by your words in the task');
+  });
+
+  it('lists the user’s Allow once, labelled, without Ask me next time', async () => {
+    history([
+      decided(
+        1,
+        daysAgo(1),
+        { parts: net, allowedBy: 'allow_once', waykeeperApproval: undefined },
+        { type: 'user' },
+      ),
+    ]);
+    show();
+    await open('Network · 1');
+    const item = screen.getByRole('listitem');
+    expect(item.textContent).toContain('allowed once by you');
+    expect(within(item).queryByRole('button', { name: 'Ask me next time' })).toBeNull();
+  });
+
+  it('adds no label to a plain Auto approval', async () => {
+    history([decided(1, daysAgo(1), { parts: net, allowedBy: 'auto' })]);
+    show();
+    await open('Network · 1');
+    const text = screen.getByRole('listitem').textContent ?? '';
+    expect(text).not.toMatch(/under grant|allowed by your words|allowed once/);
   });
 });

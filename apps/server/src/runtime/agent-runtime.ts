@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   approvalActivity,
+  ENDED_STATES,
   isWaykeeperApproval,
   BRAIN_SLASH_COMMANDS,
   waykeeperLabel,
@@ -23,12 +24,15 @@ import {
   type Event,
   type Id,
   type Job,
+  type JobRun,
+  type Question,
   type SetAnswer,
   type PermissionAction,
   type PermissionPolicy,
   type PermissionRule,
   type PublishContext,
   type RequestOrigin,
+  type RequestPublishInput,
   type ReplyQuote,
   type SlashCommand,
   type SpawnHandle,
@@ -42,6 +46,9 @@ import {
   type RequestJudge,
   type ScopeJudge,
   type WaykeeperForward,
+  type SendGrant,
+  type SendPermissionContext,
+  type AllowedBy,
   OFF_SCRIPT_ACTIONS,
 } from '@galactic/protocol';
 import { isStorageFailure } from '../db/database.js';
@@ -72,6 +79,18 @@ import {
   type PolicyContext,
 } from '../domain/permissions.js';
 import { RULES_END_IN } from '../domain/project-rules.js';
+import { liveGrants, standaloneAutoOn, type HeldSendAnswer } from '../domain/send-grants.js';
+import {
+  approveJobPublishInAuto,
+  folderOfAgent,
+  openPublishPermission,
+  preparePublish,
+  publishRequestCall,
+  readFileInFolder,
+  type PublishDeps,
+  type PublishInAuto,
+} from '../domain/publish.js';
+import { standaloneOf } from '../domain/waykeeper-approvals.js';
 import { systemRealPath } from '../domain/permission-rules.js';
 import { userFoldersOf } from '../deliverables/folder.js';
 import { workspaceOfCwd } from '../brains/steward-prompt.js';
@@ -84,7 +103,13 @@ import {
   type CapsConfig,
   type SpawnCheck,
 } from './caps.js';
-import { ApprovalWatch, type ApprovalFacts } from './approval-watch.js';
+import {
+  ApprovalWatch,
+  type ApprovalFacts,
+  type ApprovalWatchCall,
+  type PublishCover,
+  type WaykeeperApproval,
+} from './approval-watch.js';
 import { gitReader } from './git-read.js';
 import {
   aliasesOf,
@@ -205,6 +230,11 @@ export interface AgentRuntimeOptions {
    * by the approval watch, P13-04). Absent: every request the watch holds is forwarded.
    */
   requestJudge?: RequestJudge;
+  /**
+   * Whether Auto is on for standalone work (P13-27; `Settings.standaloneAuto`), read on every
+   * request. Absent: off — an asteroid's Steward asks with plain cards.
+   */
+  standaloneAuto?: () => boolean;
   /** Notes the sources a job run's Steward uses, from its allowed calls (P15-02). Absent: none. */
   runSources?: RunSourceRecorder;
   now?: () => string;
@@ -416,6 +446,29 @@ interface Live {
    * redacted line each (`precedentOf`): what the request judge reads as "the Steward's actions".
    */
   recentActions: string[];
+  /**
+   * The calls held for a send-permission question (P13-27), by question id: what
+   * `recheckHeldSends` judges again when a grant may now cover them.
+   */
+  heldSends: Map<Id, HeldSend>;
+}
+
+/** A send or a spend held for its question (P13-27): the raw call and its `ask` event. */
+interface HeldSend {
+  call: ToolCall;
+  event: Extract<AgentEvent, { type: 'agent.needs_input' }>;
+  asked: PermissionAction | undefined;
+}
+
+/**
+ * Where a Steward's requests are approved (P13-27; design 2026-11-18 §4.5): its project (the
+ * decider is its Waykeeper), or standalone work for an asteroid's Steward (the decider is the
+ * running Harmonizer). `auto`: the scope is in Auto now. No `deciderId`: nobody to approve.
+ */
+export interface ApprovalScope {
+  projectId?: Id;
+  auto: boolean;
+  deciderId?: Id;
 }
 
 /** What a resumed session falls back to if it ends before its first turn did (P2-16). */
@@ -441,6 +494,13 @@ export interface TurnEnd {
 }
 
 const SYSTEM: Actor = { type: 'system' };
+
+/** Why a job's publish went out without a card in Auto (P13-32): the approvals log's reason. */
+const JOB_PUBLISH_REASON = 'allowed: the job was approved to publish (decision 165)';
+
+/** A scope's grant filter: its project, or standalone work when it has none. */
+const scopeOf = (projectId: Id | undefined): { projectId?: Id } =>
+  projectId !== undefined ? { projectId } : {};
 
 /** One agent's trace in the log, as recovery needs it. */
 class AgentHistory {
@@ -504,6 +564,8 @@ export class AgentRuntime {
   private readonly folderCandidates = new Map<Id, string>();
   private folderLookup?: (target: { projectId?: Id; taskId?: Id }) => Promise<string | undefined>;
   private readonly byQuestion = new Map<Id, Id>();
+  /** Held sends being judged again (P13-27): one check at a time per question. */
+  private readonly rechecking = new Set<Id>();
   /** Recently ended agents, oldest first. */
   private readonly ended = new Set<Id>();
   private readonly now: () => string;
@@ -841,6 +903,7 @@ export class AgentRuntime {
       probation: how.probation,
       activity: false,
       recentActions: [],
+      heldSends: new Map(),
     };
     this.live.set(agent.id, live);
     this.lookUpFolderCandidate(agent.id, req);
@@ -2257,6 +2320,24 @@ export class AgentRuntime {
     );
   }
 
+  /** Whether Auto is on for standalone work now (P13-27): off when the setting cannot be read. */
+  private standaloneAutoNow(): boolean {
+    try {
+      return standaloneAutoOn({ standaloneAuto: this.opts.standaloneAuto?.() === true });
+    } catch {
+      return false;
+    }
+  }
+
+  /** Whether a scope is in Auto now (P13-27): a project's switch and Auto, or the setting. */
+  private autoNow(projectId: Id | undefined): boolean {
+    if (projectId === undefined) return this.standaloneAutoNow();
+    return (
+      this.approvalsOn(projectId) &&
+      this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true
+    );
+  }
+
   /**
    * The Steward's Waykeeper on `projectId`: its supervisor when that is the project's Waykeeper,
    * else the project's latest Waykeeper row; `undefined` when the project has none.
@@ -2277,14 +2358,64 @@ export class AgentRuntime {
   }
 
   /**
-   * A Steward's `ask` on a project whose Waykeeper approves (P13-04; design
-   * 2026-11-09-waykeeper-approvals §5.2): the call stays blocked in the adapter while the
+   * The Harmonizer that decides for an asteroid's Steward (P13-27; design §4.5): its supervisor
+   * when that is a running Harmonizer, else the newest running Harmonizer; `undefined` when none
+   * runs.
+   */
+  private harmonizerFor(supervisorId: Id | undefined): Id | undefined {
+    const { agents } = this.opts.log.tables;
+    const running = (id: Id) => {
+      const state = this.opts.statuses.get(id)?.state;
+      return state !== undefined && !ENDED_STATES.has(state);
+    };
+    const supervisor = supervisorId ? agents.get(supervisorId) : undefined;
+    if (supervisor?.role === 'harmonizer' && running(supervisor.id)) return supervisor.id;
+    return agents
+      .all()
+      .filter((a) => a.role === 'harmonizer' && running(a.id))
+      .reduce<Agent | undefined>(
+        (best, a) => (!best || a.createdAt >= best.createdAt ? a : best),
+        undefined,
+      )?.id;
+  }
+
+  /**
+   * Where a Steward's `ask` is approved (P13-27; design 2026-11-18 §4.2, §4.5): a project
+   * Steward's project, decided by its Waykeeper; an asteroid's Steward's standalone work, in Auto
+   * when `standaloneAuto` is on, decided by the running Harmonizer. `undefined` for any other
+   * agent. Read on every request.
+   */
+  approvalScopeOf(
+    agent: Pick<Agent, 'role' | 'taskId' | 'supervisorId'> | undefined,
+  ): ApprovalScope | undefined {
+    if (agent?.role !== 'steward' || !agent.taskId) return undefined;
+    const task = this.opts.log.tables.tasks.get(agent.taskId);
+    if (!task) return undefined;
+    if (task.projectId !== undefined) {
+      const deciderId = this.waykeeperOfProject(task.projectId, agent.supervisorId);
+      return {
+        projectId: task.projectId,
+        auto: this.autoNow(task.projectId),
+        ...(deciderId ? { deciderId } : {}),
+      };
+    }
+    const deciderId = this.harmonizerFor(agent.supervisorId);
+    return { auto: this.standaloneAutoNow(), ...(deciderId ? { deciderId } : {}) };
+  }
+
+  /**
+   * A Steward's `ask` in a scope whose decider approves (P13-04; design
+   * 2026-11-09-waykeeper-approvals §5.2; P13-27): the call stays blocked in the adapter while the
    * approval watch judges it. An approval answers the adapter and is logged as
-   * `permission.decided{allow}` in the Waykeeper's name; a forward opens the `agent.needs_input`
-   * and the user-held permission question with `context.waykeeper` in one transaction. Returns
-   * `false` — the caller opens the plain question — for anything else: another role, an asteroid
-   * Steward, a project with the switch off or no Waykeeper, a publishing run (decision 147), a
-   * worktree the gate cannot place.
+   * `permission.decided{allow}` in the decider's name (the Waykeeper, or the Harmonizer for an
+   * asteroid); a forward opens the `agent.needs_input` and the user-held permission question with
+   * `context.waykeeper` in one transaction; a send or a spend nothing covers (Auto) opens it with
+   * `context.sendPermission`. Returns `false` — the caller opens the plain question — for another
+   * role, a project with the switch off, an asteroid's Steward outside standalone Auto, and,
+   * outside Auto, a publishing run (decision 147), a project without a Waykeeper or a worktree the
+   * gate cannot place. In Auto those last two still go to the watch, whose send gets a plain
+   * Allow once / Don't allow card without a decider (design §4.4 step 8); anything else a plain
+   * card.
    */
   private watchApproval(
     live: Live,
@@ -2292,19 +2423,69 @@ export class AgentRuntime {
     event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
     asked: PermissionAction | undefined,
   ): boolean {
+    const agentId = live.agent.id;
+    const scope = this.approvalScopeOf(this.opts.log.tables.agents.get(agentId));
+    if (!scope) return false;
+    const { projectId } = scope;
+    if (projectId !== undefined ? !this.approvalsOn(projectId) : !scope.auto) return false;
+    if (!scope.auto && this.isPublishingRun(agentId, live.spec)) return false;
+    const misplaced =
+      misplacedCwd(this.workspaceOf(agentId, live.spec), live.spec.cwd) !== undefined;
+    if (!scope.auto && (!scope.deciderId || misplaced)) return false;
+    const deciderId = misplaced ? undefined : scope.deciderId;
+    const open = (question: typeof event.question) => {
+      const asking = { ...event, question };
+      this.command((ctx) => {
+        ctx.emit(asking);
+        openFromNeedsInput(ctx, asking, this.questions);
+      });
+      this.asked(live, asking);
+    };
+    live.idle = false;
+    if (!live.paused) live.inbox.working();
+    void this.startApprovalWatch(live, call, asked, projectId, () => this.watching(live), {
+      approve: (d) => {
+        if (!deciderId) return open(event.question);
+        this.logApproval(live, call, event, asked, deciderId, d);
+        // The Steward waits on this answer: it goes out right after the allow is logged.
+        void live.adapter
+          .answer(event.questionId, 'allow')
+          .catch((error: unknown) => this.onError(error, `approval answer ${event.questionId}`));
+        this.noteAllowed(live, call);
+      },
+      forward: (context: WaykeeperForward) =>
+        open(deciderId ? { ...event.question, waykeeper: context } : event.question),
+      // Auto (P13-26, P13-27): a send or a spend nothing covers stays held for the grant
+      // question, whose decider turns the user's reply into an answer; without one, a plain card.
+      hold: (context: SendPermissionContext) => {
+        if (deciderId) live.heldSends.set(event.questionId, { call, event, asked });
+        open({
+          ...event.question,
+          sendPermission: { ...context, ...(deciderId ? { deciderId } : {}) },
+        });
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Runs the approval watch on one call of `live` in its scope (`projectId` absent: standalone
+   * work); `active` says whether a verdict may still act. Resolves once the watch is done.
+   */
+  private startApprovalWatch(
+    live: Live,
+    call: ToolCall,
+    asked: PermissionAction | undefined,
+    projectId: Id | undefined,
+    active: () => boolean,
+    callbacks: Pick<ApprovalWatchCall, 'approve' | 'forward' | 'hold'>,
+  ): Promise<void> {
     const { tables } = this.opts.log;
     const agentId = live.agent.id;
-    const agent = tables.agents.get(agentId);
-    if (agent?.role !== 'steward' || !agent.taskId) return false;
-    const taskId = agent.taskId;
-    const projectId = tables.tasks.get(taskId)?.projectId;
-    if (!projectId || !this.approvalsOn(projectId)) return false;
-    if (this.isPublishingRun(agentId, live.spec)) return false;
-    const waykeeperId = this.waykeeperOfProject(projectId, agent.supervisorId);
-    if (!waykeeperId) return false;
+    const agent = tables.agents.get(agentId)!;
+    const taskId = agent.taskId!;
     const workspace = this.workspaceOf(agentId, live.spec);
     const cwd = live.spec.cwd;
-    if (misplacedCwd(workspace, cwd)) return false;
     const userFolders = this.userFoldersOf(agentId, live.spec);
     const ctx: PolicyContext = {
       workspace,
@@ -2320,71 +2501,582 @@ export class AgentRuntime {
     } catch {
       categories = asked ? [asked] : [];
     }
-    live.idle = false;
-    if (!live.paused) live.inbox.working();
-    void this.approvalWatch.handle({
+    return this.approvalWatch.handle({
       agentId,
-      projectId,
+      ...(projectId !== undefined ? { projectId } : {}),
       toolCall: call,
       categories,
       ctx,
       ...(scratch ? { scratch } : {}),
       facts: () => this.approvalFacts(live, projectId, taskId),
-      active: () => this.watching(live),
-      switchOn: () => this.approvalsOn(projectId),
-      auto: () => this.opts.log.tables.projects.get(projectId)?.waykeeperAuto === true,
-      marks: () => this.opts.log.tables.projects.get(projectId)?.approvalMarks ?? [],
+      active,
+      // Standalone work has no switch of its own: its Auto is the setting.
+      switchOn: () => (projectId !== undefined ? this.approvalsOn(projectId) : true),
+      auto: () =>
+        projectId !== undefined
+          ? tables.projects.get(projectId)?.waykeeperAuto === true
+          : this.standaloneAutoNow(),
+      marks: () =>
+        projectId !== undefined
+          ? (tables.projects.get(projectId)?.approvalMarks ?? [])
+          : standaloneOf(tables).approvalMarks,
+      grants: () => liveGrants(tables, projectId !== undefined ? { projectId } : {}, Date.now()),
       ...(cwd ? { git: gitReader(cwd) } : {}),
-      approve: (d) => {
+      ...callbacks,
+    });
+  }
+
+  /** An approval of the watch, logged in the decider's name (P13-04, P13-27). */
+  private logApproval(
+    live: Live,
+    call: ToolCall,
+    event: Extract<AgentEvent, { type: 'agent.needs_input' }>,
+    asked: PermissionAction | undefined,
+    deciderId: Id,
+    d: WaykeeperApproval,
+  ): void {
+    const cwd = live.spec.cwd;
+    this.permissionDecided(
+      live,
+      {
+        toolCall: event.question.toolCall ?? call,
+        decision: 'allow',
+        action: asked,
+        reason: d.reason,
+        decidedBy: { type: 'agent', id: deciderId },
+        waykeeperApproval: true,
+        ...(d.standingApprovalId !== undefined ? { standingApprovalId: d.standingApprovalId } : {}),
+        ...(d.quote !== undefined ? { quote: d.quote } : {}),
+        ...(d.allowedBy !== undefined ? { allowedBy: d.allowedBy } : {}),
+        ...(d.grantId !== undefined ? { grantId: d.grantId } : {}),
+        parts: d.parts,
+        ...(cwd ? { cwd } : {}),
+      },
+      event.questionId,
+    );
+  }
+
+  /**
+   * Judges again every send held for its question in `scope` (P13-27; `projectId` absent:
+   * standalone work) whose Steward still waits on it — after a grant was added, a held send it
+   * now covers is approved without the user. Each runs the Auto path of the watch (design §4.2
+   * step 3); only an approval by a grant live now answers the adapter (once), is logged in the
+   * decider's name and cancels the question as answered by the grant. Anything else — a verdict
+   * that it no longer sends, the user's words — leaves the question open as it is. Nothing
+   * is judged when the scope is not in Auto or has no decider now.
+   */
+  recheckHeldSends(scope: { projectId?: Id }): void {
+    const { tables } = this.opts.log;
+    for (const live of this.live.values()) {
+      if (live.heldSends.size === 0 || !this.watching(live)) continue;
+      const now = this.approvalScopeOf(tables.agents.get(live.agent.id));
+      if (!now || now.projectId !== scope.projectId) continue;
+      const deciderId = now.deciderId;
+      if (!now.auto || !deciderId) continue;
+      for (const [questionId, held] of live.heldSends) {
+        const question = tables.questions.get(questionId);
+        if (
+          question?.status !== 'open' ||
+          !question.context.sendPermission ||
+          !live.questions.has(questionId)
+        ) {
+          live.heldSends.delete(questionId);
+          continue;
+        }
+        if (live.answering.has(questionId) || this.rechecking.has(questionId)) continue;
+        const waiting = () =>
+          this.watching(live) &&
+          live.questions.has(questionId) &&
+          !live.answering.has(questionId) &&
+          tables.questions.get(questionId)?.status === 'open';
+        this.rechecking.add(questionId);
+        const done = () => this.rechecking.delete(questionId);
+        // A forward or a hold: the question stays open as it is.
+        const leave = () => {};
+        this.startApprovalWatch(live, held.call, held.asked, now.projectId, waiting, {
+          approve: (d) => this.approveHeldSend(live, questionId, held, deciderId, d),
+          forward: leave,
+          hold: leave,
+        }).then(done, (error: unknown) => {
+          done();
+          this.onError(error, `held send recheck ${questionId}`);
+        });
+      }
+    }
+    // A publish's grant question (P13-29): no call waits in the adapter, the question is the hold.
+    for (const question of tables.questions.all()) {
+      const publish = question.context.sendPermission?.publish;
+      if (question.status !== 'open' || question.kind !== 'permission' || !publish) continue;
+      const live = this.live.get(question.originAgentId);
+      if (!live || !this.watching(live)) continue;
+      const now = this.approvalScopeOf(tables.agents.get(live.agent.id));
+      if (!now || now.projectId !== scope.projectId || !now.auto || !now.deciderId) continue;
+      if (live.answering.has(question.id) || this.rechecking.has(question.id)) continue;
+      this.rechecking.add(question.id);
+      const done = () => this.rechecking.delete(question.id);
+      this.recheckHeldPublish(live, question.id, publish, now, now.deciderId).then(
+        done,
+        (error: unknown) => {
+          done();
+          this.onError(error, `held publish recheck ${question.id}`);
+        },
+      );
+    }
+  }
+
+  /**
+   * A held send a new check approves (P13-27): only a grant live at this moment may answer it —
+   * the send was already held once, so a new "not a send" or a task-words quote leaves the
+   * question open for the user. The question is cancelled as answered and the allow logged in one
+   * go, before the adapter hears it — a racing Allow once or Don't allow from the user then finds
+   * the call already being answered, so the adapter is answered once.
+   */
+  private approveHeldSend(
+    live: Live,
+    questionId: Id,
+    held: HeldSend,
+    deciderId: Id,
+    d: WaykeeperApproval,
+  ): void {
+    if (d.allowedBy !== 'grant' || d.grantId === undefined) return;
+    const scope = this.approvalScopeOf(this.opts.log.tables.agents.get(live.agent.id));
+    const grant = scope
+      ? liveGrants(
+          this.opts.log.tables,
+          scope.projectId !== undefined ? { projectId: scope.projectId } : {},
+          Date.now(),
+        ).find((g) => g.id === d.grantId)
+      : undefined;
+    if (!grant) return;
+    if (!live.questions.has(questionId) || live.answering.has(questionId)) return;
+    live.answering.add(questionId);
+    live.heldSends.delete(questionId);
+    try {
+      this.logApproval(live, held.call, held.event, held.asked, deciderId, d);
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(`answered by a grant: ${grant.summary}`),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.questions.delete(questionId);
+      this.byQuestion.delete(questionId);
+    }
+    void live.adapter
+      .answer(questionId, 'allow')
+      .catch((error: unknown) => this.onError(error, `held send answer ${questionId}`))
+      .finally(() => live.answering.delete(questionId));
+    this.noteAllowed(live, held.call);
+  }
+
+  /**
+   * The decider's answer to a held send, checked by the command (P13-28; design §4.4 step 4).
+   * The grant comes first, in its own transaction: a refused one (an end in the past, a project
+   * that ended) throws and changes nothing. Then an allow is logged in the decider's name — with
+   * the grant (`allowedBy: 'grant'`) or once (`'allow_once'`) — and the question is cancelled as
+   * answered, before the adapter hears it once: `allow`, or `deny: <reason>` for the Steward.
+   * Auto need not be on: the user's reply answers the call he was asked about. After a grant, the
+   * scope's other held sends are judged again (`recheckHeldSends`). Returns the grant.
+   */
+  async answerHeldSend(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined> {
+    const agentId = this.byQuestion.get(questionId);
+    if (!agentId) {
+      throw new DomainError('stale', `no Steward waits on question ${questionId} any more`);
+    }
+    const live = this.must(agentId);
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    const question = this.opts.log.tables.questions.get(questionId);
+    const send = question?.context.sendPermission;
+    const asked = question?.context.toolCall;
+    if (question?.status !== 'open' || !send || !asked) {
+      throw new DomainError('stale', `question ${questionId} is not an open held send`);
+    }
+    live.answering.add(questionId);
+    let grant: SendGrant | undefined;
+    try {
+      if (answer.decision === 'allow' && answer.grant) {
+        grant = this.opts.log.runCommand(answer.grant).value;
+      }
+    } catch (error) {
+      live.answering.delete(questionId);
+      throw error;
+    }
+    const call = live.heldSends.get(questionId)?.call ?? asked;
+    live.heldSends.delete(questionId);
+    try {
+      if (answer.decision === 'allow') {
         this.permissionDecided(
           live,
           {
-            toolCall: event.question.toolCall ?? call,
+            toolCall: asked,
             decision: 'allow',
-            action: asked,
-            reason: d.reason,
-            decidedBy: { type: 'agent', id: waykeeperId },
+            action: question.context.permissionAction,
+            reason: answer.reason,
+            decidedBy: { type: 'agent', id: answer.deciderId },
             waykeeperApproval: true,
-            ...(d.standingApprovalId !== undefined
-              ? { standingApprovalId: d.standingApprovalId }
-              : {}),
-            ...(d.quote !== undefined ? { quote: d.quote } : {}),
-            parts: d.parts,
-            ...(cwd ? { cwd } : {}),
+            allowedBy: grant ? 'grant' : 'allow_once',
+            ...(grant ? { grantId: grant.id, quote: grant.words } : {}),
+            parts: send.parts,
+            ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
           },
-          event.questionId,
+          questionId,
         );
-        // The Steward waits on this answer: it goes out right after the allow is logged.
-        void live.adapter
-          .answer(event.questionId, 'allow')
-          .catch((error: unknown) => this.onError(error, `approval answer ${event.questionId}`));
-        this.noteAllowed(live, call);
-      },
-      forward: (context: WaykeeperForward) => {
-        const forwarded = { ...event, question: { ...event.question, waykeeper: context } };
-        this.command((ctx) => {
-          ctx.emit(forwarded);
-          openFromNeedsInput(ctx, forwarded, this.questions);
-        });
-        this.asked(live, forwarded);
-      },
-    });
-    return true;
+      }
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(answer.reason),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.questions.delete(questionId);
+      this.byQuestion.delete(questionId);
+    }
+    const forAgent =
+      answer.decision === 'allow' ? 'allow' : `deny: ${redactSecrets(answer.reason)}`;
+    try {
+      await live.adapter.answer(questionId, forAgent);
+    } catch (error) {
+      this.onError(error, `held send answer ${questionId}`);
+    } finally {
+      live.answering.delete(questionId);
+    }
+    if (answer.decision === 'allow') this.noteAllowed(live, call);
+    if (grant) {
+      this.recheckHeldSends(grant.projectId !== undefined ? { projectId: grant.projectId } : {});
+    }
+    return grant;
   }
 
-  /** What the request judge is told besides the call (P13-04), read when the request arrives. */
-  private approvalFacts(live: Live, projectId: Id, taskId: Id): ApprovalFacts | undefined {
+  // -- publishes in Auto (P13-29; design 2026-11-18 §4.6) --------------------------------------
+
+  /** How a publish's files are read and where (the same as the commands' and the relay's). */
+  private publishDeps(): PublishDeps {
+    return {
+      readFile: (root, path) => readFileInFolder(root, path),
+      worktreeOf: (agentId) =>
+        this.permissionContext(agentId)?.ctx.cwd ?? folderOfAgent(this.opts.log, agentId),
+    };
+  }
+
+  /**
+   * A Steward's `request_publish` in Auto (P13-29; design §4.6): the publish is a send. Returns
+   * `undefined` — the caller opens the publish card as today (decision 147) — for an agent this
+   * runtime does not run, a scope not in Auto, a job run's publish (its Approve queues the run that
+   * publishes) and Auto turned off while it was judged. Otherwise the request is checked and its
+   * files hashed as the card's would be (`preparePublish`, which throws what it refuses) and the
+   * grants judge reads it. Covered (a grant live at verdict time, or a quote of the user's words
+   * the server finds) with a decider: the one-shot allowance is armed as the card's Approve arms
+   * it, logged as `permission.decided{allow}` in the decider's name with the text and the files'
+   * hashes. Anything else — no cover, a failed check, no decider — opens the grant question in
+   * place of the card (`openPublishPermission`).
+   */
+  async requestPublishInAuto(input: RequestPublishInput): Promise<PublishInAuto | undefined> {
+    const live = this.live.get(input.originAgentId);
+    if (!live || !this.watching(live)) return undefined;
+    const { log } = this.opts;
+    const scopeNow = () => this.approvalScopeOf(log.tables.agents.get(live.agent.id));
+    const scope = scopeNow();
+    if (!scope?.auto) return undefined;
+    const deps = this.publishDeps();
+    const prepared = log.runCommand((ctx) => preparePublish(ctx, input, deps)).value;
+    if (prepared.run) return this.jobPublishInAuto(live, input, prepared.run, scopeNow);
+    if (!prepared.agent.taskId) return undefined;
+    const { publish } = prepared;
+    const cover = await this.judgePublishOf(live, publish, scope.projectId, prepared.agent.taskId);
+    if (cover === 'cancelled' || !this.watching(live)) {
+      throw new DomainError('stale', 'the Steward stopped; nothing was asked or published');
+    }
+    if (cover === 'off') return undefined;
+    const deciderId = scopeNow()?.deciderId;
+    if ('covered' in cover && deciderId) {
+      this.allowPublish(live, publish, deciderId, cover.covered);
+      return {
+        approved: {
+          allowedBy: cover.covered.allowedBy ?? 'grant',
+          ...(cover.covered.grantId !== undefined ? { grantId: cover.covered.grantId } : {}),
+        },
+      };
+    }
+    const held =
+      'held' in cover
+        ? cover.held
+        : {
+            summary: `Publish to ${publish.platform} (${publish.account})`,
+            grants: liveGrants(log.tables, scopeOf(scope.projectId), Date.now()),
+          };
+    const question = log.runCommand((ctx) =>
+      openPublishPermission(
+        ctx,
+        live.agent.id,
+        publish,
+        { ...held, ...(deciderId ? { deciderId } : {}) },
+        this.questions,
+      ),
+    ).value;
+    return { questionId: question.id };
+  }
+
+  /**
+   * A job run's publish in Auto (P13-32, SPEC decision 165). Its job approved on its card to
+   * publish, not stopped, the scope in Auto with a decider — read again right before answering:
+   * the job's publish question opens and the decider answers it `Approve` in one transaction (the
+   * user's Approve path: the follow-up run that publishes it is queued), logged as
+   * `permission.decided{allow}` in the decider's name with the platform, account, text (redacted)
+   * and files' hashes. No allowance is armed: the follow-up run publishes, not this one. Anything
+   * else returns `undefined` and the caller opens the publish card as today; a job's `publishes`
+   * never covers a spend.
+   */
+  private jobPublishInAuto(
+    live: Live,
+    input: RequestPublishInput,
+    run: JobRun,
+    scopeNow: () => ApprovalScope | undefined,
+  ): PublishInAuto | undefined {
+    const { log } = this.opts;
+    const job = log.tables.jobs.get(run.jobId);
+    if (!job?.publishes || job.state === 'stopped') return undefined;
+    const scope = scopeNow();
+    const deciderId = scope?.deciderId;
+    if (!scope?.auto || !deciderId || !this.watching(live)) return undefined;
+    let question: Question;
+    try {
+      question = log.runCommand((ctx) =>
+        approveJobPublishInAuto(ctx, input, this.questions, this.publishDeps(), deciderId),
+      ).value;
+    } catch (error) {
+      // Nothing was opened: the card path asks (or refuses) as today.
+      if (error instanceof DomainError) return undefined;
+      throw error;
+    }
+    const publish = question.context.publish!;
+    this.permissionDecided(
+      live,
+      {
+        toolCall: publishRequestCall(publish),
+        decision: 'allow',
+        action: 'network',
+        reason: JOB_PUBLISH_REASON,
+        decidedBy: { type: 'agent', id: deciderId },
+        // In the approvals log Cosmin reads, beside the other publishes approved in Auto.
+        waykeeperApproval: true,
+        allowedBy: 'auto',
+        parts: [],
+        ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
+      },
+      question.id,
+    );
+    return { approved: { allowedBy: 'auto', jobFollowUp: { questionId: question.id } } };
+  }
+
+  /** The grants judge on a publish of `live` in its scope (P13-29). */
+  private judgePublishOf(
+    live: Live,
+    publish: PublishContext,
+    projectId: Id | undefined,
+    taskId: Id,
+  ): Promise<PublishCover> {
+    const { tables } = this.opts.log;
+    const ctx = this.permissionContext(live.agent.id)?.ctx ?? {
+      workspace: this.workspaceOf(live.agent.id, live.spec),
+    };
+    return this.approvalWatch.judgePublish({
+      agentId: live.agent.id,
+      toolCall: publishRequestCall(publish),
+      ctx,
+      facts: () => this.approvalFacts(live, projectId, taskId),
+      grants: () => liveGrants(tables, scopeOf(projectId), Date.now()),
+      auto: () => this.approvalScopeOf(tables.agents.get(live.agent.id))?.auto === true,
+    });
+  }
+
+  /**
+   * A publish allowed in the decider's name (P13-29): logged as `permission.decided{allow}` — the
+   * platform, the account, the text (redacted) and the files' hashes, what allowed it — then the
+   * Steward's one-shot allowance armed exactly as the card's Approve arms it (`PublishRelay`).
+   */
+  private allowPublish(
+    live: Live,
+    publish: PublishContext,
+    deciderId: Id,
+    d: WaykeeperApproval,
+    questionId?: Id,
+  ): void {
+    const call = publishRequestCall(publish);
+    this.permissionDecided(
+      live,
+      {
+        toolCall: call,
+        decision: 'allow',
+        action: 'network',
+        reason: d.reason,
+        decidedBy: { type: 'agent', id: deciderId },
+        waykeeperApproval: true,
+        ...(d.quote !== undefined ? { quote: d.quote } : {}),
+        ...(d.allowedBy !== undefined ? { allowedBy: d.allowedBy } : {}),
+        ...(d.grantId !== undefined ? { grantId: d.grantId } : {}),
+        parts: d.parts,
+        ...(live.spec.cwd ? { cwd: live.spec.cwd } : {}),
+      },
+      questionId,
+    );
+    this.opts.publishAllowances?.arm(
+      live.agent.id,
+      publish,
+      this.publishDeps().worktreeOf(live.agent.id),
+    );
+    this.noteAllowed(live, call);
+  }
+
+  /** Tells the Steward its publish's answer, as the card's relay does (P13-29). */
+  private tellPublish(live: Live, publish: PublishContext, refused?: string): void {
+    try {
+      this.send(
+        live.agent.id,
+        `Publish approval for ${publish.platform}: ` +
+          (refused === undefined ? 'approved' : `refused. ${redactSecrets(refused)}`),
+        { sender: SYSTEM },
+      );
+    } catch (error) {
+      this.onError(error, 'publish answer');
+    }
+  }
+
+  /**
+   * The decider's answer to a publish's grant question (P13-29), checked by the command as a held
+   * send's is. No session waits on it: the grant comes first in its own transaction (a refused
+   * one changes nothing); an allow is logged in the decider's name and arms the allowance; the
+   * question is cancelled as answered; then the Steward hears the answer as a message. After a
+   * grant, the scope's held sends and publishes are judged again. Returns the grant.
+   */
+  async answerHeldPublish(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined> {
+    const question = this.opts.log.tables.questions.get(questionId);
+    const publish = question?.context.sendPermission?.publish;
+    if (question?.status !== 'open' || question.kind !== 'permission' || !publish) {
+      throw new DomainError('stale', `question ${questionId} is not an open held publish`);
+    }
+    const live = this.live.get(question.originAgentId);
+    if (!live || !this.watching(live)) {
+      throw new DomainError('stale', `no Steward waits on question ${questionId} any more`);
+    }
+    if (live.answering.has(questionId)) {
+      throw new DomainError('stale', `question ${questionId} is already being answered`);
+    }
+    live.answering.add(questionId);
+    let grant: SendGrant | undefined;
+    try {
+      if (answer.decision === 'allow' && answer.grant) {
+        grant = this.opts.log.runCommand(answer.grant).value;
+      }
+      if (answer.decision === 'allow') {
+        this.allowPublish(
+          live,
+          publish,
+          answer.deciderId,
+          {
+            reason: answer.reason,
+            allowedBy: grant ? 'grant' : 'allow_once',
+            ...(grant ? { grantId: grant.id, quote: grant.words } : {}),
+            parts: [],
+          },
+          questionId,
+        );
+      }
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(answer.reason),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.answering.delete(questionId);
+    }
+    this.tellPublish(live, publish, answer.decision === 'allow' ? undefined : answer.reason);
+    if (grant) {
+      this.recheckHeldSends(grant.projectId !== undefined ? { projectId: grant.projectId } : {});
+    }
+    return grant;
+  }
+
+  /**
+   * Judges again an open publish grant question of `live` (P13-29), as `recheckHeldSends` does a
+   * held send: only a grant live when the verdict arrives arms the allowance — logged in the
+   * decider's name, the question cancelled as answered by the grant, the Steward told.
+   */
+  private async recheckHeldPublish(
+    live: Live,
+    questionId: Id,
+    publish: PublishContext,
+    scope: ApprovalScope,
+    deciderId: Id,
+  ): Promise<void> {
+    const { tables } = this.opts.log;
+    const taskId = tables.agents.get(live.agent.id)?.taskId;
+    if (!taskId) return;
+    const cover = await this.judgePublishOf(live, publish, scope.projectId, taskId);
+    if (typeof cover === 'string' || !('covered' in cover)) return;
+    const d = cover.covered;
+    if (d.allowedBy !== 'grant' || d.grantId === undefined) return;
+    const grant = liveGrants(tables, scopeOf(scope.projectId), Date.now()).find(
+      (g) => g.id === d.grantId,
+    );
+    if (!grant || !this.watching(live) || live.answering.has(questionId)) return;
+    if (tables.questions.get(questionId)?.status !== 'open') return;
+    live.answering.add(questionId);
+    try {
+      this.allowPublish(live, publish, deciderId, d, questionId);
+      this.command((ctx) =>
+        cancelQuestion(
+          ctx,
+          questionId,
+          redactSecrets(`answered by a grant: ${grant.summary}`),
+          holdersNow(ctx, questionId, this.questions),
+        ),
+      );
+    } finally {
+      live.answering.delete(questionId);
+    }
+    this.tellPublish(live, publish);
+  }
+
+  /**
+   * What the request judge is told besides the call (P13-04), read when the request arrives:
+   * the project's approvals, or standalone work's for an asteroid's Steward (P13-27).
+   */
+  private approvalFacts(
+    live: Live,
+    projectId: Id | undefined,
+    taskId: Id,
+  ): ApprovalFacts | undefined {
     const { tables } = this.opts.log;
     const task = tables.tasks.get(taskId);
-    const project = tables.projects.get(projectId);
-    if (!task || !project) return undefined;
+    if (!task) return undefined;
+    let standingApprovals: ApprovalFacts['standingApprovals'] = [];
+    let recordedApprovals: ApprovalFacts['recordedApprovals'];
+    if (projectId !== undefined) {
+      const project = tables.projects.get(projectId);
+      if (!project) return undefined;
+      standingApprovals = [...(project.standingApprovals ?? [])];
+      recordedApprovals = [...(project.recordedApprovals ?? [])];
+    } else {
+      recordedApprovals = [...standaloneOf(tables).recordedApprovals];
+    }
     const firstLine = task.description.trim().split('\n')[0] ?? '';
     return {
       task: { title: firstLine.slice(0, MAX_TASK_TITLE), description: task.description },
       userWords: userWordsFor(this.opts.log, taskId),
       recentActions: [...live.recentActions],
-      standingApprovals: [...(project.standingApprovals ?? [])],
-      recordedApprovals: [...(project.recordedApprovals ?? [])],
+      standingApprovals,
+      recordedApprovals,
     };
   }
 
@@ -2404,6 +3096,10 @@ export class AgentRuntime {
       standingApprovalId?: Id;
       /** The user's words that granted a push or an upload (P13-04). */
       quote?: string;
+      /** Auto (P13-26): what allowed it, for the approvals log. */
+      allowedBy?: AllowedBy;
+      /** Auto (P13-26): the send grant that covered it. */
+      grantId?: Id;
       /** The Waykeeper's request judge approved it (P13-04): never set by the scope watch. */
       waykeeperApproval?: true;
       /** The request's parts, texts already redacted (P13-16): for the approvals log and marks. */
@@ -2433,6 +3129,8 @@ export class AgentRuntime {
       ...(d.standingApprovalId ? { standingApprovalId: d.standingApprovalId } : {}),
       ...(d.quote ? { quote: redactSecrets(d.quote) } : {}),
       ...(d.waykeeperApproval ? { waykeeperApproval: true as const } : {}),
+      ...(d.allowedBy ? { allowedBy: d.allowedBy } : {}),
+      ...(d.grantId ? { grantId: d.grantId } : {}),
       ...(d.parts && d.parts.length > 0 ? { parts: d.parts } : {}),
       ...(d.cwd ? { cwd: d.cwd } : {}),
     };
@@ -2448,12 +3146,15 @@ export class AgentRuntime {
       try {
         const { tables } = this.opts.log;
         const approver = d.decidedBy.id ? tables.agents.get(d.decidedBy.id) : undefined;
-        const name = approver
-          ? waykeeperLabel(
-              approver,
-              approver.projectId ? tables.projects.get(approver.projectId)?.name : undefined,
-            )
-          : 'the Waykeeper';
+        const name =
+          approver?.role === 'harmonizer'
+            ? 'the Harmonizer'
+            : approver
+              ? waykeeperLabel(
+                  approver,
+                  approver.projectId ? tables.projects.get(approver.projectId)?.name : undefined,
+                )
+              : 'the Waykeeper';
         this.opts.transcripts.append(
           live.agent.id,
           'tool',
@@ -2725,9 +3426,13 @@ export class AgentRuntime {
       return;
     }
     let event = redactEvent(raw);
-    if (event.type === 'agent.needs_input' && event.question.waykeeper !== undefined) {
-      // Only the approval watch writes a Waykeeper forward (P13-04): never the agent itself.
-      const { waykeeper: _forged, ...question } = event.question;
+    if (
+      event.type === 'agent.needs_input' &&
+      (event.question.waykeeper !== undefined || event.question.sendPermission !== undefined)
+    ) {
+      // Only the approval watch writes a Waykeeper forward (P13-04) or a held send (P13-27):
+      // never the agent itself.
+      const { waykeeper: _forged, sendPermission: _forgedSend, ...question } = event.question;
       event = { ...event, question };
     }
     if (

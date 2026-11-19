@@ -143,7 +143,7 @@ describe('long-term tables (P10-01)', () => {
       agents: t.agents.all(),
     };
 
-    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19, 20, 21]);
+    expect(migrate(db, all).applied).toEqual([16, 17, 18, 19, 20, 21, 22, 23]);
     const after = tables(db);
     expect(after.bodies.all()).toEqual(before.bodies);
     expect(after.questions.all()).toEqual(before.questions);
@@ -268,5 +268,34 @@ describe('dashboard tables (P15-01)', () => {
     t.jobRuns.insert(run);
     expect(t.jobs.get('j-1')).toEqual(job);
     expect(t.jobRuns.get('jr-2')).toEqual(run);
+  });
+
+  it('round-trips a job approved to publish (P13-32)', () => {
+    const t = tables(openDatabase(':memory:'));
+    seed(t);
+    t.areas.insert(fx.area);
+    const job = { ...fx.job, publishes: true };
+    t.jobs.insert(job);
+    expect(t.jobs.get('j-1')).toEqual(job);
+    expect(t.jobs.get('j-1')?.publishes).toBe(true);
+  });
+
+  it('reads a job written before 0023 as not publishing (P13-32)', () => {
+    const db = openDatabase(':memory:', { migrate: false });
+    const all = loadMigrations();
+    expect(all[22]?.name).toBe('job_publishes');
+    migrate(db, all.slice(0, 22));
+    const t = tables(db);
+    seed(t);
+    t.areas.insert(fx.area);
+    // The 0022 jobs table has no publishes column: written by hand.
+    db.prepare(
+      `INSERT INTO jobs (id, project_id, area_id, task_id, name, instructions, schedule, provider,
+         unattended_rules, state, follow_ups, created_at, updated_at)
+       VALUES ('j-old', 'p-1', 'ar-1', 't-job-1', 'Old job', 'Do it.', ?, 'claude', '[]', 'active',
+         '[]', ?, ?)`,
+    ).run(JSON.stringify({ kind: 'daily', at: '09:00' }), fx.NOW, fx.NOW);
+    migrate(db, all);
+    expect(t.jobs.get('j-old')?.publishes).toBe(false);
   });
 });

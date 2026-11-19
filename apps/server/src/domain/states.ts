@@ -2,6 +2,7 @@ import type { Actor, Id, WorkState } from '@galactic/protocol';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { endProjectRules } from './project-rules.js';
+import { endSendGrants } from './send-grants.js';
 import { endStandingApprovals } from './waykeeper-approvals.js';
 import { withdrawLimitQuestions } from './usage-limits.js';
 
@@ -137,7 +138,12 @@ export function setProjectState(ctx: CommandContext, projectId: Id, to: WorkStat
     endProjectRules(ctx, projectId, to);
     // So do its standing approvals (P13, decision 154).
     endStandingApprovals(ctx, projectId, to);
+    // And its send grants (Auto, design 2026-11-18).
+    endSendGrants(ctx, projectId, to === 'completed' ? 'project closed' : 'project archived');
   }
+  // A failed project's grants end too, and stay ended if it is picked up again (decision 164).
+  // A cancel ends them first, as 'project cancelled' (cascade.ts).
+  if (to === 'failed') endSendGrants(ctx, projectId, 'project failed');
   return ctx.tables.projects.get(projectId) ?? project;
 }
 

@@ -6,6 +6,10 @@ import {
   approvalLogCategory,
   ApprovalMark,
   CommandPart,
+  GrantConflictContext,
+  GRANT_CONFLICT_OPTIONS,
+  isGrantInForce,
+  isGrantLive,
   isJudgedKind,
   isPushOrUpload,
   markLabel,
@@ -16,6 +20,8 @@ import {
   QUOTE_MIN_LENGTH,
   quoteFound,
   RecordedApproval,
+  SendGrant,
+  SEND_GRANT_MAX_DAYS,
   SIMILAR_APPROVALS_THRESHOLD,
   StandingApproval,
   WaykeeperForward,
@@ -264,5 +270,77 @@ describe('markLabel and ApprovalMark (P13-13)', () => {
       }),
     ).toThrow();
     expect(() => ApprovalMark.parse({ ...mark, match: { kind: 'prefix', words: [] } })).toThrow();
+  });
+});
+
+describe('send grants (P13-23)', () => {
+  const grant = {
+    id: 'sg-1',
+    words: 'you may push to the release branch',
+    summary: 'push to the release branch',
+    createdAt: '2026-11-18T10:00:00.000Z',
+    createdBy: { type: 'user' },
+    origin: 'local',
+    questionId: 'q-1',
+  };
+
+  it('parses with and without projectId and endsAt', () => {
+    expect(SendGrant.parse(grant)).toEqual(grant);
+    const full = { ...grant, projectId: 'p-1', endsAt: '2026-11-20T10:00:00.000Z' };
+    expect(SendGrant.parse(full)).toEqual(full);
+    expect(SEND_GRANT_MAX_DAYS).toBe(90);
+  });
+
+  it('refuses empty words', () => {
+    expect(() => SendGrant.parse({ ...grant, words: '' })).toThrow();
+  });
+
+  it('is live without an end and before it, not at it', () => {
+    const endsAt = '2026-11-20T10:00:00.000Z';
+    const g = SendGrant.parse({ ...grant, endsAt });
+    expect(isGrantLive(SendGrant.parse(grant), Date.parse(endsAt) + 1e9)).toBe(true);
+    expect(isGrantLive(g, Date.parse(endsAt) - 1)).toBe(true);
+    expect(isGrantLive(g, Date.parse(endsAt))).toBe(false);
+  });
+
+  it('is in force only when live and not paused (P13-34)', () => {
+    const endsAt = '2026-11-20T10:00:00.000Z';
+    const before = Date.parse(endsAt) - 1;
+    expect(isGrantInForce(SendGrant.parse({ ...grant, endsAt }), before)).toBe(true);
+    const paused = SendGrant.parse({ ...grant, endsAt, pausedBy: 'q-9' });
+    expect(isGrantLive(paused, before)).toBe(true);
+    expect(isGrantInForce(paused, before)).toBe(false);
+    expect(isGrantInForce(SendGrant.parse({ ...grant, endsAt }), Date.parse(endsAt))).toBe(false);
+  });
+
+  it('a grant-conflict context names its grants, his words and up to 3 own options', () => {
+    expect(GRANT_CONFLICT_OPTIONS).toEqual([
+      'Replace the earlier grant with the new one',
+      'Keep the earlier grant and ignore the new words',
+      'Keep both',
+    ]);
+    const ctx = {
+      deciderId: 'a-w',
+      grants: [{ id: 'sg-1', words: 'w', summary: 's' }],
+      newWords: 'only today',
+      options: ['Keep A until Friday'],
+    };
+    expect(GrantConflictContext.parse(ctx)).toEqual(ctx);
+    expect(() => GrantConflictContext.parse({ ...ctx, grants: [] })).toThrow();
+    expect(() => GrantConflictContext.parse({ ...ctx, options: ['a', 'b', 'c', 'd'] })).toThrow();
+    expect(() => GrantConflictContext.parse({ ...ctx, options: ['x'.repeat(201)] })).toThrow();
+  });
+
+  it('lets an approval mark be standalone', () => {
+    const mark = {
+      id: 'am-1',
+      match: { kind: 'tool', toolName: 'Read' },
+      example: 'Read',
+      createdBy: { type: 'user' },
+      createdAt: '2026-11-18T10:00:00.000Z',
+      origin: 'local',
+      fromSeq: 1,
+    };
+    expect(ApprovalMark.parse(mark).projectId).toBeUndefined();
   });
 });

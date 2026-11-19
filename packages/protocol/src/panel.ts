@@ -14,7 +14,7 @@ import type { EventEnvelope } from './events.js';
 import { deliverablesPhrase } from './deliverables.js';
 import { ModelInfo, Provider, ProviderUsage } from './providers.js';
 import { ReplyQuote } from './reply.js';
-import type { SpendContext } from './long-term-questions.js';
+import { APPROVED_ON_OPEN, type SpendContext } from './long-term-questions.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -376,6 +376,8 @@ export const Settings = z.object({
   deliverables: SettingsDeliverables.optional(),
   /** The installed app's name (P8-26, decision 153); absent: `DEFAULT_APP_NAME`. */
   appName: AppName.optional(),
+  /** Auto for standalone work (asteroids and the Harmonizer's own); absent: off. */
+  standaloneAuto: z.boolean().optional(),
 });
 export type Settings = z.infer<typeof Settings>;
 
@@ -394,6 +396,7 @@ export const SettingName = z.enum([
   'providers',
   'deliverables',
   'appName',
+  'standaloneAuto',
 ]);
 export type SettingName = z.infer<typeof SettingName>;
 
@@ -454,6 +457,8 @@ export const SettingsPatch = z
      * requests only unless `autoApproveRemote` (decision 51).
      */
     appName: AppName.nullable().optional(),
+    /** Auto for standalone work; local requests only (decision 51). */
+    standaloneAuto: z.boolean().optional(),
   })
   .strict();
 export type SettingsPatch = z.infer<typeof SettingsPatch>;
@@ -690,6 +695,8 @@ export function notificationOf(
       const question = event.type === 'question.opened' ? event.question : undefined;
       const holder = event.type === 'question.opened' ? event.question.holder : event.to;
       if (holder.type !== 'user') return undefined;
+      // Opened already answered by the server (decision 165): nobody is asked.
+      if (question?.meta?.[APPROVED_ON_OPEN] === true) return undefined;
       const id = question?.id ?? (event as { questionId: Id }).questionId;
       const known = question ?? lookup.question?.(id);
       const kind = known?.kind ?? 'clarification';

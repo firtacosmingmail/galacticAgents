@@ -12,7 +12,10 @@ import {
 import { LaunchContext, OffScriptContext } from './launch-flags.js';
 import {
   ApprovalMark,
+  GrantConflictContext,
   RecordedApproval,
+  SendGrant,
+  SendPermissionContext,
   StandingApproval,
   WaykeeperForward,
 } from './waykeeper-approvals.js';
@@ -222,6 +225,8 @@ export const Project = z.object({
   waykeeperAuto: z.literal(true).optional(),
   /** The project's approval marks, oldest first; only `approval_mark.added` / `.removed`. */
   approvalMarks: z.array(ApprovalMark).optional(),
+  /** The project's send grants, oldest first; only `send_grant.added` / `.removed`. */
+  sendGrants: z.array(SendGrant).optional(),
   /**
    * The project's standing approvals (P13), oldest first; absent: none. Changed only by
    * `standing_approval.added` / `standing_approval.removed`; they end with the project.
@@ -594,6 +599,10 @@ export const QuestionContext = z.object({
   offScript: OffScriptContext.optional(),
   /** What the Waykeeper forwarded and why (P13); the card shows it. */
   waykeeper: WaykeeperForward.optional(),
+  /** What a send-permission question asks to allow, and the grants that did not cover it. */
+  sendPermission: SendPermissionContext.optional(),
+  /** A grant-conflict question (P13-34): the earlier grants, the new words; user-held only. */
+  grantConflict: GrantConflictContext.optional(),
   /** Set by the server on `question.opened`; adapters leave it out. */
   origin: QuestionOrigin.optional(),
 });

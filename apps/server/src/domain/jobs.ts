@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import {
   JobDraft,
   LONG_TERM_LIMITS,
+  PROVIDER_LABEL,
+  PROVIDER_RUNTIME,
   applyChanges,
   isLongTerm,
   nextOccurrence,
@@ -183,11 +185,17 @@ function ruleTexts(rule: {
   return [rule.label ?? '', rule.tool, subject];
 }
 
+/** Runtimes that are never given a publish (global constraint: agy has `canPublish: false`). */
+export const CANNOT_PUBLISH: ReadonlyMap<string, string> = new Map([
+  ['agy', PROVIDER_LABEL.gemini],
+]);
+
 /**
  * A job draft within the schema and its limits, with nothing that looks like a secret (Global
  * Constraints: credentials are never stored in a job) and only rule shapes "Allow similar" makes
  * (`unattendedRuleRefusal`: no push, no root or home folder, no prefix or category outside the
- * workspace, …), each rule labelled by the server from what it matches (`unattendedRuleLabel`).
+ * workspace, …), each rule labelled by the server from what it matches (`unattendedRuleLabel`),
+ * and `publishes` only when the follow-up provider can publish (decision 165).
  */
 function checkedDraft(draft: unknown): JobDraft {
   const parsed = JobDraft.safeParse(draft);
@@ -196,6 +204,16 @@ function checkedDraft(draft: unknown): JobDraft {
   }
   const job = parsed.data;
   if (!job.name.trim()) throw new DomainError('invalid', 'a job needs a name');
+  if (job.publishes) {
+    // The follow-up run is the one that publishes (decision 165).
+    const label = CANNOT_PUBLISH.get(PROVIDER_RUNTIME[job.followUpProvider ?? job.provider]);
+    if (label) {
+      throw new DomainError(
+        'invalid',
+        `${label} cannot publish: a job that publishes needs a follow-up provider that can`,
+      );
+    }
+  }
   if (!job.instructions.trim()) throw new DomainError('invalid', 'a job needs instructions');
   job.unattendedRules.forEach((rule, i) => {
     const refusal = unattendedRuleRefusal(rule);
@@ -370,6 +388,7 @@ export function createJob(ctx: CommandContext, input: CreateJobInput): { job: Jo
     ...(draft.followUpModel ? { followUpModel: draft.followUpModel } : {}),
     unattendedRules: storedRules(draft.unattendedRules, [], input.origin),
     ...(draft.dataMap ? { dataMap: draft.dataMap } : {}),
+    publishes: draft.publishes === true,
     state: 'active',
     nextRunAt: nextRunAfter(draft, ctx.now),
     followUps: [],
@@ -429,6 +448,7 @@ export function draftOf(job: Job): JobDraft {
     ...(job.followUpModel !== undefined ? { followUpModel: job.followUpModel } : {}),
     unattendedRules: job.unattendedRules,
     ...(job.dataMap !== undefined ? { dataMap: job.dataMap } : {}),
+    ...(job.publishes ? { publishes: true } : {}),
   };
 }
 
@@ -470,6 +490,8 @@ export function planJobUpdate(
   if (merged.followUpModel !== current.followUpModel) {
     changes.followUpModel = merged.followUpModel ?? null;
   }
+  if ((merged.publishes === true) !== current.publishes)
+    changes.publishes = merged.publishes === true;
   if (!same(merged.schedule, current.schedule)) {
     changes.schedule = merged.schedule;
     if (current.state !== 'stopped') changes.nextRunAt = nextRunAfter(merged, ctx.now);

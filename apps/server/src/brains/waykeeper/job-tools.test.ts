@@ -652,3 +652,163 @@ describe('job cards carry providers and models (P11-08)', () => {
     expect(h.log.tables.jobs.get(job.id)?.model).toBeUndefined();
   });
 });
+
+describe('a job approved to publish (P13-32, decision 165)', () => {
+  const waykeeperOf = (project: Project): Id =>
+    h.log.runCommand((ctx) =>
+      createAgent(ctx, {
+        role: 'waykeeper',
+        runtime: 'fake',
+        caps: { maxWallClockMs: 1000, maxToolCalls: 10 },
+        projectId: project.id,
+      }),
+    ).value.id;
+  const approve = (id: Id, origin: RequestOrigin) =>
+    h.commands.decideProposal(id, { decision: 'approve' }, USER, { origin });
+
+  it('propose_job takes publishes, described for Cosmin to approve and never for paid ads', () => {
+    const props = (
+      proposeJobTool.inputSchema as { properties: Record<string, { description: string }> }
+    ).properties;
+    expect(props['publishes']!.description).toContain('post or publish outward');
+    expect(props['publishes']!.description).toContain('Never for paid ads');
+  });
+
+  it('the Waykeeper prompt says how a publishing job is proposed', () => {
+    expect(WAYKEEPER_SYSTEM_PROMPT).toContain(
+      "A job whose runs post or publish outward is proposed with publishes: true; Cosmin approves it on the job's card, and in Auto its posts then go out without a card each time (decision 165). Never for paid ads.",
+    );
+  });
+
+  it('a card with publishes shows it; approving it locally stores the job as publishing', async () => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Social',
+      ...DRAFT,
+      publishes: true,
+    });
+    expect(out.result).toMatchObject({ ok: true, value: { after: { publishes: true } } });
+    const card = theCard()!;
+    expect(proposalJobOf(card)?.draft?.publishes).toBe(true);
+    await approve(card.id, 'local');
+    await h.done();
+    expect(h.log.tables.jobs.all()[0]?.publishes).toBe(true);
+  });
+
+  it('a remote approval of a card turning publishes on is refused; turning it off is allowed', async () => {
+    const project = await longTermProject();
+    const wk = waykeeperOf(project);
+    const create = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'create',
+        area: { name: 'Social' },
+        draft: { ...DRAFT, provider: 'claude', unattendedRules: [], publishes: true },
+      })
+    ).value;
+    const refused = await approve(create.id, 'remote').catch((e: { code?: string }) => e);
+    expect(refused).toMatchObject({ code: 'remote_control' });
+    expect(String(refused)).toMatch(/on the Mac/);
+    expect(h.log.tables.jobs.all()).toHaveLength(0);
+    await approve(create.id, 'local');
+    const job = h.log.tables.jobs.all()[0]!;
+    expect(job.publishes).toBe(true);
+
+    const off = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'change',
+        jobId: job.id,
+        changes: { publishes: false },
+      })
+    ).value;
+    await approve(off.id, 'remote');
+    expect(h.log.tables.jobs.get(job.id)?.publishes).toBe(false);
+
+    const on = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'change',
+        jobId: job.id,
+        changes: { publishes: true },
+      })
+    ).value;
+    await expect(approve(on.id, 'remote')).rejects.toMatchObject({ code: 'remote_control' });
+    expect(h.log.tables.jobs.get(job.id)?.publishes).toBe(false);
+
+    // A change that keeps publishing on (here: a new name) is approvable from anywhere.
+    await approve(on.id, 'local');
+    const rename = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: wk,
+        action: 'change',
+        jobId: job.id,
+        changes: { name: 'Post daily' },
+      })
+    ).value;
+    await approve(rename.id, 'remote');
+    expect(h.log.tables.jobs.get(job.id)).toMatchObject({ name: 'Post daily', publishes: true });
+  });
+
+  it('with autoApproveRemote a remote approval may turn publishes on', async () => {
+    await h.dispose();
+    h = brainHarness({ compose: { autoApproveRemote: true } });
+    const project = await longTermProject();
+    const card = (
+      await h.commands.proposeJob({
+        projectId: project.id,
+        waykeeperId: waykeeperOf(project),
+        action: 'create',
+        area: { name: 'Social' },
+        draft: { ...DRAFT, provider: 'claude', unattendedRules: [], publishes: true },
+      })
+    ).value;
+    await approve(card.id, 'remote');
+    expect(h.log.tables.jobs.all()[0]?.publishes).toBe(true);
+  });
+});
+
+describe('a publishing job on a provider that cannot publish (P13-32)', () => {
+  let fakes: ReturnType<typeof providerFakes>;
+  beforeEach(async () => {
+    await h.dispose().catch(() => {});
+    fakes = providerFakes();
+    h = brainHarness({ adapters: fakes.adapters, compose: { catalog: fakes.catalog } });
+  });
+  afterEach(async () => {
+    await fakes.dispose();
+  });
+
+  it.each([
+    ['runs on Gemini with no follow-up provider', { provider: 'gemini' }],
+    ['a Gemini follow-up provider', { followUpProvider: 'gemini' }],
+  ])('propose_job with publishes is refused for %s; nothing is created', async (_what, extra) => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Social',
+      ...DRAFT,
+      ...extra,
+      publishes: true,
+    });
+    expect(out.result).toMatchObject({ ok: false, error: 'invalid' });
+    expect((out.result as { message?: string }).message).toContain('cannot publish');
+    expect(h.log.tables.proposals.all()).toHaveLength(0);
+    expect(h.log.tables.jobs.all()).toHaveLength(0);
+  });
+
+  it('Gemini runs whose follow-ups run on ChatGPT may publish', async () => {
+    const project = await longTermProject();
+    const { out } = await waykeeperCalling(project, 'propose_job', {
+      area: 'Social',
+      ...DRAFT,
+      provider: 'gemini',
+      followUpProvider: 'chatgpt',
+      publishes: true,
+    });
+    expect(out.result).toMatchObject({ ok: true });
+  });
+});

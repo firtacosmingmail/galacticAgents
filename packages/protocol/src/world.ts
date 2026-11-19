@@ -8,7 +8,12 @@ import { type Panel } from './dashboard.js';
 import type { Area, Job } from './long-term.js';
 import type { Id, Meta } from './primitives.js';
 import { summarize, type SystemSummary } from './summary.js';
-import { MAX_RECORDED_APPROVALS } from './waykeeper-approvals.js';
+import {
+  emptyStandaloneApprovals,
+  MAX_RECORDED_APPROVALS,
+  type SendGrant,
+  type StandaloneApprovals,
+} from './waykeeper-approvals.js';
 import type { Snapshot } from './ws.js';
 
 /**
@@ -45,6 +50,8 @@ export interface WorldState {
   jobs: Record<Id, Job>;
   /** The long-term projects' dashboard panels (P15-01). The snapshot's `panels` (absent: none). */
   panels: Record<Id, Panel>;
+  /** Standalone work's approval marks, send grants and recorded approvals (no project). */
+  standalone: StandaloneApprovals;
 }
 
 export const emptyWorld = (): WorldState => ({
@@ -61,6 +68,7 @@ export const emptyWorld = (): WorldState => ({
   areas: {},
   jobs: {},
   panels: {},
+  standalone: emptyStandaloneApprovals(),
 });
 
 const byId = <T extends { id: Id }>(items: T[]): Record<Id, T> =>
@@ -81,6 +89,7 @@ export function applySnapshot(snapshot: Snapshot): WorldState {
     areas: byId(snapshot.areas ?? []),
     jobs: byId(snapshot.jobs ?? []),
     panels: byId(snapshot.panels ?? []),
+    standalone: snapshot.standalone ?? emptyStandaloneApprovals(),
   };
 }
 
@@ -456,6 +465,13 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       };
     }
     case 'approval_mark.added': {
+      if (event.mark.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: { ...standalone, approvalMarks: [...standalone.approvalMarks, event.mark] },
+        };
+      }
       const project = next.projects[event.mark.projectId];
       if (!project) return next;
       const marks = [...(project.approvalMarks ?? []), event.mark];
@@ -465,6 +481,16 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
       };
     }
     case 'approval_mark.removed': {
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: {
+            ...standalone,
+            approvalMarks: standalone.approvalMarks.filter((m) => m.id !== event.markId),
+          },
+        };
+      }
       const project = next.projects[event.projectId];
       if (!project?.approvalMarks) return next;
       const marks = project.approvalMarks.filter((m) => m.id !== event.markId);
@@ -477,7 +503,83 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
         },
       };
     }
+    case 'send_grant.added': {
+      if (event.grant.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: { ...standalone, sendGrants: [...standalone.sendGrants, event.grant] },
+        };
+      }
+      const project = next.projects[event.grant.projectId];
+      if (!project) return next;
+      const grants = [...(project.sendGrants ?? []), event.grant];
+      return {
+        ...next,
+        projects: { ...next.projects, [project.id]: { ...project, sendGrants: grants } },
+      };
+    }
+    case 'send_grant.removed': {
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: {
+            ...standalone,
+            sendGrants: standalone.sendGrants.filter((g) => g.id !== event.grantId),
+          },
+        };
+      }
+      const project = next.projects[event.projectId];
+      if (!project?.sendGrants) return next;
+      const grants = project.sendGrants.filter((g) => g.id !== event.grantId);
+      const { sendGrants: _old, ...rest } = project;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: grants.length > 0 ? { ...rest, sendGrants: grants } : rest,
+        },
+      };
+    }
+    case 'send_grant.paused':
+    case 'send_grant.unpaused': {
+      const pausedBy = event.type === 'send_grant.paused' ? event.questionId : undefined;
+      const pause = (g: SendGrant): SendGrant => {
+        if (g.id !== event.grantId) return g;
+        const { pausedBy: _old, ...rest } = g;
+        return pausedBy !== undefined ? { ...rest, pausedBy } : rest;
+      };
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: { ...standalone, sendGrants: standalone.sendGrants.map(pause) },
+        };
+      }
+      const project = next.projects[event.projectId];
+      if (!project?.sendGrants) return next;
+      return {
+        ...next,
+        projects: {
+          ...next.projects,
+          [project.id]: { ...project, sendGrants: project.sendGrants.map(pause) },
+        },
+      };
+    }
     case 'approval.recorded': {
+      if (event.projectId === undefined) {
+        const standalone = standaloneOf(next);
+        return {
+          ...next,
+          standalone: {
+            ...standalone,
+            recordedApprovals: [...standalone.recordedApprovals, event.approval].slice(
+              -MAX_RECORDED_APPROVALS,
+            ),
+          },
+        };
+      }
       const project = next.projects[event.projectId];
       if (!project) return next;
       const recorded = [...(project.recordedApprovals ?? []), event.approval].slice(
@@ -670,6 +772,11 @@ function withoutRecorded(projects: Record<Id, Project>, id: Id): Record<Id, Proj
   if (!project?.recordedApprovals && !project?.waykeeperAuto) return projects;
   const { recordedApprovals: _old, waykeeperAuto: _auto, ...rest } = project;
   return { ...projects, [id]: rest };
+}
+
+/** Standalone approvals of `world`; a world built before them may lack the record. */
+function standaloneOf(world: WorldState): StandaloneApprovals {
+  return world.standalone ?? emptyStandaloneApprovals();
 }
 
 /** A project's dashboard panels, in the order Cosmin arranged them. */

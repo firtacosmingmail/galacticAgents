@@ -15,6 +15,7 @@ import type { CommandContext } from './event-log.js';
 import { endProjectAreas } from './jobs.js';
 import { archiveProject } from './projects.js';
 import { endProjectRules } from './project-rules.js';
+import { endSendGrants } from './send-grants.js';
 import { endStandingApprovals } from './waykeeper-approvals.js';
 import { FINISHED_WORK, checkTransition, setProjectState, setTaskState } from './states.js';
 import { archiveTask } from './tasks.js';
@@ -194,6 +195,8 @@ export function applyControlState(
       }
       if (project.state === 'proposed') archiveProject(ctx, project.id, by);
       else {
+        // Its send grants end as cancelled before the move to failed would end them as failed.
+        endSendGrants(ctx, project.id, 'project cancelled');
         setProjectState(ctx, project.id, 'failed', by);
         // A cancelled project's "Allow similar" rules end with it (P9-17, decision 138).
         endProjectRules(ctx, project.id, 'cancelled');

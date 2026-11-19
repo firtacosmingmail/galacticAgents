@@ -36,6 +36,8 @@ import type {
   HistoryQuestionsResponse,
   HistoryEventsQuery,
   HistoryEventsResponse,
+  StandaloneDecisionsQuery,
+  StandaloneDecisionsResponse,
   HistoryWorkDetail,
   HistoryWorkQuery,
   HistoryWorkResponse,
@@ -251,18 +253,31 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
         `/api/projects/${encodeURIComponent(projectId)}/waykeeper-approvals`,
         { on, ...(auto !== undefined ? { auto } : {}) } satisfies WaykeeperApprovalsBody,
       ),
-    /** "Ask me next time": makes an approval mark from a Waykeeper approval (decision event `seq`). */
-    addApprovalMark: (projectId: string, seq: number) =>
-      call<ApprovalMarkResponse>(
-        'POST',
-        `/api/projects/${encodeURIComponent(projectId)}/approval-marks`,
-        { seq } satisfies ApprovalMarkBody,
-      ),
-    /** Removes an approval mark; applies to the next request. */
-    removeApprovalMark: (projectId: string, markId: string) =>
+    /**
+     * "Ask me next time": makes an approval mark from a Waykeeper approval (decision event `seq`)
+     * of the project — `undefined`: of standalone work (P13-30).
+     */
+    addApprovalMark: (projectId: string | undefined, seq: number) =>
+      call<ApprovalMarkResponse>('POST', `${scopePath(projectId)}/approval-marks`, {
+        seq,
+      } satisfies ApprovalMarkBody),
+    /** Removes an approval mark (`projectId` undefined: standalone); applies to the next request. */
+    removeApprovalMark: (projectId: string | undefined, markId: string) =>
       call<WaykeeperApprovalsResponse>(
         'DELETE',
-        `/api/projects/${encodeURIComponent(projectId)}/approval-marks/${encodeURIComponent(markId)}`,
+        `${scopePath(projectId)}/approval-marks/${encodeURIComponent(markId)}`,
+      ),
+    /** Removes a send grant (P13-30) of the project — `undefined`: of standalone work. */
+    removeSendGrant: (projectId: string | undefined, grantId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'DELETE',
+        `${scopePath(projectId)}/send-grants/${encodeURIComponent(grantId)}`,
+      ),
+    /** Resumes a send grant a grant-conflict question paused (P13-34). */
+    resumeSendGrant: (projectId: string | undefined, grantId: string) =>
+      call<WaykeeperApprovalsResponse>(
+        'POST',
+        `${scopePath(projectId)}/send-grants/${encodeURIComponent(grantId)}/resume`,
       ),
     /** Removes a project's standing approval; applies to the next request. */
     removeStandingApproval: (projectId: string, approvalId: string) =>
@@ -315,6 +330,12 @@ export function createApi(token: string, fetchImpl: typeof fetch = fetch) {
     /** The timeline scrubber (P4-07): one project's events, oldest first, paged by `after`. */
     historyEvents: (query: HistoryEventsQuery) =>
       call<HistoryEventsResponse>('GET', `/api/history/events${queryString(query)}`),
+    /** The approvals log of standalone tasks (P13-30): decisions of agents in no project. */
+    standaloneDecisions: (query: StandaloneDecisionsQuery = {}) =>
+      call<StandaloneDecisionsResponse>(
+        'GET',
+        `/api/history/standalone-decisions${queryString(query)}`,
+      ),
     // -- deliverables (P9-09; TECHNOLOGY §9.6, §9.7) ------------------------------------------
     /** The rows of a project or a task, with their live file facts and the deliverables folder. */
     deliverables: (query: { projectId?: string; taskId?: string; removed?: boolean }) =>
@@ -485,6 +506,13 @@ export interface DeliverableContent {
 export type HistoryWorkFilter = Omit<HistoryWorkQuery, 'state'> & { state?: HistoryWorkState[] };
 
 /** `?k=v&…` of the defined values (a list joined by commas), or `''`. */
+/** A project's routes, or standalone work's when `projectId` is undefined (P13-30). */
+function scopePath(projectId: string | undefined): string {
+  return projectId === undefined
+    ? '/api/standalone'
+    : `/api/projects/${encodeURIComponent(projectId)}`;
+}
+
 function queryString(query: Record<string, unknown>): string {
   const params = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) {

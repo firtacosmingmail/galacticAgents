@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { Actor } from './actor.js';
 import { PermissionAction, RequestOrigin } from './enums.js';
+import { PublishContext } from './long-term-questions.js';
 import { Id, Timestamp } from './primitives.js';
 
 /**
@@ -34,6 +35,110 @@ export const CommandPart = z.object({
 });
 export type CommandPart = z.infer<typeof CommandPart>;
 
+/** The longest a send grant may run ahead, in days (Auto, design 2026-11-18). */
+export const SEND_GRANT_MAX_DAYS = 90;
+
+/**
+ * A send grant: the user's words allowing sends or spends (a push, an upload, a message, a
+ * payment) for a project, or for standalone work when `projectId` is absent. It lasts until
+ * `endsAt` (absent: until removed or the project ends).
+ */
+export const SendGrant = z.object({
+  id: Id,
+  /** Absent: standalone. */
+  projectId: Id.optional(),
+  /** The user's own words, verbatim. */
+  words: z.string().min(1).max(2000),
+  /** What it allows, in a line. */
+  summary: z.string().min(1).max(200),
+  createdAt: Timestamp,
+  endsAt: Timestamp.optional(),
+  createdBy: Actor,
+  origin: RequestOrigin,
+  /** The send-permission question the user answered (or the grant-conflict question, P13-34). */
+  questionId: Id,
+  /**
+   * The grant-conflict question that paused it (P13-34, SPEC decision 166): while Cosmin is asked
+   * how his new words and this grant fit together, it covers nothing. Absent: not paused.
+   */
+  pausedBy: Id.optional(),
+});
+export type SendGrant = z.infer<typeof SendGrant>;
+
+/** Whether `g` has not ended at `now` (epoch ms): no end, or `now` before `endsAt`. */
+export function isGrantLive(g: SendGrant, now: number): boolean {
+  return g.endsAt === undefined || now < Date.parse(g.endsAt);
+}
+
+/**
+ * Whether `g` covers sends at `now` (P13-34): live (`isGrantLive`) and not paused by a
+ * grant-conflict question. Every check of which grants cover a send uses this one.
+ */
+export function isGrantInForce(g: SendGrant, now: number): boolean {
+  return isGrantLive(g, now) && g.pausedBy === undefined;
+}
+
+/**
+ * The fixed answers of a grant-conflict question (P13-34, SPEC decision 166), always first and
+ * verbatim; the decider's own solutions follow them.
+ */
+export const GRANT_CONFLICT_OPTIONS = [
+  'Replace the earlier grant with the new one',
+  'Keep the earlier grant and ignore the new words',
+  'Keep both',
+] as const;
+/** The most solutions of its own a decider may add to a grant-conflict question. */
+export const GRANT_CONFLICT_MAX_OWN_OPTIONS = 3;
+/** The longest solution a decider may add. */
+export const GRANT_CONFLICT_OPTION_MAX = 200;
+
+/** An earlier grant as a grant-conflict question quotes it. */
+export const ConflictingGrant = z.object({
+  id: Id,
+  words: z.string(),
+  summary: z.string(),
+  endsAt: Timestamp.optional(),
+});
+export type ConflictingGrant = z.infer<typeof ConflictingGrant>;
+
+/**
+ * A grant-conflict question (P13-34, SPEC decision 166): Cosmin's new words about what may be sent
+ * conflict with (or overlap) grants in force, so the decider asks him how to reconcile them. Its
+ * grants are paused (`SendGrant.pausedBy`) until he answers and the decider carries it out, or
+ * the question closes without an answer.
+ */
+export const GrantConflictContext = z.object({
+  /** The decider that asked: the project's Waykeeper, or the Harmonizer for standalone work. */
+  deciderId: Id,
+  /** Absent: standalone work. */
+  projectId: Id.optional(),
+  grants: z.array(ConflictingGrant).min(1),
+  /** His new words, verbatim. */
+  newWords: z.string().min(1).max(2000),
+  /** The send-permission question whose answer they were, when they were one. */
+  sendQuestionId: Id.optional(),
+  /** The decider's own solutions (after the fixed ones in `QuestionContext.options`). */
+  options: z
+    .array(z.string().min(1).max(GRANT_CONFLICT_OPTION_MAX))
+    .max(GRANT_CONFLICT_MAX_OWN_OPTIONS),
+});
+export type GrantConflictContext = z.infer<typeof GrantConflictContext>;
+
+/** What a send-permission question shows: the request, the grants that did not cover it. */
+export const SendPermissionContext = z.object({
+  summary: z.string(),
+  parts: z.array(CommandPart),
+  /** The existing grants, which did not cover the request. */
+  grants: z.array(SendGrant),
+  publish: PublishContext.optional(),
+  /**
+   * Who turns the user's reply into an answer (P13-27): the project's Waykeeper, or the
+   * Harmonizer for standalone work. Absent: a plain card — Allow once / Don't allow, no grant.
+   */
+  deciderId: Id.optional(),
+});
+export type SendPermissionContext = z.infer<typeof SendPermissionContext>;
+
 /** Days an approval mark counts (design 2026-11-14, §4.1). */
 export const APPROVAL_MARK_DAYS = 10;
 /** Approval marks kept per project. */
@@ -59,7 +164,8 @@ export type ApprovalMarkMatch = z.infer<typeof ApprovalMarkMatch>;
 /** An approval mark: one request the user approved, kept as a pattern for `APPROVAL_MARK_DAYS`. */
 export const ApprovalMark = z.object({
   id: Id,
-  projectId: Id,
+  /** Absent: a mark of standalone work (asteroids and the Harmonizer's own), no project. */
+  projectId: Id.optional(),
   match: ApprovalMarkMatch,
   /** The request it was made from, redacted. */
   example: z.string().max(300),
@@ -168,6 +274,10 @@ export const StandingApproval = z.object({
 });
 export type StandingApproval = z.infer<typeof StandingApproval>;
 
+/** What allowed a request, for the approvals log label. */
+export const AllowedBy = z.enum(['grant', 'task_words', 'allow_once', 'auto']);
+export type AllowedBy = z.infer<typeof AllowedBy>;
+
 /** An approval the Waykeeper (or the user) gave, kept to spot repeats. */
 export const RecordedApproval = z.object({
   kind: z.string().min(1).max(200),
@@ -175,8 +285,26 @@ export const RecordedApproval = z.object({
   agentId: Id,
   questionId: Id,
   at: Timestamp,
+  /** The send grant that covered it, when one did. */
+  grantId: Id.optional(),
+  /** What allowed it, for the log label. */
+  allowedBy: AllowedBy.optional(),
 });
 export type RecordedApproval = z.infer<typeof RecordedApproval>;
+
+/** The approvals state of standalone work (no project): marks, send grants, recorded approvals. */
+export const StandaloneApprovals = z.object({
+  approvalMarks: z.array(ApprovalMark),
+  sendGrants: z.array(SendGrant),
+  recordedApprovals: z.array(RecordedApproval),
+});
+export type StandaloneApprovals = z.infer<typeof StandaloneApprovals>;
+
+export const emptyStandaloneApprovals = (): StandaloneApprovals => ({
+  approvalMarks: [],
+  sendGrants: [],
+  recordedApprovals: [],
+});
 
 /**
  * What the Waykeeper forwarded to the user and why (`QuestionContext.waykeeper`). `similar`
@@ -208,13 +336,13 @@ export function isJudgedKind(kind: string): boolean {
 
 /** What the request judge is given (design §5.3). */
 export interface RequestJudgeInput {
-  /** `task`: a Steward's request against its task; `auto`: the Auto policy (design 4.2). */
-  mode: 'task' | 'auto';
   /**
-   * Auto only (P13-20, decision 161): every push in the request is a git push the server checked
-   * goes to a branch other than the main branch; it needs no quote of the user's words.
+   * `task`: a Steward's request against its task; `grants`: Auto (design 2026-11-18 §4.2) —
+   * whether it sends or spends, and which grant or words cover it.
    */
-  pushesCleared?: true;
+  mode: 'task' | 'grants';
+  /** Grants mode: the live grants the request is matched against. */
+  grants?: SendGrant[];
   task: { title: string; description: string };
   workspace: string;
   cwd: string;
@@ -247,6 +375,10 @@ export interface RequestVerdict {
   quote?: string;
   /** Auto mode: whether any part sends to people or outside services, or spends money. */
   sendsOrSpends?: boolean;
+  /** Grants mode: the grant that covers the request. */
+  grantId?: Id;
+  /** Grants mode: the request in a line, for the question or the log. */
+  summary?: string;
 }
 
 /** Decides whether a Steward's permission request fits its task. Implementations fail closed. */

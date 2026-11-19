@@ -13,6 +13,7 @@ import type { ChooseOptions } from './catalogue.js';
 import { projectBudgetEvent } from './budgets.js';
 import { projectRunEvent } from './deliverables.js';
 import { isStorageFailure } from '../db/database.js';
+import { standaloneOf } from './waykeeper-approvals.js';
 
 /** What a command sees: the domain tables and a way to append events to the same transaction. */
 export interface CommandContext {
@@ -422,6 +423,7 @@ export class EventLog {
       areas: this.tables.areas.all(),
       jobs: this.tables.jobs.all(),
       panels: this.tables.panels.all(),
+      standalone: standaloneOf(this.tables),
     }))();
   }
 }

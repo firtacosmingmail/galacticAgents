@@ -13,12 +13,13 @@ import {
   Proposal,
   Provider,
   Question,
+  StandaloneApprovals,
   Task,
   type BudgetTarget,
   type Host,
   type Id,
 } from '@galactic/protocol';
-import type { ZodType } from 'zod';
+import { z, type ZodType } from 'zod';
 
 type Row = Record<string, unknown>;
 
@@ -159,6 +160,7 @@ const projects: Mapper<Project> = {
     waykeeper_approvals: p.waykeeperApprovals ? (p.waykeeperAuto ? 2 : 1) : null,
     standing_approvals: p.standingApprovals?.length ? json(p.standingApprovals) : null,
     approval_marks: p.approvalMarks?.length ? json(p.approvalMarks) : null,
+    send_grants: p.sendGrants?.length ? json(p.sendGrants) : null,
     recorded_approvals: p.recordedApprovals?.length ? json(p.recordedApprovals) : null,
     pinned: flag(p.pinned),
     budget_usd: p.budgetUsd ?? null,
@@ -186,6 +188,7 @@ const projects: Mapper<Project> = {
     waykeeperAuto: r['waykeeper_approvals'] === 2 ? true : undefined,
     standingApprovals: parse<Project['standingApprovals']>(r['standing_approvals']),
     approvalMarks: parse<Project['approvalMarks']>(r['approval_marks']),
+    sendGrants: parse<Project['sendGrants']>(r['send_grants']),
     recordedApprovals: parse<Project['recordedApprovals']>(r['recorded_approvals']),
     pinned: unflag(r['pinned']),
     budgetUsd: opt<number>(r['budget_usd']),
@@ -476,6 +479,7 @@ const jobs: Mapper<Job> = {
     running_run_id: j.runningRunId ?? null,
     follow_ups: JSON.stringify(j.followUps),
     data_map: json(j.dataMap),
+    publishes: j.publishes ? 1 : 0,
     created_at: j.createdAt,
     updated_at: j.updatedAt,
     meta: json(j.meta),
@@ -502,6 +506,7 @@ const jobs: Mapper<Job> = {
     runningRunId: opt<Id>(r['running_run_id']),
     followUps: parse<Job['followUps']>(r['follow_ups']) ?? [],
     dataMap: parse(r['data_map']),
+    publishes: r['publishes'] === 1,
     createdAt: r['created_at'] as string,
     updatedAt: r['updated_at'] as string,
     meta: parse(r['meta']),
@@ -546,6 +551,27 @@ const jobRuns: Mapper<JobRun> = {
     followUp: parse(r['follow_up']),
     note: opt<string>(r['note']),
     meta: parse(r['meta']),
+  }),
+};
+
+/** The one row of standalone work's approvals (migration 0022); its `id` is always 'standalone'. */
+type StandaloneRow = StandaloneApprovals & { id: Id };
+
+const standaloneApprovals: Mapper<StandaloneRow> = {
+  table: 'standalone_approvals',
+  schema: StandaloneApprovals.extend({ id: z.literal('standalone') }) as ZodType<StandaloneRow>,
+  toRow: (a) => ({
+    id: a.id,
+    approval_marks: a.approvalMarks.length ? json(a.approvalMarks) : null,
+    send_grants: a.sendGrants.length ? json(a.sendGrants) : null,
+    recorded_approvals: a.recordedApprovals.length ? json(a.recordedApprovals) : null,
+  }),
+  fromRow: (r) => ({
+    id: r['id'] as Id,
+    approvalMarks: parse<StandaloneApprovals['approvalMarks']>(r['approval_marks']) ?? [],
+    sendGrants: parse<StandaloneApprovals['sendGrants']>(r['send_grants']) ?? [],
+    recordedApprovals:
+      parse<StandaloneApprovals['recordedApprovals']>(r['recorded_approvals']) ?? [],
   }),
 };
 
@@ -623,6 +649,8 @@ export interface Tables {
   };
   /** A long-term project's dashboard panels (P15-01; migration 0020). */
   panels: Table<Panel>;
+  /** Standalone work's marks, send grants and recorded approvals: the one row 'standalone' (0022). */
+  standalone: Table<StandaloneRow>;
   settings: {
     get<T = unknown>(key: string): T | undefined;
     set(key: string, value: unknown): void;
@@ -812,6 +840,7 @@ export function tables(db: Database): Tables {
       'waykeeper_approvals',
       'standing_approvals',
       'approval_marks',
+      'send_grants',
       'recorded_approvals',
       'pinned',
       'budget_usd',
@@ -914,6 +943,7 @@ export function tables(db: Database): Tables {
       'running_run_id',
       'follow_ups',
       'data_map',
+      'publishes',
       'created_at',
       'updated_at',
       'meta',
@@ -958,6 +988,12 @@ export function tables(db: Database): Tables {
       'created_at',
       'updated_at',
       'meta',
+    ]),
+    standalone: new Table(db, standaloneApprovals, [
+      'id',
+      'approval_marks',
+      'send_grants',
+      'recorded_approvals',
     ]),
     settings: {
       get: <T>(key: string) =>

@@ -280,6 +280,8 @@ const composed = composeRuntime(db, {
     harmonizerRuntime(process.env['GALACTIC_HARMONIZER']) === 'fake'
       ? failClosedFakeRequestJudge()
       : createDefaultSdkRequestJudge(),
+  // Auto for standalone tasks (P13-27): the Settings service changes `config` in place.
+  standaloneAuto: () => config.standaloneAuto === true,
   // Which provider and model a new Steward runs on (P11-03): one resolver over these Settings.
   catalog,
   // Development only: every new Steward on this runtime (`GALACTIC_STEWARD_RUNTIME`).

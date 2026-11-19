@@ -139,5 +139,7 @@ export const DomainErrorCode = z.enum([
   'remote_control',
   /** A cap is reached: a dashboard's 24 panels (P15-03). */
   'limit',
+  /** Only the user may do it: an agent asked for a user-only change (a send grant's removal). */
+  'forbidden',
 ]);
 export type DomainErrorCode = z.infer<typeof DomainErrorCode>;

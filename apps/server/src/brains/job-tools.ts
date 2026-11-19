@@ -5,12 +5,15 @@ import {
   type DomainCommands,
   type Id,
   type JobRunReport,
+  type Question,
+  type RequestPublishInput,
   type ToolDefinition,
 } from '@galactic/protocol';
 import type { Tables } from '../db/tables.js';
 import { DomainError } from '../domain/errors.js';
 import type { EventLog } from '../domain/event-log.js';
 import { formatAmount } from '../domain/findings.js';
+import type { PublishInAuto } from '../domain/publish.js';
 import type { AgentRuntime } from '../runtime/agent-runtime.js';
 import type { PublishAllowanceStore } from '../runtime/publish-allowance.js';
 import { guarded } from './deliverable-tools.js';
@@ -86,6 +89,13 @@ export function stewardJobTools(
   commands: DomainCommands,
   tables: Tables,
   agent: Pick<Agent, 'id' | 'taskId'>,
+  opts: {
+    /**
+     * A publish in Auto (P13-29; `AgentRuntime.requestPublishInAuto`): approved by a grant, or
+     * its grant question opened; `undefined` outside Auto, where the publish card is opened.
+     */
+    publishInAuto?: (input: RequestPublishInput) => Promise<PublishInAuto | undefined>;
+  } = {},
 ): ToolDefinition[] {
   const running = runningJobOf(tables, agent);
   const jobRun = running !== undefined;
@@ -184,15 +194,35 @@ export function stewardJobTools(
         ) {
           throw new DomainError('invalid', 'files is a list of paths');
         }
-        const { questionId } = (
-          await commands.requestPublish({
-            originAgentId: agent.id,
-            platform: optString(input, 'platform') ?? '',
-            account: optString(input, 'account') ?? '',
-            text: optString(input, 'text') ?? '',
-            ...(files !== undefined ? { files: files as string[] } : {}),
-          })
-        ).value;
+        const request: RequestPublishInput = {
+          originAgentId: agent.id,
+          platform: optString(input, 'platform') ?? '',
+          account: optString(input, 'account') ?? '',
+          text: optString(input, 'text') ?? '',
+          ...(files !== undefined ? { files: files as string[] } : {}),
+        };
+        const auto = await opts.publishInAuto?.(request);
+        if (auto && 'approved' in auto && auto.approved.jobFollowUp) {
+          // Decision 165: the job was approved to publish; its follow-up run posts it.
+          return {
+            status: 'approved',
+            questionId: auto.approved.jobFollowUp.questionId,
+            note: 'Approved: Cosmin approved this job to publish on its card. A later run publishes it; do not publish it in this run.',
+          };
+        }
+        if (auto && 'approved' in auto) {
+          return {
+            status: 'approved',
+            note:
+              (auto.approved.allowedBy === 'grant'
+                ? "Approved: one of Cosmin's grants covers it. "
+                : 'Approved: Cosmin asked for it in his own words. ') +
+              'Publish exactly this content now, once: the platform, the account, the text and the files as you gave them.',
+          };
+        }
+        const questionId = auto
+          ? auto.questionId
+          : (await commands.requestPublish(request)).value.questionId;
         return {
           questionId,
           note: jobRun
@@ -453,6 +483,7 @@ export class PublishRelay {
 
   private relay(questionId: Id): void {
     const q = this.opts.log.tables.questions.get(questionId);
+    if (q?.kind === 'permission' && q.context.sendPermission?.publish) return this.relayHeld(q);
     const publish = q?.context.publish;
     if (!q || q.kind !== 'publish' || !publish || publish.jobId !== undefined) return;
     if (q.status !== 'answered') return;
@@ -468,6 +499,28 @@ export class PublishRelay {
       q.originAgentId,
       `Publish approval for ${publish.platform}: ${approved ? 'approved' : 'refused'}` +
         (withText ? `. Publish exactly this text:\n${publish.text}` : ''),
+      { sender: { type: 'system' } },
+    );
+  }
+
+  /**
+   * The user's answer on a publish's grant question (P13-29; Auto, design §4.6): "allow" (Allow
+   * once) arms the allowance as the card's Approve does — its log line is written with the answer
+   * (`logAllowOnce`) — anything else refuses. The decider's own answers close the question by
+   * cancelling it and are carried out by the runtime, never here.
+   */
+  private relayHeld(q: Question): void {
+    const publish = q.context.sendPermission?.publish;
+    if (!publish || q.status !== 'answered' || q.answeredBy?.type !== 'user') return;
+    const { runtime } = this.opts;
+    if (!runtime.liveAgents().some((a) => a.id === q.originAgentId)) return;
+    const approved = q.answer === 'allow';
+    if (approved) {
+      this.opts.allowances.arm(q.originAgentId, publish, this.opts.worktreeOf(q.originAgentId));
+    }
+    runtime.send(
+      q.originAgentId,
+      `Publish approval for ${publish.platform}: ${approved ? 'approved' : 'refused'}`,
       { sender: { type: 'system' } },
     );
   }

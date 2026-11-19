@@ -26,6 +26,8 @@ import type {
   ReplyQuote,
 } from '@galactic/protocol';
 import { COMMAND_SOURCE } from '../domain/questions.js';
+import { redactSecrets } from '../runtime/redact.js';
+import { localStamp } from './send-permission-tool.js';
 
 /**
  * Which events wake a brain (P2-06; TECHNOLOGY §5.2). One data-driven table: an event type that
@@ -35,8 +37,12 @@ import { COMMAND_SOURCE } from '../domain/questions.js';
  *
  * Never in the table: `agent.output` and `agent.tool_call` (transcript traffic), the brain's own
  * `agent.*` lifecycle, and permission questions (decision 7: the policy or the user resolves them,
- * never an LLM, so they do not enter any brain's mailbox). Likewise `spend` and `publish`
- * approvals (decisions 145, 147: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
+ * never an LLM, so they do not enter any brain's mailbox) — except a held send's question
+ * (`context.sendPermission`, P13-28), which wakes its decider: it turns the user's reply into an
+ * answer with `answer_send_permission`, and the server checks the reply is there — and a
+ * grant-conflict question's answer or close (`context.grantConflict`, P13-34), which wakes the
+ * decider that asked it, to carry the answer out with `resolve_grant_conflict`. Likewise
+ * `spend` and `publish` approvals (decisions 145, 147: the user's alone) and job-owned questions — findings, failure notices, job spends (P10-05):
  * they belong to a job, not to the agents above its run. The one exception is a finding's
  * "Implement it", which reaches the project's Waykeeper as a system message (`fromFinding`).
  */
@@ -122,6 +128,57 @@ function heldBefore(holders: readonly Id[] | undefined, scope: WakeScope, q: Que
   // through the adapter, and a mailbox line would deliver it twice.
   if (q?.originAgentId === scope.brainId) return q.meta?.['source'] === COMMAND_SOURCE;
   return (holders ?? []).includes(scope.brainId);
+}
+
+/** The brain decides the held send this question asks about (P13-28: `sendPermission.deciderId`). */
+const decides = (q: Question, scope: WakeScope): boolean =>
+  q.kind === 'permission' && q.context.sendPermission?.deciderId === scope.brainId;
+
+/** The brain asked this grant-conflict question (P13-34): it carries out Cosmin's answer. */
+const reconciles = (q: Question, scope: WakeScope): boolean =>
+  q.kind === 'permission' &&
+  q.context.grantConflict !== undefined &&
+  q.context.grantConflict.deciderId === scope.brainId;
+
+const decidesId = (questionId: Id, scope: WakeScope): boolean => {
+  const q = scope.question(questionId);
+  return q !== undefined && (decides(q, scope) || reconciles(q, scope));
+};
+
+/**
+ * A user's reply to an open held send's question this brain decides (P13-28), or to its open
+ * grant-conflict question (P13-34), from any chat.
+ */
+function repliesToDecided(e: EventOfType<'message.sent'>, scope: WakeScope): boolean {
+  if (e.sender.type !== 'user' || e.replyTo?.kind !== 'question') return false;
+  const q = scope.question(e.replyTo.id);
+  return q?.status === 'open' && (decides(q, scope) || reconciles(q, scope));
+}
+
+/**
+ * A held send's question, for its decider (P13-28; design §4.4 step 2): which Steward, what it
+ * sends or spends, the call, and the grants that did not cover it — every text redacted.
+ */
+function heldSend(q: Question): string {
+  const send = q.context.sendPermission!;
+  // A publish (P13-29) has no parts: its content is the call.
+  const publish = send.publish
+    ? `request_publish to ${send.publish.platform} (${send.publish.account}): ${send.publish.text}` +
+      (send.publish.files.length > 0
+        ? ` + files ${send.publish.files.map((f) => f.path).join(', ')}`
+        : '')
+    : undefined;
+  const call =
+    send.parts.map((p) => p.text).join(' && ') || publish || q.context.toolCall?.toolName || '?';
+  const grants =
+    send.grants.length > 0
+      ? `; grants that did not cover it: ${send.grants.map((g) => `${quote(g.summary)} (${g.id})`).join(', ')}`
+      : '; no grant covers it';
+  return redactSecrets(
+    `agent ${q.originAgentId} wants to send or spend, held for Cosmin in question ${q.id}: ` +
+      `${quote(send.summary)} (the call: ${quote(excerpt(call, QUOTE_IN_PROMPT))})${grants}. ` +
+      'Cosmin answers on its card or in a reply; when his reply decides it, call answer_send_permission',
+  );
 }
 
 function targets(target: ControlTarget, scope: WakeScope): boolean {
@@ -267,17 +324,20 @@ export const WAKE_RULES: WakeRules = {
     // are sent by the system and never wake it.
     // A finding's "Implement it" (P10-05) is the one system message that wakes a brain: the
     // project's Waykeeper learns what the user wants planned. The brain's supervisor may pass a
-    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`).
+    // request on to it (P10-06: the Harmonizer's `relay_to_waykeeper`). A user's reply to an open
+    // held send's question also wakes the brain that decides it, in whichever chat it was typed
+    // (P13-28: the card's reply box sends to the chat that shows the card).
     wakes: (e, s) =>
-      e.agentId === s.brainId &&
-      (e.sender.type === 'user' ||
-        (e.sender.type === 'system' &&
-          (e.fromFinding !== undefined || e.fromPanel !== undefined) &&
-          !e.turn) ||
-        (e.sender.type === 'agent' &&
-          (s.supervises(e.sender.id) ||
-            (s.below?.(e.sender.id) ?? false) ||
-            (s.supervisedBy?.(e.sender.id) ?? false)))),
+      repliesToDecided(e, s) ||
+      (e.agentId === s.brainId &&
+        (e.sender.type === 'user' ||
+          (e.sender.type === 'system' &&
+            (e.fromFinding !== undefined || e.fromPanel !== undefined) &&
+            !e.turn) ||
+          (e.sender.type === 'agent' &&
+            (s.supervises(e.sender.id) ||
+              (s.below?.(e.sender.id) ?? false) ||
+              (s.supervisedBy?.(e.sender.id) ?? false))))),
     describe: (e, s) => {
       if (e.sender.type === 'system' && e.fromPanel !== undefined) {
         return `the system said: ${quote(e.text)}`;
@@ -294,17 +354,23 @@ export const WAKE_RULES: WakeRules = {
       // A reply (P8-17, decision 139): the quoted line rides along, so the brain has its context.
       const quoted = `${replied(r, s)}: ${quote(excerpt(r.text, QUOTE_IN_PROMPT))}`;
       if (r.answered) return `the user answered ${r.id} (${quoted}) by replying: ${quote(e.text)}`;
+      const asked = r.kind === 'question' ? s.question(r.id) : undefined;
       const permission =
-        r.kind === 'question' && s.question(r.id)?.kind === 'permission'
-          ? " — this does not decide the request: only the user's buttons on its card do"
-          : '';
+        asked && reconciles(asked, s)
+          ? ' — your grant-conflict question: it is answered only on its card; if this settles it, ask him to pick or type his answer there'
+          : asked && decides(asked, s)
+            ? ` — a send permission question: if the reply decides it, answer with answer_send_permission (local time now ${localStamp()})`
+            : asked?.kind === 'permission'
+              ? " — this does not decide the request: only the user's buttons on its card do"
+              : '';
       return `the user said (replying to ${quoted}${permission}): ${quote(e.text)}`;
     },
   },
   'question.opened': {
-    wakes: (e, s) => concerns(e.question, s),
+    wakes: (e, s) => concerns(e.question, s) || decides(e.question, s),
     // A question-set row (P8-19) says where it sits, so N lines with one set id read as one set.
     describe: (e, s) => {
+      if (decides(e.question, s)) return heldSend(e.question);
       const set = setOf(e.question);
       const place = set ? `${inSet(e.question)} ${quote(set.title)}, ` : '';
       return (
@@ -320,17 +386,36 @@ export const WAKE_RULES: WakeRules = {
     // `message.sent` tells it, once, with the question quoted.
     wakes: (e, s) =>
       e.repliedIn !== s.brainId &&
-      (heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s)),
+      (heldBefore(e.holders, s, s.question(e.questionId)) ||
+        concerns(s.question(e.questionId), s) ||
+        decidesId(e.questionId, s)),
     describe: (e, s) => {
       const q = s.question(e.questionId);
+      if (q && reconciles(q, s)) {
+        return (
+          `${who(e.answeredBy, s)} answered your grant-conflict question ${e.questionId}: ` +
+          `${quote(e.answer)} — carry it out with resolve_grant_conflict (local time now ` +
+          `${localStamp()}); if it is unclear, ask him in chat first`
+        );
+      }
       const place = q && setOf(q) ? ` (${inSet(q)})` : '';
       return `${who(e.answeredBy, s)} answered ${e.questionId}${place}: ${quote(e.answer)}`;
     },
   },
   'question.cancelled': {
+    // A held send's decider learns it was settled without it (the card's buttons, the Steward's end).
     wakes: (e, s) =>
-      heldBefore(e.holders, s, s.question(e.questionId)) || concerns(s.question(e.questionId), s),
+      heldBefore(e.holders, s, s.question(e.questionId)) ||
+      concerns(s.question(e.questionId), s) ||
+      decidesId(e.questionId, s),
     describe: (e, s) => {
+      const asked = s.question(e.questionId);
+      if (asked && reconciles(asked, s)) {
+        return (
+          `your grant-conflict question ${e.questionId} closed without an answer (${e.reason}): ` +
+          'its grants count again as before'
+        );
+      }
       if (!e.by) return `${e.questionId} was withdrawn (${e.reason})`;
       // A dismissal (P9-14, decision 135): the asker must not wait for an answer.
       const q = s.question(e.questionId);

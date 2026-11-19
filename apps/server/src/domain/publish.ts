@@ -10,24 +10,30 @@ import {
 } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
-  PROVIDER_LABEL,
+  APPROVED_ON_OPEN,
   PUBLISH_ACTIONS,
   PublishContext,
   publishFingerprint,
+  type Agent,
+  type AllowedBy,
   type FollowUp,
   type Id,
+  type JobRun,
   type PublishFile,
   type Question,
   type RequestPublishInput,
+  type SendGrant,
   type SetAnswer,
+  type ToolCall,
 } from '@galactic/protocol';
+import { redactSecrets } from '../runtime/redact.js';
 import type { Reader } from './catalogue.js';
 import { DomainError, must } from './errors.js';
 import type { CommandContext } from './event-log.js';
 import { askerRun, unstoppedJob } from './findings.js';
-import { jobOf, writeJob } from './jobs.js';
+import { CANNOT_PUBLISH, jobOf, writeJob } from './jobs.js';
 import { originOf, type QuestionRouting } from './question-service.js';
-import { COMMAND_SOURCE, openQuestion } from './questions.js';
+import { COMMAND_SOURCE, answerQuestion, openQuestion } from './questions.js';
 
 /**
  * Publish approvals (P11-06, plan Task 7; SPEC decision 147). Nothing goes out without the user's
@@ -50,9 +56,6 @@ const USER = { type: 'user' } as const;
 
 /** The approval's own word, and the refusal's. */
 const APPROVE: string = PUBLISH_ACTIONS[0];
-
-/** Runtimes that are never given a publish (global constraint: agy has `canPublish: false`). */
-const CANNOT_PUBLISH = new Map([['agy', PROVIDER_LABEL.gemini]]);
 
 /** The sha256 of a text or a file's bytes, hex — the hasher of `publishFingerprint`. */
 export function sha256(data: string | Buffer): string {
@@ -172,7 +175,76 @@ export function requestPublish(
   input: RequestPublishInput,
   routing: Pick<QuestionRouting, 'recentEvents'> | undefined,
   deps: PublishDeps,
+  /** The server answers it in the same transaction (decision 165): never notified. */
+  opts: { approvedOnOpen?: true } = {},
 ): Question {
+  const { agent, run, publish } = preparePublish(ctx, input, deps);
+  return openQuestion(ctx, {
+    id: `q-${randomUUID()}`,
+    kind: 'publish',
+    originAgentId: agent.id,
+    holder: USER,
+    context: {
+      text: `Publish to ${publish.platform} (${publish.account})`,
+      options: [...PUBLISH_ACTIONS],
+      publish,
+      origin: originOf(ctx, agent.id, routing ?? { recentEvents: () => [] }),
+    },
+    // Nobody's session waits on it: a task Steward hears the answer as a message (PublishRelay).
+    meta: {
+      source: COMMAND_SOURCE,
+      toUser: true,
+      ...(run ? { jobOwned: true } : {}),
+      ...(opts.approvedOnOpen ? { [APPROVED_ON_OPEN]: true } : {}),
+    },
+  });
+}
+
+/**
+ * A job run's publish in Auto when its job was approved to publish (P13-32, SPEC decision 165):
+ * the job's publish question opened as `requestPublish` opens it, then answered `Approve` at once
+ * in the decider's name — the user's Approve path, so `applyPublish` queues the follow-up that
+ * publishes it — in one transaction. The caller has checked Auto and the decider just before.
+ * Refused (nothing opened) for a task Steward's publish, a job not approved to publish or a
+ * stopped one; the caller then opens the card as today.
+ */
+export function approveJobPublishInAuto(
+  ctx: CommandContext,
+  input: RequestPublishInput,
+  routing: Pick<QuestionRouting, 'recentEvents'> | undefined,
+  deps: PublishDeps,
+  deciderId: Id,
+): Question {
+  const question = requestPublish(ctx, input, routing, deps, { approvedOnOpen: true });
+  const jobId = question.context.publish?.jobId;
+  const job = jobId ? jobOf(ctx, jobId) : undefined;
+  if (!job?.publishes) {
+    throw new DomainError('invalid', 'the job was not approved to publish');
+  }
+  return answerQuestion(
+    ctx,
+    { questionId: question.id, answer: APPROVE, answeredBy: { type: 'agent', id: deciderId } },
+    { jobPublish: true },
+  );
+}
+
+/** A publish request checked and hashed (`preparePublish`): who asks, its run, the content. */
+export interface PreparedPublish {
+  agent: Agent;
+  /** The job run the asker is the Steward of; absent for a task Steward. */
+  run: JobRun | undefined;
+  publish: PublishContext;
+}
+
+/**
+ * The checks of `requestPublish` and the request with its files hashed and its fingerprint,
+ * without opening anything (P13-29: Auto judges it first). Throws what `requestPublish` refuses.
+ */
+export function preparePublish(
+  ctx: Reader,
+  input: RequestPublishInput,
+  deps: PublishDeps,
+): PreparedPublish {
   const agent = must(ctx.tables.agents.get(input.originAgentId), 'agent', input.originAgentId);
   if (agent.role !== 'steward') {
     throw new DomainError('invalid', 'only a Steward asks to publish');
@@ -213,23 +285,80 @@ export function requestPublish(
       `invalid publish: ${publish.error.issues[0]?.path.join('.')} ${publish.error.issues[0]?.message ?? ''}`.trim(),
     );
   }
+  return { agent, run, publish: publish.data };
+}
+
+/**
+ * What a `request_publish` in Auto came to (P13-29): approved (the allowance armed) by a grant or
+ * the user's words, or the grant question opened in place of the card.
+ */
+export type PublishInAuto =
+  | {
+      approved: {
+        allowedBy: AllowedBy;
+        grantId?: Id;
+        /**
+         * A job run's publish its job was approved to make (P13-32, decision 165): approved on
+         * the job's publish question, which queued the follow-up run that publishes it.
+         */
+        jobFollowUp?: { questionId: Id };
+      };
+    }
+  | { questionId: Id };
+
+/** The tool name a publish request is judged and logged under in Auto (P13-29). */
+export const PUBLISH_REQUEST_TOOL = 'request_publish';
+
+/**
+ * A publish request as one call (P13-29; design §4.6): what the grants judge reads and what the
+ * approvals log keeps — the platform, the account, the text and each file's path and hash. The
+ * text is redacted here, so nothing logged or judged carries a secret.
+ */
+export function publishRequestCall(publish: PublishContext): ToolCall {
+  return {
+    toolName: PUBLISH_REQUEST_TOOL,
+    input: {
+      platform: publish.platform,
+      account: publish.account,
+      text: redactSecrets(publish.text),
+      files: publish.files.map((f) => ({ path: f.path, sha256: f.sha256 })),
+    },
+  };
+}
+
+/**
+ * A publish in Auto that nothing covers (P13-29; design §4.6, §4.4): the grant question in place
+ * of the publish card — a permission question held by the user, its `sendPermission` carrying the
+ * content (`publish`, shown as the publish card shows it), the grants that did not cover it and
+ * its decider (absent: a plain Allow once / Don't allow card). Nobody's session waits on it: the
+ * Steward hears the answer as a message, and an allow arms its one-shot allowance.
+ */
+export function openPublishPermission(
+  ctx: CommandContext,
+  agentId: Id,
+  publish: PublishContext,
+  send: { summary: string; grants: SendGrant[]; deciderId?: Id },
+  routing: Pick<QuestionRouting, 'recentEvents'>,
+): Question {
   return openQuestion(ctx, {
     id: `q-${randomUUID()}`,
-    kind: 'publish',
-    originAgentId: agent.id,
+    kind: 'permission',
+    originAgentId: agentId,
     holder: USER,
     context: {
-      text: `Publish to ${platform} (${account})`,
-      options: [...PUBLISH_ACTIONS],
-      publish: publish.data,
-      origin: originOf(ctx, agent.id, routing ?? { recentEvents: () => [] }),
+      text: `Publish to ${publish.platform} (${publish.account})`,
+      toolCall: publishRequestCall(publish),
+      permissionAction: 'network',
+      sendPermission: {
+        summary: redactSecrets(send.summary),
+        parts: [],
+        grants: send.grants,
+        publish,
+        ...(send.deciderId !== undefined ? { deciderId: send.deciderId } : {}),
+      },
+      origin: originOf(ctx, agentId, routing),
     },
-    // Nobody's session waits on it: a task Steward hears the answer as a message (PublishRelay).
-    meta: {
-      source: COMMAND_SOURCE,
-      toUser: true,
-      ...(run ? { jobOwned: true } : {}),
-    },
+    meta: { source: COMMAND_SOURCE, toUser: true },
   });
 }
 

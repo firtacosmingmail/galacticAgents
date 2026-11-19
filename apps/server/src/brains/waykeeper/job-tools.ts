@@ -138,6 +138,12 @@ const DRAFT_PROPERTIES = {
     description: 'An exact model for follow-up runs; needs followUpProvider.',
   },
   unattendedRules: RULES_SCHEMA,
+  publishes: {
+    type: 'boolean',
+    description:
+      'true when the job’s runs post or publish outward — social media, a blog, a newsletter; ' +
+      'Cosmin approves it on the card. Never for paid ads or anything that costs money.',
+  },
   dataMap: {
     type: 'object',
     description:
@@ -173,6 +179,7 @@ function cardResult(p: Proposal) {
       ...(d.followUpModel ? { followUpModel: d.followUpModel } : {}),
       instructions: d.instructions,
       unattendedRules: d.unattendedRules.map((r) => r.label),
+      ...(d.publishes ? { publishes: true } : {}),
     };
   return {
     proposalId: p.id,
@@ -260,6 +267,9 @@ export async function createJobInput(
       ...(followUpModel ? { followUpModel } : {}),
       unattendedRules: (input['unattendedRules'] ?? []) as JobDraft['unattendedRules'],
       ...(input['dataMap'] ? { dataMap: input['dataMap'] as JobDraft['dataMap'] } : {}),
+      ...(input['publishes'] !== undefined
+        ? { publishes: input['publishes'] as JobDraft['publishes'] }
+        : {}),
     },
     ...rationaleOf(input),
   };

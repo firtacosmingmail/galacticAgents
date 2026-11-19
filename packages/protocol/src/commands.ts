@@ -23,7 +23,7 @@ import type {
   RunData,
   UsedSource,
 } from './dashboard.js';
-import type { ApprovalMark, StandingApproval } from './waykeeper-approvals.js';
+import type { ApprovalMark, SendGrant, StandingApproval } from './waykeeper-approvals.js';
 import type { AgentLaunch, LaunchContext, LaunchFlag, LaunchRequest } from './launch-flags.js';
 import type { Provider } from './providers.js';
 import type {
@@ -44,7 +44,7 @@ import type {
   DeliverableLocation,
   DeliverableSource,
 } from './deliverables.js';
-import type { Id, Meta } from './primitives.js';
+import type { Id, Meta, Timestamp } from './primitives.js';
 import type { SetAnswer, SetQuestionInput } from './question-set.js';
 import type {
   Area,
@@ -383,18 +383,76 @@ export interface SetWaykeeperApprovalsInput {
  * `permission.decided` at `seq`. From anywhere: a mark only makes the Waykeeper ask.
  */
 export interface AddApprovalMarkInput {
-  projectId: Id;
+  /** Absent: an approval of standalone work (asteroids and the Harmonizer's own). */
+  projectId?: Id;
   seq: number;
   by: Actor;
   origin?: RequestOrigin;
 }
 
-/** The user removes a project's approval mark (P13-16), from anywhere. */
+/** The user removes a project's (absent: standalone work's) approval mark (P13-16), from anywhere. */
 export interface RemoveApprovalMarkInput {
-  projectId: Id;
+  projectId?: Id;
   markId: Id;
   by: Actor;
   origin?: RequestOrigin;
+}
+
+/** The user removes a send grant (a project's or standalone's), from anywhere. */
+export interface RemoveSendGrantInput {
+  grantId: Id;
+  /**
+   * The scope the grant must be of (a route's): a project's, or standalone work's when
+   * `projectId` is absent; another scope's grant is `not_found`. Absent: any scope.
+   */
+  scope?: { projectId?: Id };
+  by: Actor;
+  origin?: RequestOrigin;
+}
+
+/**
+ * The answer to a send-permission question: `allow` (with the `grant` the user's reply made, when
+ * it was more than once) or `deny`. The model never allows on its own: `allow` only after a user
+ * reply to that question.
+ */
+export interface AnswerSendPermissionInput {
+  questionId: Id;
+  agentId: Id;
+  decision: 'allow' | 'deny';
+  grant?: { words: string; summary: string; endsAt?: Timestamp };
+}
+
+/**
+ * A decider asks Cosmin how his new words about what may be sent fit the grants in force (P13-34,
+ * SPEC decision 166): `newWords` must be his verbatim — from his reply on `sendQuestionId` when
+ * given, else from a message of his to the decider since the newest of the grants was made. The
+ * grants are paused until the question is resolved or closes without an answer.
+ */
+export interface AskGrantConflictInput {
+  agentId: Id;
+  grantIds: Id[];
+  newWords: string;
+  sendQuestionId?: Id;
+  /** The decider's own solutions, after the fixed ones (at most 3, each at most 200 characters). */
+  options?: string[];
+}
+
+/**
+ * The decider carries out Cosmin's answer to its grant-conflict question (P13-34): the grants in
+ * `endGrantIds` end, the others count again, and `newGrant` (his words, verbatim from the new
+ * words or his answer) is made.
+ */
+export interface ResolveGrantConflictInput {
+  agentId: Id;
+  questionId: Id;
+  endGrantIds: Id[];
+  newGrant?: { words: string; summary: string; endsAt?: Timestamp };
+}
+
+export interface ResolveGrantConflictResult {
+  ended: Id[];
+  unpaused: Id[];
+  grant?: SendGrant;
 }
 
 /** The user removes a project's standing approval, from anywhere. */
@@ -764,6 +822,26 @@ export interface DomainCommands {
   addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
   /** Removes a project's approval mark (P13-16). */
   removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>>;
+  /** Removes a send grant; the held calls it covered are not re-opened. */
+  removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>>;
+  /**
+   * Answers a send-permission question (see `AnswerSendPermissionInput`): the grant made from the
+   * user's reply, when there is one.
+   */
+  answerSendPermission(
+    input: AnswerSendPermissionInput,
+  ): Promise<CommandResult<{ grant?: SendGrant }>>;
+  /**
+   * The user resumes a send grant a grant-conflict question paused (P13-34): it counts again; when
+   * its question pauses nothing any more, it is withdrawn (open) or marked resolved (answered).
+   */
+  resumeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>>;
+  /** Opens a grant-conflict question and pauses its grants (see `AskGrantConflictInput`). */
+  askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>>;
+  /** Carries out Cosmin's answer to a grant-conflict question (see `ResolveGrantConflictInput`). */
+  resolveGrantConflict(
+    input: ResolveGrantConflictInput,
+  ): Promise<CommandResult<ResolveGrantConflictResult>>;
 
   // question sets (P8-19, SPEC decision 141)
   openQuestionSet(input: OpenQuestionSetInput): Promise<CommandResult<Question[]>>;

@@ -820,6 +820,85 @@ export function registerAgentRoutes(
           return refuse(req, reply, error);
         }
       });
+      // Standalone work's marks (P13-30; design 2026-11-18 §4.5): the same, with no project.
+      app.post('/api/standalone/approval-marks', async (req, reply) => {
+        const body = parse(ApprovalMarkBody, req.body, reply);
+        if (!body) return;
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        try {
+          const { value } = await commands.addApprovalMark({
+            seq: body.seq,
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true, mark: value } satisfies ApprovalMarkResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      app.delete('/api/standalone/approval-marks/:markId', async (req, reply) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { markId } = req.params as { markId: string };
+        try {
+          await commands.removeApprovalMark({ markId, by: USER, origin: originOf(req) });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      });
+      // Removing a send grant (P13-30; design 2026-11-18 §4.3): the user's only, from anywhere
+      // (the Mac or the phone); never from an agent's process. A grant of another scope is 404.
+      const removeGrant = async (
+        req: FastifyRequest,
+        reply: FastifyReply,
+        projectId: string | undefined,
+      ) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { grantId } = req.params as { grantId: string };
+        try {
+          await commands.removeSendGrant({
+            grantId,
+            scope: projectId !== undefined ? { projectId } : {},
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      };
+      app.delete('/api/projects/:id/send-grants/:grantId', async (req, reply) =>
+        removeGrant(req, reply, (req.params as { id: string }).id),
+      );
+      app.delete('/api/standalone/send-grants/:grantId', async (req, reply) =>
+        removeGrant(req, reply, undefined),
+      );
+      // Resuming a grant a grant-conflict question paused (P13-34): the user's only, from anywhere.
+      const resumeGrant = async (
+        req: FastifyRequest,
+        reply: FastifyReply,
+        projectId: string | undefined,
+      ) => {
+        if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
+        const { grantId } = req.params as { grantId: string };
+        try {
+          await commands.resumeSendGrant({
+            grantId,
+            scope: projectId !== undefined ? { projectId } : {},
+            by: USER,
+            origin: originOf(req),
+          });
+          return { ok: true } satisfies WaykeeperApprovalsResponse;
+        } catch (error) {
+          return refuse(req, reply, error);
+        }
+      };
+      app.post('/api/projects/:id/send-grants/:grantId/resume', async (req, reply) =>
+        resumeGrant(req, reply, (req.params as { id: string }).id),
+      );
+      app.post('/api/standalone/send-grants/:grantId/resume', async (req, reply) =>
+        resumeGrant(req, reply, undefined),
+      );
       app.delete('/api/projects/:id/approval-marks/:markId', async (req, reply) => {
         if (!(await notFromAnAgent(opts.rulesPeer, 'rules', req, reply))) return reply;
         const { id, markId } = req.params as { id: string; markId: string };

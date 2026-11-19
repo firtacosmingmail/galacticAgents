@@ -21,6 +21,7 @@ function classify(
   | 'waykeeper_approvals'
   | 'standing_approval'
   | 'approval_mark'
+  | 'send_grant'
   | 'approval'
   | 'proposal'
   | 'promotion'
@@ -78,6 +79,11 @@ function classify(
     case 'approval_mark.added':
     case 'approval_mark.removed':
       return 'approval_mark';
+    case 'send_grant.added':
+    case 'send_grant.removed':
+    case 'send_grant.paused':
+    case 'send_grant.unpaused':
+      return 'send_grant';
     case 'approval.recorded':
       return 'approval';
     case 'proposal.created':

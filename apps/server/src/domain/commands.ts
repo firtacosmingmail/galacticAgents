@@ -20,8 +20,14 @@ import {
   type AllowSimilarInput,
   type RemoveStandingApprovalInput,
   type AddApprovalMarkInput,
+  type AnswerSendPermissionInput,
+  type AskGrantConflictInput,
+  type ResolveGrantConflictInput,
+  type ResolveGrantConflictResult,
   type ApprovalMark,
   type RemoveApprovalMarkInput,
+  type RemoveSendGrantInput,
+  type SendGrant,
   APPROVAL_MARK_DAYS,
   isWaykeeperApproval,
   type SetWaykeeperApprovalsInput,
@@ -95,6 +101,7 @@ import {
 } from '@galactic/protocol';
 import type { SpawnRequest, SpawnResult } from '../runtime/agent-runtime.js';
 import type { ProviderCatalog } from '../runtime/provider-catalog.js';
+import { redactSecrets } from '../runtime/redact.js';
 import { providerOf, type ChooseSteward } from '../runtime/steward-choice.js';
 import { checkPlacement, recordSpawned, updateAgent } from './agents.js';
 import { assignBody, freeBody, moveHost, sweepMarkers } from './bodies.js';
@@ -154,6 +161,22 @@ import {
   removePermissionRule,
   RULES_END_IN,
 } from './project-rules.js';
+import {
+  askGrantConflict,
+  conflictClosedAt,
+  deciderScope,
+  pendingConflictAbout,
+  untakenConflictWords,
+  resolveGrantConflict,
+  resumeSendGrant,
+} from './grant-conflicts.js';
+import {
+  addSendGrant,
+  checkSendPermissionAnswer,
+  notAllowedText,
+  removeSendGrant,
+  type HeldSendAnswer,
+} from './send-grants.js';
 import {
   addApprovalMark,
   addStandingApproval,
@@ -257,6 +280,22 @@ export interface AgentControl {
   permissionContext?(
     agentId: Id,
   ): { projectId: Id | undefined; policy: PermissionPolicy; ctx: PolicyContext } | undefined;
+  /**
+   * Answers a held send its decider decided from the user's reply (P13-28): the adapter once, the
+   * grant (when made) and the closing of its question logged. Returns the grant. Absent: refused.
+   */
+  answerHeldSend?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
+  /**
+   * Answers a publish's grant question its decider decided (P13-29): the grant (when made), an
+   * allow logged and the Steward's publish allowance armed, the question closed, the Steward told.
+   * Absent: refused.
+   */
+  answerHeldPublish?(questionId: Id, answer: HeldSendAnswer): Promise<SendGrant | undefined>;
+  /**
+   * Judges again the held sends and publishes of a scope (P13-27): after a grant-conflict answer
+   * changed which grants are in force (P13-34), a held send they now cover is approved.
+   */
+  recheckHeldSends?(scope: { projectId?: Id }): void;
 }
 
 export interface CommandsOptions {
@@ -1568,16 +1607,20 @@ export class Commands implements DomainCommands {
   /**
    * The user's "Ask me next time" (P13-16, design 2026-11-14 §4.5): a mark made from the
    * Waykeeper approval logged at `seq`. Refused (`invalid`) unless that event is a Waykeeper
-   * approval of a Steward of `projectId` younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark
-   * only makes the Waykeeper ask.
+   * approval of a Steward of `projectId` — absent: of an agent of standalone work, in no project
+   * (design 2026-11-18 §4.5) — younger than `APPROVAL_MARK_DAYS`. From anywhere: a mark only
+   * makes the Waykeeper ask.
    */
   addApprovalMark(input: AddApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
     if (input.by.type !== 'user') {
       return Promise.reject(new DomainError('invalid', 'only the user adds approval marks'));
     }
     const { tables } = this.log;
-    const project = tables.projects.get(input.projectId);
-    if (!project) return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    const project =
+      input.projectId !== undefined ? tables.projects.get(input.projectId) : undefined;
+    if (input.projectId !== undefined && !project) {
+      return Promise.reject(new DomainError('not_found', `project ${input.projectId}`));
+    }
     const env = this.log.eventsSince(input.seq - 1, 1)[0];
     const e = env?.seq === input.seq ? env.event : undefined;
     if (e?.type !== 'permission.decided' || !isWaykeeperApproval(e)) {
@@ -1587,9 +1630,12 @@ export class Commands implements DomainCommands {
     }
     const agent = tables.agents.get(e.agentId);
     const task = agent?.taskId ? tables.tasks.get(agent.taskId) : undefined;
-    if ((task?.projectId ?? agent?.projectId) !== project.id) {
+    if (!agent || (task?.projectId ?? agent.projectId) !== project?.id) {
       return Promise.reject(
-        new DomainError('invalid', `event ${input.seq} is not an approval of this project`),
+        new DomainError(
+          'invalid',
+          `event ${input.seq} is not an approval of ${project ? 'this project' : 'standalone work'}`,
+        ),
       );
     }
     const age = Date.parse(this.log.clock()) - Date.parse(env!.at);
@@ -1611,7 +1657,15 @@ export class Commands implements DomainCommands {
     // its cwd ran in the task's worktree (or the workspace): that is the cwd and the worktree
     // root. The scratch folder is found from that cwd, as the runtime's `scratchOf` does, so a
     // cwd spelled another way than `project.workspace` still has its scratch folder tokenised.
-    const cwd = e.cwd ?? task?.worktreePath ?? project.workspace;
+    const standaloneWs = task?.meta?.['workspace'];
+    const workspace =
+      project?.workspace ??
+      workspaceOfCwd(
+        e.cwd ??
+          task?.worktreePath ??
+          (typeof standaloneWs === 'string' && standaloneWs ? standaloneWs : homedir()),
+      );
+    const cwd = e.cwd ?? task?.worktreePath ?? workspace;
     let scratch: string | undefined;
     try {
       scratch = agent?.taskId ? scratchRoot(workspaceOfCwd(cwd), agent.taskId) : undefined;
@@ -1620,7 +1674,7 @@ export class Commands implements DomainCommands {
     }
     const match = markFromApproval(
       approval,
-      { workspace: project.workspace, cwd, home: homedir() },
+      { workspace, cwd, home: homedir() },
       { worktree: cwd, scratch },
     );
     const made = {
@@ -1629,10 +1683,10 @@ export class Commands implements DomainCommands {
       by: input.by,
       origin: input.origin ?? ('remote' as const),
     };
-    return this.run((ctx) => addApprovalMark(ctx, project.id, match, made));
+    return this.run((ctx) => addApprovalMark(ctx, project?.id, match, made));
   }
 
-  /** The user removes a project's approval mark (P13-16), from anywhere. */
+  /** The user removes a project's (absent: standalone work's) approval mark (P13-16), from anywhere. */
   removeApprovalMark(input: RemoveApprovalMarkInput): Promise<CommandResult<ApprovalMark>> {
     if (input.by.type !== 'user') {
       return Promise.reject(new DomainError('invalid', 'only the user removes approval marks'));
@@ -1640,6 +1694,140 @@ export class Commands implements DomainCommands {
     return this.run((ctx) =>
       removeApprovalMark(ctx, input.projectId, input.markId, input.by, 'removed by the user'),
     );
+  }
+
+  /** The user removes a send grant, from anywhere; the held calls it covered are not re-opened. */
+  removeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
+    return this.run((ctx) =>
+      removeSendGrant(ctx, input.grantId, input.by, 'removed by the user', input.scope),
+    );
+  }
+
+  /**
+   * The decider's answer to a send-permission question (P13-28; design §4.4 step 4): checked here
+   * (`checkSendPermissionAnswer`: its decider, the user's reply first for an allow, a grant's words
+   * verbatim from it), then carried out by the runtime on the Steward that waits — the grant made
+   * with the reply's origin, the call allowed with it or once, or refused with the user's words.
+   */
+  async answerSendPermission(
+    input: AnswerSendPermissionInput,
+  ): Promise<CommandResult<{ grant?: SendGrant }>> {
+    const question = must(
+      this.log.tables.questions.get(input.questionId),
+      'question',
+      input.questionId,
+    );
+    // Cosmin is asked how his words fit his grants (P13-34): that answer decides this send.
+    const conflict = pendingConflictAbout(this.log.tables, question.id);
+    if (conflict) {
+      throw new DomainError(
+        'invalid',
+        `question ${conflict.id} asks Cosmin how his words fit his grants: carry out his answer ` +
+          'with resolve_grant_conflict first',
+      );
+    }
+    const { replies, from } = checkSendPermissionAnswer(
+      this.log.db,
+      question,
+      input,
+      conflictClosedAt(this.log.tables, question.id),
+      untakenConflictWords(
+        this.log.tables,
+        deciderScope(this.log.tables.agents.get(input.agentId)) ?? {},
+      ),
+    );
+    // A publish's grant question (P13-29): no session waits on it; the runtime arms the allowance.
+    const carryOut =
+      question.context.sendPermission?.publish !== undefined
+        ? this.agents?.answerHeldPublish?.bind(this.agents)
+        : this.agents?.hasQuestion(question.id)
+          ? this.agents.answerHeldSend?.bind(this.agents)
+          : undefined;
+    if (!carryOut) {
+      throw new DomainError('stale', `no Steward waits on question ${question.id} any more`);
+    }
+    const projectId = this.log.tables.tasks.get(
+      this.log.tables.agents.get(question.originAgentId)?.taskId ?? '',
+    )?.projectId;
+    const user: Actor = { type: 'user' };
+    let answer: HeldSendAnswer;
+    if (input.decision === 'deny') {
+      answer = { decision: 'deny', deciderId: input.agentId, reason: notAllowedText(replies) };
+    } else if (input.grant && from) {
+      const { words, summary, endsAt } = input.grant;
+      answer = {
+        decision: 'allow',
+        deciderId: input.agentId,
+        reason: `Cosmin allowed it: ${summary}`,
+        grant: (ctx) =>
+          addSendGrant(
+            ctx,
+            {
+              ...(projectId !== undefined ? { projectId } : {}),
+              words: redactSecrets(words.trim()),
+              summary: redactSecrets(summary.trim()),
+              ...(endsAt !== undefined ? { endsAt } : {}),
+              createdBy: user,
+              origin: from.origin,
+              questionId: question.id,
+            },
+            Date.now(),
+          ),
+      };
+    } else {
+      answer = {
+        decision: 'allow',
+        deciderId: input.agentId,
+        reason: "Allowed once from Cosmin's reply.",
+      };
+    }
+    const since = this.log.currentSeq();
+    const grant = await carryOut(question.id, answer);
+    const events = this.log
+      .eventsSince(since, Number.MAX_SAFE_INTEGER)
+      .map((e) => e.event)
+      .filter(
+        (e) =>
+          (e.type === 'send_grant.added' && e.grant.questionId === question.id) ||
+          (e.type === 'permission.decided' && e.questionId === question.id) ||
+          (e.type === 'question.cancelled' && e.questionId === question.id),
+      );
+    return { value: grant ? { grant } : {}, events };
+  }
+
+  /**
+   * A decider asks Cosmin how his new words fit the grants in force (P13-34, SPEC decision 166):
+   * checked and carried out by `askGrantConflict` — the question opened, its grants paused.
+   */
+  askGrantConflict(input: AskGrantConflictInput): Promise<CommandResult<Question>> {
+    return this.run((ctx) => askGrantConflict(ctx, this.log.db, input, Date.now()));
+  }
+
+  /**
+   * The user resumes a grant a grant-conflict question paused (P13-34), from anywhere; then the
+   * scope's held sends are judged again against the grants now in force.
+   */
+  async resumeSendGrant(input: RemoveSendGrantInput): Promise<CommandResult<SendGrant>> {
+    const result = await this.run((ctx) =>
+      resumeSendGrant(ctx, input.grantId, input.by, input.scope),
+    );
+    const g = result.value;
+    this.agents?.recheckHeldSends?.(g.projectId !== undefined ? { projectId: g.projectId } : {});
+    return result;
+  }
+
+  /**
+   * The decider carries out Cosmin's answer to its grant-conflict question (P13-34): checked and
+   * done in one transaction (`resolveGrantConflict`), then the scope's held sends are judged
+   * again against the grants now in force — the send he was asked about among them.
+   */
+  async resolveGrantConflict(
+    input: ResolveGrantConflictInput,
+  ): Promise<CommandResult<ResolveGrantConflictResult>> {
+    const { value, events } = await this.run((ctx) => resolveGrantConflict(ctx, input, Date.now()));
+    const { scope, ...result } = value;
+    this.agents?.recheckHeldSends?.(scope);
+    return { value: result, events };
   }
 
   /** The user removes a project's rule (P9-17): remote only with `autoApproveRemote`. */

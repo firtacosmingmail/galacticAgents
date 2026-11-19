@@ -116,6 +116,8 @@ export const ConfigFile = z.object({
    * Default `waykeepers`.
    */
   brainUserMcp: BrainUserMcp.optional(),
+  /** Auto for standalone work (Auto, design 2026-11-18); absent: off. */
+  standaloneAuto: z.boolean().optional(),
   /** Dollar budgets (P8-01): the warning threshold in percent of a budget (default 80). */
   budgets: SettingsBudgets.partial().optional(),
   /**
@@ -322,6 +324,8 @@ export interface ServerConfig {
   stewardsLoadUserSettings?: boolean;
   /** Which brains get the user's MCP servers; absent = `waykeepers` (`DEFAULT_BRAIN_USER_MCP`). */
   brainUserMcp?: BrainUserMcp;
+  /** Auto for standalone work (asteroids and the Harmonizer's own); absent: off. */
+  standaloneAuto?: boolean;
   /** Settings an environment variable decided at startup (P25-01): read-only in the panel. */
   envOverrides?: SettingName[];
   /** When the panel's first-run setup was done (P25-08); absent = the wizard shows. */
@@ -637,6 +641,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): LoadedConfig {
         ? { stewardsLoadUserSettings: file.stewardsLoadUserSettings }
         : {}),
       ...(file.brainUserMcp ? { brainUserMcp: file.brainUserMcp } : {}),
+      ...(file.standaloneAuto ? { standaloneAuto: true } : {}),
       envOverrides,
       budgets: { warnAtPercent },
       ...(file.setupCompletedAt ? { setupCompletedAt: file.setupCompletedAt } : {}),
