@@ -192,20 +192,62 @@ export function logAllowOnce(
 
 /** A user's reply to a send-permission question (P13-28): what he wrote, and from where. */
 export interface SendPermissionReply {
-  /** The reply's `message.sent` id: the answer records it (`answeredWith`, P13-33). */
-  messageId: Id;
   text: string;
   /** Unknown counts as remote. */
   origin: RequestOrigin;
 }
 
 /**
+ * The rule that takes a plain chat line as an answer (final review I2; P13-33), for the decider
+ * `deciderId`: given a user line's event id and time — a `message.sent` to `deciderId` that does
+ * not reply to a question — the send-permission question it answers, or `undefined`. It answers
+ * one only when that question was the decider's only open send-permission question at the line's
+ * event, opened at or before the line's time. With two open, it answers neither; with none, it is
+ * an ordinary line. Fixed once the line is logged: a question opened later never counts, and how
+ * the question closes afterwards does not matter. `sendPermissionReplies` and `userWordsFor` (which
+ * leaves such a line out of the task words) both use it, so the two cannot drift.
+ */
+export function plainLineAnswer(
+  db: Database,
+  deciderId: Id,
+): (eventId: number, at: string) => Id | undefined {
+  // The decider's send-permission questions, as event-id spans [opened, closed).
+  const spans = db
+    .prepare(
+      `SELECT json_extract(o.payload, '$.question.id') AS questionId,
+              json_extract(o.payload, '$.question.createdAt') AS createdAt,
+              o.id AS opened,
+              (SELECT MIN(c.id) FROM events c
+                WHERE c.type IN ('question.answered', 'question.cancelled')
+                  AND json_extract(c.payload, '$.questionId') =
+                    json_extract(o.payload, '$.question.id')) AS closed
+         FROM events o
+        WHERE o.type = 'question.opened'
+          AND json_extract(o.payload, '$.question.context.sendPermission.deciderId') = ?`,
+    )
+    .all(deciderId) as {
+    questionId: Id;
+    createdAt: string;
+    opened: number;
+    closed: number | null;
+  }[];
+  return (eventId, at) => {
+    const open = spans.filter(
+      (s) => s.opened < eventId && (s.closed === null || s.closed > eventId),
+    );
+    const [only] = open;
+    return open.length === 1 && only && only.createdAt <= at ? only.questionId : undefined;
+  };
+}
+
+/**
  * The user's replies to the send-permission question `question` (P13-28; design §4.4 step 4;
  * final review I2), oldest first, since it opened: every `message.sent` from the user that
  * replies to it (`replyTo`), and every other chat line of his to its decider `deciderId` — not
- * one replying to a question — sent while `question` was the decider's only open send-permission
- * question. With two open, a plain "yes" answers neither. An allow needs one of these, and a
- * grant's words are checked against these texts only.
+ * one replying to a question — that `plainLineAnswer` takes as an answer to it: sent while
+ * `question` was the decider's only open send-permission question. With two open, a plain "yes"
+ * answers neither. An allow needs one of these, and a grant's words are checked against these
+ * texts only.
  */
 export function sendPermissionReplies(
   db: Database,
@@ -214,7 +256,7 @@ export function sendPermissionReplies(
 ): SendPermissionReply[] {
   const rows = db
     .prepare(
-      `SELECT id, payload FROM events
+      `SELECT id, at, payload FROM events
         WHERE type = 'message.sent' AND at >= ?
           AND json_extract(payload, '$.sender.type') = 'user'
           AND (
@@ -226,29 +268,18 @@ export function sendPermissionReplies(
           )
         ORDER BY id`,
     )
-    .all(question.createdAt, question.id, deciderId) as { id: number; payload: string }[];
-  // The decider's other send-permission questions, as event-id spans [opened, closed).
-  const others = db
-    .prepare(
-      `SELECT o.id AS opened,
-              (SELECT MIN(c.id) FROM events c
-                WHERE c.type IN ('question.answered', 'question.cancelled')
-                  AND json_extract(c.payload, '$.questionId') =
-                    json_extract(o.payload, '$.question.id')) AS closed
-         FROM events o
-        WHERE o.type = 'question.opened'
-          AND json_extract(o.payload, '$.question.context.sendPermission.deciderId') = ?
-          AND json_extract(o.payload, '$.question.id') != ?`,
-    )
-    .all(deciderId, question.id) as { opened: number; closed: number | null }[];
-  const anotherOpenAt = (id: number) =>
-    others.some((o) => o.opened < id && (o.closed === null || o.closed > id));
+    .all(question.createdAt, question.id, deciderId) as {
+    id: number;
+    at: string;
+    payload: string;
+  }[];
+  const answers = plainLineAnswer(db, deciderId);
   return rows.flatMap((r) => {
     const e = JSON.parse(r.payload) as Event;
     if (e.type !== 'message.sent' || e.turn) return [];
     const toThis = e.replyTo?.kind === 'question' && e.replyTo.id === question.id;
-    if (!toThis && anotherOpenAt(r.id)) return [];
-    return [{ messageId: e.messageId, text: e.text, origin: e.origin ?? 'remote' }];
+    if (!toThis && answers(r.id, r.at) !== question.id) return [];
+    return [{ text: e.text, origin: e.origin ?? 'remote' }];
   });
 }
 
@@ -318,8 +349,6 @@ export function checkSendPermissionAnswer(
  * A decider's checked answer to a held send, for the runtime (P13-28): `reason` is logged with
  * the allow and closes the question; on a deny it is what the Steward is told. `grant` makes the
  * grant in its own transaction before anything else (a refused grant changes nothing).
- * `answeredWith`: the ids of the user's messages the answer was taken from (P13-33), recorded on
- * the question's `question.cancelled` so they count only as this answer, never as task words.
  */
 export type HeldSendAnswer =
   | {
@@ -327,6 +356,5 @@ export type HeldSendAnswer =
       deciderId: Id;
       reason: string;
       grant?: (ctx: CommandContext) => SendGrant;
-      answeredWith?: Id[];
     }
-  | { decision: 'deny'; deciderId: Id; reason: string; answeredWith?: Id[] };
+  | { decision: 'deny'; deciderId: Id; reason: string };

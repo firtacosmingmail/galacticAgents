@@ -563,11 +563,12 @@ describe('recheckHeldSends (P13-27; ruling: a grant clears the held sends it cov
     await until(() => h.ofType('question.opened').length === 1);
     const q = h.log.tables.questions.all()[0]!;
     const words = 'please comment lgtm on PR 12';
+    // To the Steward: a plain line to the Waykeeper now would be the send card's answer (P13-33).
     h.log.runCommand((ctx) =>
       ctx.emit({
         type: 'message.sent',
         messageId: 'm-user-1',
-        agentId: h.waykeeper.id,
+        agentId: h.steward.id,
         sender: USER,
         text: words,
         interrupt: false,

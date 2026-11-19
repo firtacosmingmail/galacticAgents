@@ -4,7 +4,6 @@ import {
   OFF_SCRIPT_ACTIONS,
   PUBLISH_ACTIONS,
   SPEND_ACTIONS,
-  ANSWERED_WITH,
   isJobOwned,
 } from '@galactic/protocol';
 import type {
@@ -558,8 +557,7 @@ function moveTo(ctx: CommandContext, current: Question, to: Actor): Question {
 
 /**
  * Closes an open question that can no longer be answered (P1-34) and emits `question.cancelled`.
- * A question that is not open is left as it is. `answeredWith`: the user's messages a decider's
- * answer to a send-permission question was taken from (P13-33), kept as `meta.answeredWith`.
+ * A question that is not open is left as it is.
  */
 export function cancelQuestion(
   ctx: CommandContext,
@@ -567,7 +565,6 @@ export function cancelQuestion(
   reason: string,
   holders?: Id[],
   dismissal?: Dismissal,
-  answeredWith?: Id[],
 ): Question | undefined {
   const current = ctx.tables.questions.get(questionId);
   if (!current || current.status !== 'open') return undefined;
@@ -577,7 +574,6 @@ export function cancelQuestion(
     {
       ...current.meta,
       ...(dismissal ? { cancelledBy: dismissal.by, cancelReason: reason } : {}),
-      ...(answeredWith?.length ? { [ANSWERED_WITH]: answeredWith } : {}),
     },
   );
   ctx.tables.questions.upsert(question);
@@ -591,7 +587,6 @@ export function cancelQuestion(
     ...(dismissal ? { by: dismissal.by } : {}),
     ...(dismissal?.origin ? { origin: dismissal.origin } : {}),
     ...(dismissal?.stillWaiting ? { stillWaiting: true as const } : {}),
-    ...(answeredWith?.length ? { answeredWith } : {}),
   });
   return question;
 }

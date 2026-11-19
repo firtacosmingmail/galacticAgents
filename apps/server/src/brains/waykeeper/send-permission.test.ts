@@ -3,7 +3,6 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  answeredWithOf,
   type Event,
   type EventOfType,
   type Id,
@@ -441,44 +440,87 @@ describe('answer_send_permission: allow and deny (P13-28)', () => {
 describe('a chat line taken as a send-card answer is not task words (P13-33)', () => {
   const finished = (c: Harness, agentId: Id) =>
     until(() => c.ofType('agent.finished').some((e) => e.agentId === agentId));
+  const LINE = 'yes, post to Instagram only today';
+  const QUOTE = 'post to Instagram only today';
 
-  it('a plain line answering the only open send question makes the grant, never task words', async () => {
-    const { c, script, waykeeper, project, steward, question, answer } = await projectHeld();
-    const line = 'yes, post to Instagram only today';
-    c.say(waykeeper.id, line);
-    await answer({
-      questionId: question.id,
-      decision: 'allow',
-      grant: {
-        words: 'post to Instagram only today',
-        summary: 'Instagram, today',
-        endsAt: midnight(),
-      },
-    });
-    expect(c.ofType('send_grant.added')).toHaveLength(1);
-    const said = c.ofType('message.sent').find((e) => e.text === line)!;
-    expect(answeredWithOf(c.log.tables.questions.get(question.id))).toEqual([said.messageId]);
-    expect(
-      c.ofType('question.cancelled').find((e) => e.questionId === question.id)?.answeredWith,
-    ).toEqual([said.messageId]);
-    await finished(c, steward.id);
-    const taskId = steward.taskId!;
-    expect(userWordsFor(c.log, taskId)).not.toContain(line);
-    // A later send in the same task that only a quote of that line would cover is held.
-    script.quote = 'post to Instagram only today';
+  /** A second Steward of `taskId` whose send the judge would cover only by quoting `QUOTE`. */
+  async function laterSend(c: Harness, script: JudgeScript, taskId: Id, waykeeperId: Id) {
+    script.quote = QUOTE;
     const later = (
       await c.commands.spawnAgent({
         role: 'steward',
         runtime: 'fake',
         prompt: 'scenario:send',
         taskId,
-        supervisorId: waykeeper.id,
+        supervisorId: waykeeperId,
       })
     ).value;
     await until(() => c.heldOf(later.id) !== undefined || decisionsOf(c, later.id).length > 0);
+    return later;
+  }
+
+  it('a plain line answering the only open send question makes the grant, never task words', async () => {
+    const { c, script, waykeeper, project, steward, question, answer } = await projectHeld();
+    c.say(waykeeper.id, LINE);
+    await answer({
+      questionId: question.id,
+      decision: 'allow',
+      grant: { words: QUOTE, summary: 'Instagram, today', endsAt: midnight() },
+    });
+    expect(c.ofType('send_grant.added')).toHaveLength(1);
+    await finished(c, steward.id);
+    const taskId = steward.taskId!;
+    expect(userWordsFor(c.log, taskId)).not.toContain(LINE);
+    // A later send in the same task that only a quote of that line would cover is held.
+    const later = await laterSend(c, script, taskId, waykeeper.id);
     expect(decisionsOf(c, later.id)).toEqual([]);
     expect(c.heldOf(later.id)).toBeDefined();
     expect(c.log.tables.projects.get(project.id)!.sendGrants).toHaveLength(1);
+  });
+
+  it('before the decider answers, a send judged meanwhile is not approved by quoting the line', async () => {
+    const { c, script, waykeeper, project, steward, question } = await projectHeld();
+    c.say(waykeeper.id, LINE);
+    expect(userWordsFor(c.log, steward.taskId!)).not.toContain(LINE);
+    // Steward A still waits; another task of the project sends meanwhile.
+    const other = (
+      await c.commands.createTask({ description: 'post to Instagram', projectId: project.id })
+    ).value;
+    const later = await laterSend(c, script, other.id, waykeeper.id);
+    expect(decisionsOf(c, later.id)).toEqual([]);
+    expect(c.heldOf(later.id)).toBeDefined();
+    expect(c.log.tables.questions.get(question.id)!.status).toBe('open');
+  });
+
+  it('the line stays out of task words when Cosmin then taps Allow once on the card', async () => {
+    const { c, waykeeper, steward, question, answer } = await projectHeld();
+    c.say(waykeeper.id, LINE);
+    await c.commands.answerQuestion({ questionId: question.id, answer: 'allow', by: USER });
+    await finished(c, steward.id);
+    await expect(answer({ questionId: question.id, decision: 'allow' })).rejects.toThrow();
+    expect(userWordsFor(c.log, steward.taskId!)).not.toContain(LINE);
+  });
+
+  it('the line stays out of task words when the Steward stops before the decider answers', async () => {
+    const { c, waykeeper, steward, question } = await projectHeld();
+    c.say(waykeeper.id, LINE);
+    await c.commands.stopAgent(steward.id, USER);
+    await until(() => c.log.tables.questions.get(question.id)!.status !== 'open');
+    expect(userWordsFor(c.log, steward.taskId!)).not.toContain(LINE);
+  });
+
+  it("the line stays out of task words when the decider's answer is refused", async () => {
+    const { c, waykeeper, steward, question, answer } = await projectHeld();
+    c.say(waykeeper.id, LINE);
+    await expect(
+      answer({
+        questionId: question.id,
+        decision: 'allow',
+        grant: { words: QUOTE, summary: 'Instagram', endsAt: '2020-01-01T00:00:00Z' },
+      }),
+    ).rejects.toMatchObject({ code: 'invalid' });
+    expect(c.log.tables.questions.get(question.id)!.status).toBe('open');
+    expect(userWordsFor(c.log, steward.taskId!)).not.toContain(LINE);
   });
 
   it('a plain line a deny was taken from is not task words either', async () => {
@@ -490,24 +532,30 @@ describe('a chat line taken as a send-card answer is not task words (P13-33)', (
 
   it('a plain line with no open send question stays task words', async () => {
     const { c, waykeeper, steward, question, answer } = await projectHeld();
-    c.say(waykeeper.id, 'before: push the parser branch', { at: '2026-01-01T00:00:00.000Z' });
     c.say(waykeeper.id, 'yes, this one', { replyTo: question });
     await answer({ questionId: question.id, decision: 'allow' });
     await finished(c, steward.id);
     c.say(waykeeper.id, 'after: push the docs branch');
     const words = userWordsFor(c.log, steward.taskId!);
-    expect(words).toContain('before: push the parser branch');
     expect(words).toContain('after: push the docs branch');
     expect(words).not.toContain('yes, this one');
   });
 
   it('a plain line while two send questions are open is not taken: it stays task words', async () => {
     const { c, waykeeper, project, steward, question, answer } = await projectHeld();
-    await heldSteward(c, project.id, waykeeper.id);
+    const second = await heldSteward(c, project.id, waykeeper.id);
     c.say(waykeeper.id, 'push the parser branch when green');
     c.say(waykeeper.id, 'yes, this one', { replyTo: question });
     await answer({ questionId: question.id, decision: 'allow' });
     await finished(c, steward.id);
+    expect(userWordsFor(c.log, steward.taskId!)).toContain('push the parser branch when green');
+    // Now the second is the only one open, but the line was not its answer either.
+    await expect(
+      answer({ questionId: second.question.id, decision: 'allow' }),
+    ).rejects.toMatchObject({
+      code: 'invalid',
+      message: expect.stringContaining('has not replied'),
+    });
     expect(userWordsFor(c.log, steward.taskId!)).toContain('push the parser branch when green');
   });
 });

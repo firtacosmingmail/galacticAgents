@@ -1,13 +1,13 @@
 import {
   PICKED_OPTION_PREFIX,
   answerDetailOf,
-  answeredWithOf,
   relayedQuestionOf,
   type Agent,
   type Id,
   type Question,
 } from '@galactic/protocol';
 import type { EventLog } from '../domain/event-log.js';
+import { plainLineAnswer } from '../domain/send-grants.js';
 
 /**
  * The user's own words that bear on a task (P13-04; design 2026-11-09-waykeeper-approvals §5.4a,
@@ -29,7 +29,7 @@ export const HARMONIZER_WINDOW = 5;
 const SCAN_LIMIT = 500;
 
 /** What `userWordsFor` reads: the tables and the indexed per-agent event read. */
-export type EventLogReader = Pick<EventLog, 'tables' | 'latestOf'>;
+export type EventLogReader = Pick<EventLog, 'tables' | 'latestOf' | 'db'>;
 
 interface Said {
   at: string;
@@ -52,11 +52,14 @@ interface Said {
  *   - his last `HARMONIZER_WINDOW` messages to the Harmonizer before the project's proposal.
  *
  * Left out (final review M1): his replies (`replyTo`) and answers to send-permission questions,
- * and (P13-33) a plain chat line a decider's answer to one was taken from (the question's
- * `answeredWith`: a line to the decider while it was the decider's only open send question).
- * Those are for the grant question alone; a denial ("don't post to Instagram today") must never
- * become task words a send is approved by, and a grant's "only today" is enforced by its end time,
- * never by a quote of the same line.
+ * and (P13-33) every plain chat line the server takes as the answer to one (`plainLineAnswer`: a
+ * line to a decider while that decider had exactly one open send-permission question) — however
+ * that question later closes (the decider's answer, his own Allow once, the Steward stopping, a
+ * refused answer) and before it is answered. Those are for the grant question alone; a denial
+ * ("don't post to Instagram today") must never become task words a send is approved by, and a
+ * grant's "only today" is enforced by its end time, never by a quote of the same line. The cost,
+ * accepted: a new instruction typed to a decider while exactly one send card of its is open is
+ * not task words either (it fails closed: a send it would cover gets a card).
  *
  * Nothing an agent wrote counts — not a brief, a plan, a task description or an agent's answer.
  * Never throws: whatever cannot be read counts as no words (a push then goes to the user).
@@ -88,25 +91,21 @@ function collect(log: EventLogReader, taskId: Id): string[] {
   const said: Said[] = [];
   /** A send-permission question (Auto): his reply to it is for its grant, never a task word. */
   const isSendQuestion = (id: Id) => tables.questions.get(id)?.context.sendPermission !== undefined;
-  /** His chat lines a send-permission answer was taken from (P13-33): that answer's alone. */
-  const answers = new Set(
-    tables.questions
-      .all()
-      .filter((q) => q.context.sendPermission !== undefined)
-      .flatMap((q) => answeredWithOf(q)),
-  );
-  const messagesTo = (agentId: Id, limit: number, until?: string): Said[] =>
-    log
+  const messagesTo = (agentId: Id, limit: number, until?: string): Said[] => {
+    /** A plain line the server takes as a send-permission answer (P13-33): that answer's alone. */
+    const answers = plainLineAnswer(log.db, agentId);
+    return log
       .latestOf('message.sent', agentId, limit, until)
       .flatMap(({ seq, at, event }) =>
         event.type === 'message.sent' &&
         event.sender.type === 'user' &&
         event.text.trim() &&
-        !answers.has(event.messageId) &&
-        !(event.replyTo?.kind === 'question' && isSendQuestion(event.replyTo.id))
+        !(event.replyTo?.kind === 'question' && isSendQuestion(event.replyTo.id)) &&
+        !(event.replyTo?.kind !== 'question' && answers(seq, at) !== undefined)
           ? [{ at, seq, text: event.text }]
           : [],
       );
+  };
   for (const a of [...stewards, ...waykeepers]) {
     said.push(...messagesTo(a.id, SCAN_LIMIT));
   }

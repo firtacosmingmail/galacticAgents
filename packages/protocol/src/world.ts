@@ -2,7 +2,7 @@ import type { AgentSpend } from './budget.js';
 import { foldSpend } from './budget.js';
 import type { Deliverable, RunSummary } from './deliverables.js';
 import type { Agent, Body, Project, Proposal, Question, StatusRecord, Task } from './domain.js';
-import { ANSWERED_WITH, foldProposalMeta, type ProposalMetaChanges } from './domain.js';
+import { foldProposalMeta, type ProposalMetaChanges } from './domain.js';
 import { applyChanges, type EventEnvelope } from './events.js';
 import { type Panel } from './dashboard.js';
 import type { Area, Job } from './long-term.js';
@@ -235,7 +235,6 @@ export function applyEvent(state: WorldState, envelope: EventEnvelope): WorldSta
           meta: withoutDraft({
             ...prior,
             ...(event.by ? { cancelledBy: event.by, cancelReason: event.reason } : {}),
-            ...(event.answeredWith?.length ? { [ANSWERED_WITH]: event.answeredWith } : {}),
           }),
         }),
       };

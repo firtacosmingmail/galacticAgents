@@ -185,29 +185,49 @@ describe('userWordsFor', () => {
     expect(quoteFound('post to Instagram today', words)).toBe(false);
   });
 
-  it('leaves out a plain chat line a send-permission answer was taken from (P13-33)', () => {
+  it('leaves out a plain line to a decider whose only open send question it answers (P13-33)', () => {
     const w = setup();
     const { task, wk, steward } = project(w);
+    const send = (id: Id): Question => ({
+      id,
+      kind: 'permission',
+      originAgentId: steward.id,
+      holder: USER,
+      status: 'open',
+      context: {
+        text: 'Bash: curl -X POST instagram',
+        sendPermission: { summary: 'Post to Instagram', parts: [], grants: [], deciderId: wk.id },
+      },
+      version: 1,
+      createdAt: '2000-01-01T00:00:00.000Z',
+      updatedAt: '2000-01-01T00:00:00.000Z',
+    });
+    const open = (id: Id) =>
+      w.run((ctx) => ctx.emit({ type: 'question.opened', question: send(id) }));
+    const cancel = (id: Id) =>
+      w.run((ctx) =>
+        ctx.emit({
+          type: 'question.cancelled',
+          questionId: id,
+          agentId: steward.id,
+          reason: 'the Steward stopped',
+          version: 2,
+        }),
+      );
+    w.say(wk.id, 'before: push the parser branch');
+    open('q-1');
     w.say(wk.id, 'yes, post to Instagram only today');
-    w.say(wk.id, 'and push the parser branch');
-    w.run((ctx) =>
-      ctx.tables.questions.insert({
-        id: 'q-send',
-        kind: 'permission',
-        originAgentId: steward.id,
-        holder: USER,
-        status: 'cancelled',
-        context: {
-          text: 'Bash: curl -X POST instagram',
-          sendPermission: { summary: 'Post to Instagram', parts: [], grants: [], deciderId: wk.id },
-        },
-        meta: { answeredWith: ['m-1'] },
-        version: 2,
-        createdAt: ctx.now,
-        updatedAt: ctx.now,
-      }),
-    );
-    expect(userWordsFor(w.log, task.id)).toEqual(['and push the parser branch']);
+    open('q-2');
+    w.say(wk.id, 'with two open: push the docs');
+    cancel('q-1');
+    w.say(wk.id, 'yes to the other one');
+    cancel('q-2');
+    w.say(wk.id, 'after: push the fixes');
+    expect(userWordsFor(w.log, task.id)).toEqual([
+      'before: push the parser branch',
+      'with two open: push the docs',
+      'after: push the fixes',
+    ]);
   });
 
   it('keeps the last five messages to the Harmonizer before the proposal, none after', () => {
