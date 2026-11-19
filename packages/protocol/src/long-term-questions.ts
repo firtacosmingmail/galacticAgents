@@ -70,6 +70,14 @@ export const PublishFile = z.object({
 export type PublishFile = z.infer<typeof PublishFile>;
 
 /** What a `publish` question asks to publish: where, what text, which files, and its fingerprint. */
+/**
+ * `Question.meta` key of a question the server opened and answered in the same transaction
+ * (P13-32, decision 165: a job approved to publish, its publish approved in Auto by its
+ * Waykeeper). Nobody is asked, so it is never notified (`notificationOf`); the inbox history keeps
+ * it as answered.
+ */
+export const APPROVED_ON_OPEN = 'approvedOnOpen';
+
 export const PublishContext = z.object({
   platform: z.string().min(1).max(80),
   account: z.string().min(1).max(120),

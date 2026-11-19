@@ -14,7 +14,7 @@ import type { EventEnvelope } from './events.js';
 import { deliverablesPhrase } from './deliverables.js';
 import { ModelInfo, Provider, ProviderUsage } from './providers.js';
 import { ReplyQuote } from './reply.js';
-import type { SpendContext } from './long-term-questions.js';
+import { APPROVED_ON_OPEN, type SpendContext } from './long-term-questions.js';
 
 // ---------------------------------------------------------------------------
 // The side panel's REST surface (P25-01; SPEC §4.2–4.6, TECHNOLOGY §2.2 "a small REST surface
@@ -695,6 +695,8 @@ export function notificationOf(
       const question = event.type === 'question.opened' ? event.question : undefined;
       const holder = event.type === 'question.opened' ? event.question.holder : event.to;
       if (holder.type !== 'user') return undefined;
+      // Opened already answered by the server (decision 165): nobody is asked.
+      if (question?.meta?.[APPROVED_ON_OPEN] === true) return undefined;
       const id = question?.id ?? (event as { questionId: Id }).questionId;
       const known = question ?? lookup.question?.(id);
       const kind = known?.kind ?? 'clarification';

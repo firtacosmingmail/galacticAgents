@@ -20,6 +20,7 @@ import {
 } from './panel.js';
 import { DEFAULT_PERMISSION_POLICY, type Question } from './domain.js';
 import { countDeliverables } from './deliverables.js';
+import { APPROVED_ON_OPEN } from './long-term-questions.js';
 
 const at = '2026-10-02T10:00:00.000Z';
 const env = (seq: number, event: EventEnvelope['event']): EventEnvelope => ({ seq, at, event });
@@ -194,6 +195,22 @@ describe('notificationOf (P25-01; SPEC §4.5)', () => {
       { question: () => ({ kind: 'clarification', context: { text: 'Escalated?' } }) },
     );
     expect(escalated).toMatchObject({ id: 'question:q3', body: 'Escalated?' });
+  });
+
+  it('a question opened already approved by the server is never notified (P13-32, decision 165)', () => {
+    const publish = question({
+      id: 'q-auto',
+      kind: 'publish',
+      context: { text: 'Publish to Instagram (@shop)' },
+      meta: { [APPROVED_ON_OPEN]: true },
+    });
+    expect(notificationOf(env(9, { type: 'question.opened', question: publish }))).toBeUndefined();
+    // The same question without the mark is notified as before.
+    const { meta: _m, ...plain } = publish;
+    expect(notificationOf(env(10, { type: 'question.opened', question: plain }))).toMatchObject({
+      id: 'question:q-auto',
+      kind: 'permission',
+    });
   });
 
   it('a publish approval is notified like a permission with its own title', () => {

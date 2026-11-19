@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   PUBLISH_ACTIONS,
+  notificationOf,
   type Actor,
   type Event,
   type EventOfType,
@@ -105,7 +106,23 @@ async function jobRun(opts: { auto: boolean; publishes: boolean }) {
       (e): e is EventOfType<'permission.decided'> =>
         e.type === 'permission.decided' && e.agentId === run.agentId,
     );
-  return { c, project, waykeeper, job, run, stewardId: run.agentId!, publish, decisions };
+  /** What every notifier (push, the web page, the desktop app) makes of the log: `notificationOf`. */
+  const notifications = () =>
+    c.log
+      .eventsSince(0, Number.MAX_SAFE_INTEGER)
+      .map((e) => notificationOf(e))
+      .filter((n) => n !== undefined);
+  return {
+    c,
+    project,
+    waykeeper,
+    job,
+    run,
+    stewardId: run.agentId!,
+    publish,
+    decisions,
+    notifications,
+  };
 }
 
 describe('a job approved to publish, in Auto (P13-32, decision 165)', () => {
@@ -142,6 +159,8 @@ describe('a job approved to publish, in Auto (P13-32, decision 165)', () => {
     ]);
     // The run itself publishes nothing: no allowance for it.
     expect(h.c.publishAllowances.isArmed(h.stewardId)).toBe(false);
+    // Nobody is asked: no push, no page or desktop notification for it (review I1).
+    expect(h.notifications().filter((n) => n.id === `question:${q!.id}`)).toEqual([]);
   });
 
   it('Auto off: the publish card opens as today', async () => {
@@ -152,6 +171,10 @@ describe('a job approved to publish, in Auto (P13-32, decision 165)', () => {
     expect(q?.answer).toBeUndefined();
     expect(h.c.log.tables.jobs.get(h.job.id)?.followUps).toEqual([]);
     expect(h.decisions()).toEqual([]);
+    // The card is notified as today.
+    expect(h.notifications()).toContainEqual(
+      expect.objectContaining({ id: `question:${q!.id}`, kind: 'permission' }),
+    );
   });
 
   it('in Auto, a job without publishes: the publish card opens as today', async () => {
@@ -161,6 +184,29 @@ describe('a job approved to publish, in Auto (P13-32, decision 165)', () => {
     expect(q).toMatchObject({ kind: 'publish', status: 'open', holder: USER });
     expect(h.c.log.tables.jobs.get(h.job.id)?.followUps).toEqual([]);
     expect(h.decisions()).toEqual([]);
+  });
+
+  it('in Auto with no decider (the project has no Waykeeper any more): the publish card opens as today', async () => {
+    const h = await jobRun({ auto: true, publishes: true });
+    const { tables } = h.c.log;
+    // The Waykeeper row now belongs elsewhere: the Steward's scope has no decider.
+    const other = (
+      await h.c.commands.createProject({
+        name: 'Elsewhere',
+        workspace: '/w/elsewhere',
+        longTerm: { purpose: 'Other', goals: ['other'] },
+      })
+    ).value;
+    tables.agents.upsert({ ...tables.agents.get(h.waykeeper.id)!, projectId: other.id });
+    const scope = h.c.runtime.approvalScopeOf(tables.agents.get(h.stewardId));
+    expect(scope).toMatchObject({ auto: true });
+    expect(scope?.deciderId).toBeUndefined();
+    const out = await h.publish();
+    const q = tables.questions.get(out['questionId'] as string);
+    expect(q).toMatchObject({ kind: 'publish', status: 'open', holder: USER });
+    expect(tables.jobs.get(h.job.id)?.followUps).toEqual([]);
+    expect(h.decisions()).toEqual([]);
+    expect(h.notifications()).toContainEqual(expect.objectContaining({ id: `question:${q!.id}` }));
   });
 
   it('in Auto, a stopped job with publishes: nothing is approved (the stopped-job refusal)', async () => {

@@ -16,6 +16,7 @@ import { Id, Meta, Timestamp } from './primitives.js';
  */
 
 export {
+  APPROVED_ON_OPEN,
   FindingContext,
   JobFailureContext,
   LONG_TERM_LIMITS,

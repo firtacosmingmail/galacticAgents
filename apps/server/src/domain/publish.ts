@@ -10,6 +10,7 @@ import {
 } from 'node:fs';
 import { isAbsolute, relative, resolve, sep } from 'node:path';
 import {
+  APPROVED_ON_OPEN,
   PUBLISH_ACTIONS,
   PublishContext,
   publishFingerprint,
@@ -174,6 +175,8 @@ export function requestPublish(
   input: RequestPublishInput,
   routing: Pick<QuestionRouting, 'recentEvents'> | undefined,
   deps: PublishDeps,
+  /** The server answers it in the same transaction (decision 165): never notified. */
+  opts: { approvedOnOpen?: true } = {},
 ): Question {
   const { agent, run, publish } = preparePublish(ctx, input, deps);
   return openQuestion(ctx, {
@@ -192,6 +195,7 @@ export function requestPublish(
       source: COMMAND_SOURCE,
       toUser: true,
       ...(run ? { jobOwned: true } : {}),
+      ...(opts.approvedOnOpen ? { [APPROVED_ON_OPEN]: true } : {}),
     },
   });
 }
@@ -211,7 +215,7 @@ export function approveJobPublishInAuto(
   deps: PublishDeps,
   deciderId: Id,
 ): Question {
-  const question = requestPublish(ctx, input, routing, deps);
+  const question = requestPublish(ctx, input, routing, deps, { approvedOnOpen: true });
   const jobId = question.context.publish?.jobId;
   const job = jobId ? jobOf(ctx, jobId) : undefined;
   if (!job?.publishes) {
